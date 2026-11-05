@@ -48,7 +48,7 @@ import {
 	availableContactMethods,
 	type ContactMethod,
 } from "#/lib/preferred-contact";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import type { DbOrTx } from "#/server/meeting-templates-logic";
 
 /** A refusal the fixtures can name, so a caller can tell it from a bug. */
@@ -333,7 +333,13 @@ export async function insertFixtureClub(
 
 	const defs = await tx
 		.insert(roleDefinitions)
-		.values(ROLE_TEMPLATE.map((r) => ({ ...r, clubId: club.id })))
+		.values(
+			ROLE_TEMPLATE.map((r) => ({
+				...r,
+				duringNotes: duringNotesFor(r, opts.geIntroducesFunctionaries ?? false),
+				clubId: club.id,
+			})),
+		)
 		.returning();
 
 	const meetingsOut: SeededClub["meetings"] = [];

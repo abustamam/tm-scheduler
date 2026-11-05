@@ -142,7 +142,7 @@ import { monthLabel } from "#/lib/month-label";
 import { officialRosterComplete } from "#/lib/onboarding-checklist";
 import { toStoredPhone } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import { isValidEmail, parseRosterText } from "#/lib/roster-import";
 import {
 	clipImportedText,
@@ -1415,6 +1415,19 @@ export async function writePeopleAndRoles(
 			sortOrder += 10;
 			return sortOrder;
 		};
+		// Read once per call, only when a standard role has to be minted: a TM or
+		// GE row takes the guide variant for the club's current setting (#1512).
+		let geIntroduces: boolean | undefined;
+		const clubGeIntroduces = async () => {
+			if (geIntroduces === undefined) {
+				const [row] = await tx
+					.select({ on: clubs.geIntroducesFunctionaries })
+					.from(clubs)
+					.where(eq(clubs.id, clubId));
+				geIntroduces = row?.on ?? false;
+			}
+			return geIntroduces;
+		};
 		for (const def of plan.roleDefinitions) {
 			if (def.existingId) {
 				out.roleDefIds.set(def.planKey, def.existingId);
@@ -1422,6 +1435,9 @@ export async function writePeopleAndRoles(
 			}
 			const seed = def.standardKey
 				? ROLE_TEMPLATE.find((r) => r.key === def.standardKey)
+				: undefined;
+			const duringNotes = seed
+				? duringNotesFor(seed, await clubGeIntroduces())
 				: undefined;
 			// History is not the club's standing meeting shape: neither a standard
 			// role seeded for an old meeting nor a role the club once ran in
@@ -1439,7 +1455,7 @@ export async function writePeopleAndRoles(
 								isSpeakerRole: seed.isSpeakerRole,
 								description: seed.description,
 								beforeNotes: seed.beforeNotes,
-								duringNotes: seed.duringNotes,
+								duringNotes,
 								key: seed.key,
 								standing: false,
 							}
