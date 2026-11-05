@@ -21,7 +21,9 @@ import {
 	CHECKLIST_MEMBER_THRESHOLD,
 	clubDetailsComplete,
 	officialRosterComplete,
+	thresholdShareReached,
 } from "#/lib/onboarding-checklist";
+import { mayRunHistoryImport } from "./guards";
 
 export interface OnboardingChecklistStatus {
 	clubSlug: string;
@@ -83,6 +85,23 @@ export async function countOfficialRosterMembers(
 		.innerJoin(people, eq(people.id, members.personId))
 		.where(and(eq(members.clubId, clubId), eq(members.status, "active")));
 	return { official: row?.official ?? 0, active: row?.active ?? 0 };
+}
+
+/**
+ * The status as one viewer sees it: `canRunImport` is `mayRunHistoryImport`,
+ * the guard the import's own server functions use, asked for THIS viewer and
+ * THIS club. The server function calls this and nothing else, so a test that
+ * calls it reaches the same wiring (#1498).
+ */
+export async function getOnboardingChecklistStatusForViewer(
+	userId: string,
+	clubId: string,
+): Promise<OnboardingChecklistStatus> {
+	const [status, canRunImport] = await Promise.all([
+		getOnboardingChecklistStatus(clubId),
+		mayRunHistoryImport(userId, clubId),
+	]);
+	return { ...status, canRunImport };
 }
 
 /** Setup-checklist status for one club. Throws when the club doesn't exist.
@@ -177,9 +196,10 @@ export async function getOnboardingChecklistStatus(
 	// 3 — the bar is "everyone you have, up to the threshold", not a count a
 	// small club can never reach. `memberCount > 0` keeps an empty roster from
 	// clearing it vacuously (0 >= min(5, 0)).
-	const hasInvitedMembers =
-		memberCount > 0 &&
-		invitedMemberCount >= Math.min(CHECKLIST_MEMBER_THRESHOLD, memberCount);
+	const hasInvitedMembers = thresholdShareReached(
+		invitedMemberCount,
+		memberCount,
+	);
 
 	const hasAppliedImport = importRows[0]?.applied === true;
 	// An aggregate over zero rows still returns one row, with a null.

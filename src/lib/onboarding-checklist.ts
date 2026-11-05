@@ -52,18 +52,26 @@ export interface OnboardingChecklistItem {
 export type OnboardingPath = "fresh" | "easy-speak";
 
 /**
- * Whether the official-roster row is done: active members carrying a
- * Toastmasters Customer ID reach `min(threshold, active)`, never on an empty
- * roster (0 >= min(5, 0) would clear vacuously). Same shape as the invite rule.
+ * `count` of the active members reach `min(threshold, active)`, never on an
+ * empty roster (0 >= min(5, 0) would clear vacuously). The one rule behind the
+ * invite row and the official-roster row.
  */
-export function officialRosterComplete(
-	officialCount: number,
+export function thresholdShareReached(
+	count: number,
 	memberCount: number,
 ): boolean {
 	return (
 		memberCount > 0 &&
-		officialCount >= Math.min(CHECKLIST_MEMBER_THRESHOLD, memberCount)
+		count >= Math.min(CHECKLIST_MEMBER_THRESHOLD, memberCount)
 	);
+}
+
+/** Whether the official-roster row is done: active members carrying a Toastmasters Customer ID. */
+export function officialRosterComplete(
+	officialCount: number,
+	memberCount: number,
+): boolean {
+	return thresholdShareReached(officialCount, memberCount);
 }
 
 /** The per-club localStorage key for the Easy-Speak path choice (#1498). The only stored value is "easy-speak". */

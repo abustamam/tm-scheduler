@@ -59,7 +59,6 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
-import { countOfficialRosterMembers } from "./onboarding-checklist-logic";
 
 vi.mock("#/lib/email", async (importOriginal) => ({
 	...(await importOriginal<typeof import("#/lib/email")>()),
@@ -325,7 +324,7 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 	// protects=the preview's roster notice reading the same counts as the checklist;
 	// fails_when=the preview counts a different set or marks a thin roster complete;
 	// no_claim=the panel's wording (component test).
-	it("the preview's officialRoster matches the checklist's count", async () => {
+	it("the preview's officialRoster counts the club's official and active members", async () => {
 		const [m] = await testDb
 			.select({ personId: members.personId })
 			.from(members)
@@ -341,12 +340,12 @@ describe.skipIf(!hasTestDb)("Easy-Speak history import (#1051)", () => {
 			importId: stored.importId,
 			now: NOW,
 		});
-		const counted = await countOfficialRosterMembers(seed.clubId);
+		// Pinned, not read back through the function the preview calls.
 		expect(preview.officialRoster).toEqual({
-			...counted,
+			official: 1,
+			active: 17,
 			complete: false,
 		});
-		expect(counted.official).toBe(1);
 	});
 
 	it("refuses an upload that is not JSON, not a bundle, or too big, with a sentence", async () => {

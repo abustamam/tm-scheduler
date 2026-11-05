@@ -518,7 +518,7 @@ export function ImportHistoryPanel({
 							{w}
 						</p>
 					))}
-					{!data.appliedAt && data.officialRoster?.complete === false ? (
+					{!data.appliedAt && !data.officialRoster.complete ? (
 						<p
 							className="text-sm text-warning-foreground"
 							data-testid="import-roster-notice"
@@ -526,10 +526,15 @@ export function ImportHistoryPanel({
 							Only {data.officialRoster.official} of your{" "}
 							{data.officialRoster.active} members came from the Toastmasters
 							roster, so this import may create people who are already members.
-							Load the roster from Club Central first.{" "}
-							<a href="/roster" className="underline">
-								Load the roster
-							</a>
+							Load the roster from Club Central first.
+							{isSuperadmin ? null : (
+								<>
+									{" "}
+									<a href="/roster" className="underline">
+										Load the roster
+									</a>
+								</>
+							)}
 						</p>
 					) : null}
 

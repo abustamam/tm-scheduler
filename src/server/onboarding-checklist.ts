@@ -1,11 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import {
-	mayRunHistoryImport,
-	requireClubAdminView,
-	requireUser,
-} from "./guards";
-import { getOnboardingChecklistStatus } from "./onboarding-checklist-logic";
+import { requireClubAdminView, requireUser } from "./guards";
+import { getOnboardingChecklistStatusForViewer } from "./onboarding-checklist-logic";
 
 const uuid = z.string().uuid();
 
@@ -23,10 +19,5 @@ export const getOnboardingChecklist = createServerFn({ method: "GET" })
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		const status = await getOnboardingChecklistStatus(clubId);
-		// The same guard the import's server functions use, non-throwing (#1492).
-		return {
-			...status,
-			canRunImport: await mayRunHistoryImport(currentUser.id, clubId),
-		};
+		return getOnboardingChecklistStatusForViewer(currentUser.id, clubId);
 	});

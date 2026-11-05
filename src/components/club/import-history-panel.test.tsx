@@ -1045,6 +1045,9 @@ describe("the roster notice (#1498)", () => {
 		expect(screen.queryByTestId("import-roster-notice")).toBeNull();
 	});
 
+	// protects=an applied import no longer nags about the roster;
+	// fails_when=the notice shows when appliedAt is set;
+	// no_claim=the notice's wording (the test above).
 	it("is hidden once the import has been applied, even with a thin roster", async () => {
 		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
 		fns.previewEasySpeakImport.mockResolvedValue({
@@ -1054,5 +1057,31 @@ describe("the roster notice (#1498)", () => {
 		await openImport();
 		await screen.findByText(/Fixture Speakers/);
 		expect(screen.queryByTestId("import-roster-notice")).toBeNull();
+	});
+
+	// protects=the superadmin page never links to /roster (it opens the superadmin's own active club, not the club being imported into), while the club-admin page does;
+	// fails_when=the link shows on the superadmin render, or disappears on the club-admin one;
+	// no_claim=the roster page itself.
+	it("keeps the notice but drops the roster link on the superadmin render", async () => {
+		fns.nextEasySpeakExport.mockResolvedValue({ fromMonth: null });
+		fns.previewEasySpeakImport.mockResolvedValue({
+			...previewFor(true),
+			officialRoster: { official: 1, active: 8, complete: false },
+		});
+		fns.listEasySpeakImports.mockResolvedValue([
+			{
+				importId: IMPORT,
+				createdAt: new Date("2026-10-12T00:00:00Z"),
+				appliedAt: null,
+				clubName: "Fixture Speakers",
+				meetings: 3,
+				reconciled: null,
+			},
+		]);
+		renderPanel({ isSuperadmin: true });
+		fireEvent.click(await screen.findByText(/Fixture Speakers, 3 meetings/));
+		const notice = await screen.findByTestId("import-roster-notice");
+		expect(notice.textContent).toContain("Only 1 of your 8 members");
+		expect(notice.querySelector("a")).toBeNull();
 	});
 });

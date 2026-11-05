@@ -194,6 +194,9 @@ describe("resolveOnboardingPath / isNewClubFor", () => {
 		const s = { isNewClub: true, isNewClubEasySpeak: false };
 		expect(isNewClubFor(s, "fresh")).toBe(true);
 		expect(isNewClubFor(s, "easy-speak")).toBe(false);
+		const t = { isNewClub: false, isNewClubEasySpeak: true };
+		expect(isNewClubFor(t, "fresh")).toBe(false);
+		expect(isNewClubFor(t, "easy-speak")).toBe(true);
 	});
 	it("namespaces the path key per club", () => {
 		expect(onboardingPathKey("a")).toBe("gavelup:onboarding-path:a");
@@ -201,7 +204,8 @@ describe("resolveOnboardingPath / isNewClubFor", () => {
 });
 
 // protects=the seven Easy-Speak rows and who may act on the import steps;
-// fails_when=order, keys, the generate row or the lock drift.
+// fails_when=order, keys, the generate row or the lock drift;
+// no_claim=how the rows render (component test) or who may run the import (server test).
 describe("buildOnboardingChecklistItems (easy-speak)", () => {
 	it("lists seven rows in order with no generate-meetings row", () => {
 		const keys = buildOnboardingChecklistItems(NONE_DONE, "easy-speak").map(

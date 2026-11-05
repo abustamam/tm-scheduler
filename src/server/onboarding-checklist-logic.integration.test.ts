@@ -32,6 +32,7 @@ import { prepareMemberInvite } from "./account-invite-logic";
 import {
 	countOfficialRosterMembers,
 	getOnboardingChecklistStatus,
+	getOnboardingChecklistStatusForViewer,
 } from "./onboarding-checklist-logic";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -358,6 +359,9 @@ describe.skipIf(!hasTestDb)(
 			});
 		});
 
+		// protects=4 official of 6 active stays below min(5, 6), so the row is not ticked;
+		// fails_when=the row ticks on a thin official share;
+		// no_claim=the empty-roster case (the test above).
 		it("4 official of 6 active is not enough", async () => {
 			await testDb.delete(members).where(eq(members.clubId, seeded.clubId));
 			for (let i = 0; i < 4; i++) {
@@ -453,6 +457,58 @@ describe.skipIf(!hasTestDb)(
 			await testDb.delete(meetings).where(eq(meetings.clubId, seeded.clubId));
 			status = await getOnboardingChecklistStatus(seeded.clubId);
 			expect(status.isNewClubEasySpeak).toBe(true); // no upcoming meeting
+		});
+
+		// protects=the invite row alone keeps the Easy-Speak checklist showing after history and an upcoming meeting are in;
+		// fails_when=the invite clause is dropped from isNewClubEasySpeak;
+		// no_claim=the fresh path's rule.
+		it("isNewClubEasySpeak stays true until enough members are invited", async () => {
+			await testDb.insert(clubImports).values({
+				clubId: seeded.clubId,
+				source: "easy_speak",
+				bundle: {},
+				bundleSha256: randomUUID(),
+				uploadedByUserId: seeded.adminUserId,
+				appliedAt: new Date(),
+			});
+			// 4 uninvited members on top of seedClub's 2 linked ones: 2 of 6 invited < min(5, 6).
+			const uninvited: string[] = [];
+			for (let i = 0; i < 4; i++) {
+				uninvited.push(await addActiveMember(seeded.clubId, `Uninvited ${i}`));
+			}
+			let status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasAppliedImport).toBe(true);
+			expect(status.hasUpcomingMeeting).toBe(true);
+			expect(status.hasInvitedMembers).toBe(false);
+			expect(status.isNewClubEasySpeak).toBe(true);
+			for (const id of uninvited.slice(0, 3)) {
+				await inviteMember(seeded.clubId, id);
+			}
+			status = await getOnboardingChecklistStatus(seeded.clubId);
+			expect(status.hasInvitedMembers).toBe(true); // 5 of 6
+			expect(status.isNewClubEasySpeak).toBe(false);
+		});
+
+		// protects=canRunImport is the import guard asked for THIS viewer and THIS club, through the loader the server function calls;
+		// fails_when=the override is deleted, a constant, or asked about another club or user;
+		// no_claim=the guard's own rule (guards tests) and the page rendering.
+		it("canRunImport is true for the club's admin and false for a plain member, an outsider and another club's admin", async () => {
+			const other = await seedClub();
+			try {
+				const forAdmin = await getOnboardingChecklistStatusForViewer(
+					seeded.adminUserId,
+					seeded.clubId,
+				);
+				expect(forAdmin.canRunImport).toBe(true);
+				expect(forAdmin.clubSlug).toMatch(/^test-club-/);
+				const asViewer = (userId: string) =>
+					getOnboardingChecklistStatusForViewer(userId, seeded.clubId);
+				expect((await asViewer(seeded.memberUserId)).canRunImport).toBe(false);
+				// An admin of ANOTHER club has no standing here.
+				expect((await asViewer(other.adminUserId)).canRunImport).toBe(false);
+			} finally {
+				await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
+			}
 		});
 	},
 );

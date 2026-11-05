@@ -35,7 +35,7 @@ export function OnboardingChecklist({
 	const [mounted, setMounted] = useState(false);
 	// SSR and the first client render use the stored-choice-free path; the
 	// stored choice is read with the dismiss key after mount.
-	const [storedPath, setStoredPath] = useState<string | null>(null);
+	const [storedPath, setStoredPath] = useState<OnboardingPath | null>(null);
 	const storageKey = onboardingDismissKey(clubId);
 	const pathKey = onboardingPathKey(clubId);
 
@@ -46,7 +46,9 @@ export function OnboardingChecklist({
 			// localStorage unavailable (private mode) — never block showing it.
 		}
 		try {
-			setStoredPath(localStorage.getItem(pathKey));
+			setStoredPath(
+				localStorage.getItem(pathKey) === "easy-speak" ? "easy-speak" : null,
+			);
 		} catch {
 			// Same: fall back to the data-derived path.
 		}
@@ -61,7 +63,7 @@ export function OnboardingChecklist({
 	const doneCount = items.filter((item) => item.complete).length;
 	const nextKey = items.find((item) => !item.complete)?.key;
 
-	function choosePath(choice: "easy-speak" | "fresh") {
+	function choosePath(choice: OnboardingPath) {
 		setStoredPath(choice === "easy-speak" ? "easy-speak" : null);
 		try {
 			if (choice === "easy-speak") localStorage.setItem(pathKey, "easy-speak");
