@@ -705,6 +705,57 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 		]);
 	});
 
+	async function moveUntouchedOntoNextRuleDate() {
+		const before = await future();
+		const [moved, displaced] = before;
+		const originalDate = utcToZonedWallTime(moved.scheduledAt, TZ).slice(0, 10);
+		// The officer's move lands on a rule date; the meeting already there is gone.
+		await testDb.delete(meetings).where(eq(meetings.id, displaced.id));
+		const movedTo = new Date(moved.scheduledAt.getTime() + 7 * 86_400_000);
+		await testDb
+			.update(meetings)
+			.set({ scheduledAt: movedTo, slotDate: originalDate })
+			.where(eq(meetings.id, moved.id));
+		return { moved, movedTo, originalDate };
+	}
+
+	it("an untouched meeting an officer moved onto another rule date survives a time change from update_meeting_schedule (#1521)", async () => {
+		const { moved, movedTo, originalDate } =
+			await moveUntouchedOntoNextRuleDate();
+		const input = { timeOfDay: "19:30" };
+		const p = await preview(input);
+		expect(p.plan.recreated.map((m) => m.meetingId)).not.toContain(moved.id);
+		expect(p.plan.staying.map((m) => m.meetingId)).toContain(moved.id);
+
+		const out = await apply(input, p.planHash as string);
+		expect(out.applied).toBe(true);
+		const after = await future();
+		const survivor = after.find((m) => m.id === moved.id);
+		expect(survivor?.scheduledAt.getTime()).toBe(movedTo.getTime());
+		const dates = after.map((m) =>
+			utcToZonedWallTime(m.scheduledAt, TZ).slice(0, 10),
+		);
+		expect(dates).not.toContain(originalDate);
+		expect(dates).toHaveLength(new Set(dates).size);
+	});
+
+	it("the same moved meeting survives a time change saved from the web (#1521)", async () => {
+		const { moved, movedTo, originalDate } =
+			await moveUntouchedOntoNextRuleDate();
+		await saveRecurrenceRule(
+			seed.clubId,
+			{ ...weeklyThursday, timeOfDay: "19:30" },
+			NOW,
+		);
+		const after = await future();
+		expect(after.find((m) => m.id === moved.id)?.scheduledAt.getTime()).toBe(
+			movedTo.getTime(),
+		);
+		expect(
+			after.map((m) => utcToZonedWallTime(m.scheduledAt, TZ).slice(0, 10)),
+		).not.toContain(originalDate);
+	});
+
 	it("preview and apply agree for a club holding a moved meeting, and its slot date stays reserved (#1521)", async () => {
 		const before = await future();
 		const moved = before[0];
