@@ -50,7 +50,7 @@ import {
 	matchRoleDefs,
 	type RoleIdentity,
 } from "#/lib/role-def-match";
-import { ROLE_TEMPLATE } from "#/lib/role-template";
+import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived, requireClubRole, requireUser } from "./guards";
@@ -466,6 +466,14 @@ export async function materializeTemplateRoles(
 	const missing = declared.filter((r) => !held.has(r.key));
 	if (missing.length === 0) return;
 
+	// A minted Toastmaster or General Evaluator row takes the guide variant for
+	// the club's current setting (#1512); read once, not per role.
+	const [clubRow] = await conn
+		.select({ on: clubs.geIntroducesFunctionaries })
+		.from(clubs)
+		.where(eq(clubs.id, clubId));
+	const geIntroduces = clubRow?.on ?? false;
+
 	await conn
 		.insert(roleDefinitions)
 		.values(
@@ -497,7 +505,7 @@ export async function materializeTemplateRoles(
 					slotsUnordered: r.slotsUnordered,
 					description: r.description ?? stock?.description ?? null,
 					beforeNotes: stock?.beforeNotes ?? null,
-					duringNotes: stock?.duringNotes ?? null,
+					duringNotes: stock ? duringNotesFor(stock, geIntroduces) : null,
 					// Its own club's role from here on, but NOT part of the club's
 					// standard meeting shape.
 					standing: false,
