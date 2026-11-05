@@ -1693,6 +1693,19 @@ const omitInto =
 		omissions.push({ kind, sourceId, ...cause });
 	};
 
+/** Records `sourceId` as omitted when its person was skipped (#1496); true when it did, so the caller leaves the record out. */
+const omitIfSkipped = (
+	env: MeetingEnv,
+	omit: OmitFn,
+	kind: Omission["kind"],
+	personKey: string | null,
+	sourceId: string,
+): boolean => {
+	const cause = skipCause(env, personKey, kind);
+	if (cause) omit(kind, sourceId, cause);
+	return cause !== null;
+};
+
 /** The import refs for `sourceIds`, as `refOf(kind, sourceId)` and `targetsOf(kind)` read them. */
 async function readImportRefs(tx: Tx, clubId: string, sourceIds: string[]) {
 	const refRows =
@@ -2006,13 +2019,11 @@ async function applyMeeting(
 				omit("roleAssignment", ps.sourceId);
 				if (ps.speech) omit("speech", ps.speech.sourceId);
 			}
-			const roleSkipped = skipCause(env, ps.holderKey, "roleAssignment");
-			if (roleSkipped) {
-				omit("roleAssignment", ps.sourceId, roleSkipped);
-				const speechSkipped = skipCause(env, ps.holderKey, "speech");
-				if (ps.speech && speechSkipped) {
-					omit("speech", ps.speech.sourceId, speechSkipped);
-				}
+			if (
+				omitIfSkipped(env, omit, "roleAssignment", ps.holderKey, ps.sourceId) &&
+				ps.speech
+			) {
+				omitIfSkipped(env, omit, "speech", ps.holderKey, ps.speech.sourceId);
 			}
 			let slot =
 				existingSlots.find((s) => s.id === refTarget && !used.has(s.id)) ??
@@ -2113,8 +2124,7 @@ async function applyMeeting(
 			}
 			const owner = ownerOf(env, a.personKey);
 			if (!owner) {
-				const cause = skipCause(env, a.personKey, "attendance");
-				if (cause) omit("attendance", a.sourceId, cause);
+				omitIfSkipped(env, omit, "attendance", a.personKey, a.sourceId);
 				continue;
 			}
 			const attendanceRef = refOf("attendance", a.sourceId);
@@ -2176,8 +2186,7 @@ async function applyMeeting(
 			}
 			const owner = ownerOf(env, a.personKey);
 			if (!owner) {
-				const cause = skipCause(env, a.personKey, "award");
-				if (cause) omit("award", a.sourceId, cause);
+				omitIfSkipped(env, omit, "award", a.personKey, a.sourceId);
 				continue;
 			}
 			const awardRef = refOf("award", a.sourceId);
@@ -2223,8 +2232,7 @@ async function applyMeeting(
 			}
 			const owner = ownerOf(env, t.personKey);
 			if (!owner) {
-				const cause = skipCause(env, t.personKey, "tableTopic");
-				if (cause) omit("tableTopic", t.sourceId, cause);
+				omitIfSkipped(env, omit, "tableTopic", t.personKey, t.sourceId);
 				continue;
 			}
 			const topicRef = refOf("table_topic", t.sourceId);

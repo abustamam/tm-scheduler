@@ -329,6 +329,37 @@ describe("ImportHistoryPanel (#1051)", () => {
 		...over,
 	});
 
+	// protects=the report says up front how many counts differ, above the table;
+	// fails_when=the sentence is dropped or counts every row rather than the differing ones;
+	// no_claim=the table's layout.
+	it("states how many counts have unexplained differences above the table", async () => {
+		const row = (key: string, missing: string[]) => ({
+			key,
+			label: key,
+			bundle: 5,
+			gavelup: 5 - missing.length,
+			missing,
+		});
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(
+				true,
+				reportWith({
+					reconciled: false,
+					counts: [row("a", ["1"]), row("b", []), row("c", ["2", "3"])],
+				}),
+			),
+		);
+		await openImport();
+		const line = await screen.findByText(
+			"2 counts with unexplained differences",
+		);
+		const table = document.querySelector("table");
+		expect(
+			line.compareDocumentPosition(table as Node) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
 	// protects=a long list of source ids stays out of the page until asked for;
 	// fails_when=the ids are rendered inline (collapsed by CSS or not) or the count line drops;
 	// no_claim=the server's id cap.
@@ -356,7 +387,7 @@ describe("ImportHistoryPanel (#1051)", () => {
 			),
 		).toBeTruthy();
 		expect(document.body.textContent).not.toContain("src-999");
-		fireEvent.click(screen.getByText(/Show Source ids/));
+		fireEvent.click(screen.getByText(/Show source ids/));
 		expect(document.body.textContent).toContain("src-999");
 		expect(screen.getByText(/every count matches/)).toBeTruthy();
 		expect(
@@ -1173,6 +1204,16 @@ describe("the roster notice (#1498)", () => {
 // fails_when=the ids go back inline in a nowrap cell, or the table loses its
 // width bound; no_claim=any width but 375px. The markup is the REAL panel,
 // serialised from jsdom, laid out with the app's compiled Tailwind.
+describe("the import report 375px harness availability", () => {
+	it("has a browser to measure with when running in CI", () => {
+		if (!process.env.CI) return;
+		expect(
+			findChrome(),
+			"CI has no Chrome, so the import report 375px gate would skip",
+		).not.toBeNull();
+	});
+});
+
 describe.skipIf(findChrome() === null)(
 	"the import report at 375px",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },

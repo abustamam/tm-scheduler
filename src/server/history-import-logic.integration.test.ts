@@ -48,6 +48,7 @@ import {
 	type PersonResolution,
 	UPCOMING_INACTIVE_MEMBER,
 	UPCOMING_KEPT_HOLDER,
+	UPCOMING_NO_OWNER,
 	UPCOMING_NOT_COMING,
 	UPCOMING_RELEASED,
 	UPCOMING_ROLES_SKIPPED,
@@ -1724,8 +1725,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 	// skipped guest's records stay in the missing lists;
 	// no_claim=the erased account rows (the test above).
 	it("a person the admin skips has their records omitted with that reason", async () => {
-		const bundle = JSON.parse(erasedBundleText()) as EasySpeakBundleV1;
-		const stored = await upload(JSON.stringify(bundle));
+		const stored = await upload(erasedBundleText());
 		const { resolutions } = await resolveAll(stored.importId);
 		resolutions["es:900025"] = {
 			action: "skip",
@@ -3004,6 +3004,28 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			);
 			expect(after?.assignedMemberId).toBeNull();
 			expect(omissionRow(report, UPCOMING_RELEASED)).toBeTruthy();
+		});
+
+		// protects=an upcoming slot whose holder was skipped (an erased account) is left empty and recorded as an omission carrying the person's reason, so the import still reads reconciled;
+		// fails_when=blockedFor ignores the skip and reports the generic no-owner reason, or the slot lands in a missing list;
+		// no_claim=the past-meeting writers (the erased-account tests above).
+		it("records an upcoming slot held by an erased account as an omission with the erased-account reason", async () => {
+			await timerDefId();
+			const bundle = JSON.parse(upcomingText()) as EasySpeakBundleV1;
+			const up = bundle.meetings.find((m) => m.esMeetingId === "644360");
+			const timerRole = up?.roles.find((r) => r.role === "Timer");
+			if (!timerRole) throw new Error("fixture changed");
+			timerRole.holder = ERASED;
+			const stored = await upload(JSON.stringify(bundle));
+			const { resolutions } = await resolveAll(stored.importId);
+			const { report } = await applyUp(stored.importId, resolutions);
+			expect(report.reconciled).toBe(true);
+			const row = report.notImported.find(
+				(r) =>
+					r.what === UPCOMING_NO_OWNER.what &&
+					r.reason === ERASED_ACCOUNT_REASON,
+			);
+			expect(row?.count).toBeGreaterThanOrEqual(1);
 		});
 
 		// protects=an inactive or former member is given neither an upcoming role nor an RSVP, and the report names each;

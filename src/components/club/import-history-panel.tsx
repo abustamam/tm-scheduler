@@ -1062,25 +1062,21 @@ function ListOnlyPeople({ people }: { people: PreviewPeople }) {
 }
 
 /** Source ids behind a button, collapsed: they are not in the DOM until it is opened. */
-function IdList({
-	label,
-	ids,
-}: {
-	label: string;
-	ids: readonly string[] | undefined;
-}) {
+function IdList({ ids }: { ids: readonly string[] | undefined }) {
 	const [open, setOpen] = useState(false);
 	if (!ids || ids.length === 0) return null;
 	return (
 		<div>
-			<button
+			<Button
 				type="button"
-				className="text-xs underline"
+				variant="link"
+				size="xs"
+				className="h-auto px-0 underline"
 				aria-expanded={open}
 				onClick={() => setOpen(!open)}
 			>
-				{open ? "Hide" : "Show"} {label}
-			</button>
+				{open ? "Hide" : "Show"} source ids ({ids.length})
+			</Button>
 			{open ? (
 				<p className="break-all text-xs text-muted-foreground">
 					{ids.join(", ")}
@@ -1101,30 +1097,36 @@ function ReportCounts({ counts }: { counts: ImportReport["counts"] }) {
 		);
 	}
 	return (
-		<div className="min-w-0 max-w-full overflow-x-auto">
-			<table className="w-full text-sm">
-				<thead>
-					<tr className="text-left text-muted-foreground">
-						<th className="font-semibold">Count</th>
-						<th className="font-semibold">Bundle</th>
-						<th className="font-semibold">GavelUp</th>
-						<th className="font-semibold">Missing</th>
-					</tr>
-				</thead>
-				<tbody>
-					{differing.map((c) => (
-						<tr key={c.key} className="align-top">
-							<td>{c.label}</td>
-							<td className="tabular-nums">{c.bundle}</td>
-							<td className="tabular-nums">{c.gavelup}</td>
-							<td>
-								{c.missing.length}
-								<IdList label="source ids" ids={c.missing} />
-							</td>
+		<div className="min-w-0 max-w-full space-y-1">
+			<p className="text-sm font-semibold">
+				{differing.length} {differing.length === 1 ? "count" : "counts"} with
+				unexplained differences
+			</p>
+			<div className="overflow-x-auto">
+				<table className="w-full text-sm">
+					<thead>
+						<tr className="text-left text-muted-foreground">
+							<th className="font-semibold">Count</th>
+							<th className="font-semibold">Bundle</th>
+							<th className="font-semibold">GavelUp</th>
+							<th className="font-semibold">Missing</th>
 						</tr>
-					))}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						{differing.map((c) => (
+							<tr key={c.key} className="align-top">
+								<td>{c.label}</td>
+								<td className="tabular-nums">{c.bundle}</td>
+								<td className="tabular-nums">{c.gavelup}</td>
+								<td>
+									{c.missing.length}
+									<IdList ids={c.missing} />
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
 		</div>
 	);
 }
@@ -1164,10 +1166,7 @@ function ReportView({ report }: { report: ImportReport }) {
 					{report.notImported.map((n) => (
 						<li key={`${n.what}\u0000${n.reason}`} className="break-words">
 							{n.what}: {n.count.toLocaleString("en-US")}. {n.reason}
-							<IdList
-								label={`Source ids (${n.sourceIds?.length ?? 0})`}
-								ids={n.sourceIds}
-							/>
+							<IdList ids={n.sourceIds} />
 						</li>
 					))}
 				</ul>
