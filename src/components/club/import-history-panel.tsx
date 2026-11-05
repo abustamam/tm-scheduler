@@ -1061,6 +1061,76 @@ function ListOnlyPeople({ people }: { people: PreviewPeople }) {
 	);
 }
 
+/** Source ids behind a button, collapsed: they are not in the DOM until it is opened. */
+function IdList({ ids }: { ids: readonly string[] | undefined }) {
+	const [open, setOpen] = useState(false);
+	if (!ids || ids.length === 0) return null;
+	return (
+		<div>
+			<Button
+				type="button"
+				variant="link"
+				size="xs"
+				className="h-auto px-0 underline"
+				aria-expanded={open}
+				onClick={() => setOpen(!open)}
+			>
+				{open ? "Hide" : "Show"} source ids ({ids.length})
+			</Button>
+			{open ? (
+				<p className="break-all text-xs text-muted-foreground">
+					{ids.join(", ")}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+/** Only the counts with ids that were expected and not found; the rest add up and are not shown. */
+function ReportCounts({ counts }: { counts: ImportReport["counts"] }) {
+	const differing = counts.filter((c) => c.missing.length > 0);
+	if (differing.length === 0) {
+		return (
+			<p className="text-sm text-muted-foreground">
+				No counts with unexplained differences.
+			</p>
+		);
+	}
+	return (
+		<div className="min-w-0 max-w-full space-y-1">
+			<p className="text-sm font-semibold">
+				{differing.length} {differing.length === 1 ? "count" : "counts"} with
+				unexplained differences
+			</p>
+			<div className="overflow-x-auto">
+				<table className="w-full text-sm">
+					<thead>
+						<tr className="text-left text-muted-foreground">
+							<th className="font-semibold">Count</th>
+							<th className="font-semibold">Bundle</th>
+							<th className="font-semibold">GavelUp</th>
+							<th className="font-semibold">Missing</th>
+						</tr>
+					</thead>
+					<tbody>
+						{differing.map((c) => (
+							<tr key={c.key} className="align-top">
+								<td>{c.label}</td>
+								<td className="tabular-nums">{c.bundle}</td>
+								<td className="tabular-nums">{c.gavelup}</td>
+								<td>
+									{c.missing.length}
+									<IdList ids={c.missing} />
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	);
+}
+
 function ReportView({ report }: { report: ImportReport }) {
 	return (
 		<div className="space-y-3 border-t border-border pt-3">
@@ -1074,26 +1144,7 @@ function ReportView({ report }: { report: ImportReport }) {
 					{report.reconciled ? "every count matches" : "differences found"}
 				</span>
 			</h3>
-			<table className="w-full text-sm">
-				<thead>
-					<tr className="text-left text-muted-foreground">
-						<th className="font-semibold">Count</th>
-						<th className="font-semibold">Bundle</th>
-						<th className="font-semibold">GavelUp</th>
-						<th className="font-semibold">Missing source ids</th>
-					</tr>
-				</thead>
-				<tbody>
-					{report.counts.map((c) => (
-						<tr key={c.key}>
-							<td>{c.label}</td>
-							<td className="tabular-nums">{c.bundle}</td>
-							<td className="tabular-nums">{c.gavelup}</td>
-							<td className="break-all">{c.missing.join(", ") || "none"}</td>
-						</tr>
-					))}
-				</tbody>
-			</table>
+			<ReportCounts counts={report.counts} />
 			{report.meetings.failed.length > 0 ? (
 				<div className="text-sm" role="alert">
 					<p className="font-semibold text-destructive">
@@ -1113,8 +1164,9 @@ function ReportView({ report }: { report: ImportReport }) {
 				<p className="font-semibold">Intentionally not imported</p>
 				<ul className="list-disc pl-5">
 					{report.notImported.map((n) => (
-						<li key={n.what}>
-							{n.what}: {n.count}. {n.reason}
+						<li key={`${n.what}\u0000${n.reason}`} className="break-words">
+							{n.what}: {n.count.toLocaleString("en-US")}. {n.reason}
+							<IdList ids={n.sourceIds} />
 						</li>
 					))}
 				</ul>
