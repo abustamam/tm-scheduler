@@ -3172,11 +3172,20 @@ export async function applyUnlinkGuestFromMember(
 			}
 		}
 
-		await restoreGuestSpeeches(
-			tx,
-			input.guestId,
-			(entry.detail as { speechIds?: unknown } | null)?.speechIds,
-		);
+		const recordedSpeeches = (entry.detail as { speechIds?: unknown } | null)
+			?.speechIds;
+		// The pointer matched `peek` under the row lock above, so `peekMember` is
+		// the Person the link handed the speeches to.
+		if (peekMember) {
+			await restoreGuestSpeeches(
+				tx,
+				input.guestId,
+				peekMember.personId,
+				Array.isArray(recordedSpeeches)
+					? recordedSpeeches.filter((s): s is string => typeof s === "string")
+					: [],
+			);
+		}
 
 		await tx
 			.update(guests)
@@ -3253,23 +3262,26 @@ async function reownGuestSpeeches(
 }
 
 /**
- * Reverse `reownGuestSpeeches` for the recorded ids only. A speech created
- * for the member since is not in the record and stays with them. An absent or
- * empty record is a no-op (`inArray(col, [])` would compile to `false`).
+ * Reverse `reownGuestSpeeches` for the recorded ids only, and only those still
+ * owned by `ownerPersonId`, the Person they were handed to. A speech created
+ * for the member since is not in the record and stays with them; a recorded one
+ * a people merge has since moved to another Person is theirs now, as a recorded
+ * slot reassigned since stays with its new holder. An empty record is a no-op
+ * (`inArray(col, [])` would compile to `false`).
  */
 async function restoreGuestSpeeches(
 	tx: DbOrTx,
 	guestId: string,
-	recorded: unknown,
+	ownerPersonId: string,
+	ids: string[],
 ): Promise<void> {
-	const ids = Array.isArray(recorded)
-		? recorded.filter((s): s is string => typeof s === "string")
-		: [];
 	if (ids.length === 0) return;
 	await tx
 		.update(speeches)
 		.set({ personId: null, guestId })
-		.where(and(inArray(speeches.id, ids), isNotNull(speeches.personId)));
+		.where(
+			and(inArray(speeches.id, ids), eq(speeches.personId, ownerPersonId)),
+		);
 }
 
 export interface UndoConversionInput {
@@ -3291,7 +3303,7 @@ type ConversionRecord = {
 	personId: string;
 	slotIds: string[];
 	/** Speeches the conversion re-owned (#1523). Absent on older records. */
-	speechIds?: unknown;
+	speechIds: string[];
 	createdMembership: boolean;
 	createdPerson: boolean;
 	/**
@@ -3375,7 +3387,10 @@ function readConversionRecord(detail: unknown): ConversionRecord | null {
 	return {
 		personId: d.personId,
 		slotIds: d.slotIds.filter((s): s is string => typeof s === "string"),
-		speechIds: d.speechIds,
+		// Absent on pre-#1523 records: no speeches were re-owned, so none to give back.
+		speechIds: Array.isArray(d.speechIds)
+			? d.speechIds.filter((s): s is string => typeof s === "string")
+			: [],
 		createdMembership: d.createdMembership,
 		createdPerson: d.createdPerson,
 		reactivatedFrom,
@@ -4590,7 +4605,12 @@ export async function applyUndoGuestConversion(
 
 		// The speeches the conversion re-owned go back to the guest (#1523), before
 		// the membership or its Person can be deleted below.
-		await restoreGuestSpeeches(tx, input.guestId, record.speechIds);
+		await restoreGuestSpeeches(
+			tx,
+			input.guestId,
+			record.personId,
+			record.speechIds,
+		);
 
 		// Ordered after the slot move on purpose: `role_slots.assigned_member_id`
 		// would otherwise be cleared by the membership's own cascade, and the

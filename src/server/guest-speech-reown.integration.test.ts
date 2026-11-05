@@ -11,9 +11,10 @@
  * skips when unset.
  */
 import { randomUUID } from "node:crypto";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	guests,
 	meetings,
 	pathEnrollments,
@@ -45,6 +46,44 @@ const {
 } = await import("#/server/guest-pipeline-logic");
 const { pathwaysForPerson } = await import("#/server/pathways-read-logic");
 const { loadSpeechLog } = await import("#/server/my-activity-logic");
+const { loadMilestoneCounts } = await import("#/server/milestones-logic");
+
+/**
+ * Every statement issued inside a transaction while `fn` runs. The shared
+ * `statementsDuring` spies the Pool, which a `db.transaction()` bypasses (its
+ * statements run on a checked-out client), so this wraps each client the pool
+ * hands out for the duration and restores it after.
+ */
+async function txStatementsDuring(
+	fn: () => Promise<unknown>,
+): Promise<string[]> {
+	// biome-ignore lint/suspicious/noExplicitAny: the pg Pool is not typed on the drizzle handle
+	const pool = testDb.$client as any;
+	const seen: string[] = [];
+	const restores: Array<() => void> = [];
+	const connect = pool.connect.bind(pool);
+	const spy = vi.spyOn(pool, "connect").mockImplementation(async () => {
+		const c = await connect();
+		const original = c.query;
+		// biome-ignore lint/suspicious/noExplicitAny: pg overloads
+		c.query = (...args: any[]) => {
+			const a = args[0] as string | { text?: string } | undefined;
+			seen.push(typeof a === "string" ? a : (a?.text ?? ""));
+			return original.apply(c, args);
+		};
+		restores.push(() => {
+			c.query = original;
+		});
+		return c;
+	});
+	try {
+		await fn();
+	} finally {
+		spy.mockRestore();
+		for (const r of restores) r();
+	}
+	return seen;
+}
 
 describe.skipIf(!hasTestDb)(
 	"guest speeches follow convert/link (#1523)",
@@ -169,6 +208,33 @@ describe.skipIf(!hasTestDb)(
 			return vms.flatMap((vm) => vm.wins.map((w) => w.speechTitle));
 		}
 
+		async function milestoneSpeeches(membershipId: string) {
+			return (await loadMilestoneCounts(membershipId)).speechesDelivered;
+		}
+
+		/** Hand a speech to a Person other than the one it was transferred to. */
+		async function moveToOtherPerson(speechId: string) {
+			const [other] = await testDb
+				.insert(people)
+				.values({ name: `Merged Keeper ${randomUUID().slice(0, 8)}` })
+				.returning({ id: people.id });
+			if (!other) throw new Error("Failed to seed person");
+			strayPeople.push(other.id);
+			await testDb
+				.update(speeches)
+				.set({ personId: other.id })
+				.where(eq(speeches.id, speechId));
+			return other.id;
+		}
+
+		/** An older-style record: drop `speechIds` from every activity detail. */
+		async function stripSpeechIds() {
+			await testDb
+				.update(activityLog)
+				.set({ detail: sql`${activityLog.detail} - 'speechIds'` })
+				.where(eq(activityLog.clubId, seed.clubId));
+		}
+
 		async function inSpeechLog(membershipId: string) {
 			const log = await loadSpeechLog([membershipId], seed.clubId, null);
 			return log.rows.map((r) => r.speechTitle);
@@ -191,16 +257,52 @@ describe.skipIf(!hasTestDb)(
 					actorMemberId: seed.adminMemberId,
 				});
 
-			it("moves the speech to the member's Person: log and Pathways agree", async () => {
-				const { guestId, speechId, pathId } = await guestWithSpeech();
+			it("moves the speech to the member's Person: owner, log and milestones agree", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
 				const { personId, membershipId } = await convert(guestId);
 				expect(await owner(speechId)).toEqual({ personId, guestId: null });
 				expect(await inSpeechLog(membershipId)).toContain(
 					"Guest's Ice Breaker",
 				);
+				expect(await milestoneSpeeches(membershipId)).toBe(1);
+			});
+
+			// Only the Pathways read is asserted, so the person_id write is what a
+			// mutation of the transfer must fail on (it filters on person_id).
+			it("the converted member's Pathways progress shows the speech", async () => {
+				const { guestId, pathId } = await guestWithSpeech();
+				const { personId } = await convert(guestId);
 				expect(await pathwaysWins(personId, pathId)).toContain(
 					"Guest's Ice Breaker",
 				);
+			});
+
+			it("undo leaves a recorded speech a merge moved to another Person with that Person", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				await convert(guestId);
+				const keeper = await moveToOtherPerson(speechId);
+				await undo(guestId);
+				expect(await owner(speechId)).toEqual({
+					personId: keeper,
+					guestId: null,
+				});
+			});
+
+			it("undo of a record without speechIds succeeds and issues no speech UPDATE", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				const { personId } = await convert(guestId);
+				await stripSpeechIds();
+				const statements = await txStatementsDuring(() => undo(guestId));
+				// Anti-vacuity: the spy saw the undo's other writes.
+				expect(
+					statements.some((q) => /update\s+"role_slots"/i.test(q)),
+					"no transaction statement observed — the spy has stopped working",
+				).toBe(true);
+				expect(
+					statements.filter((q) => /update\s+"speeches"/i.test(q)),
+				).toEqual([]);
+				// Not handed back by a guess: the speech stays with the member's Person.
+				expect((await owner(speechId)).personId).toBe(personId);
 			});
 
 			it("undo succeeds (the speech is not post-conversion history) and the guest owns it again", async () => {
@@ -237,8 +339,8 @@ describe.skipIf(!hasTestDb)(
 					actorMemberId: seed.adminMemberId,
 				});
 
-			it("moves the speech to the member's Person: log and Pathways agree", async () => {
-				const { guestId, speechId, pathId } = await guestWithSpeech();
+			it("moves the speech to the member's Person: owner, log and milestones agree", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
 				await link(guestId);
 				expect(await owner(speechId)).toEqual({
 					personId: seed.personId,
@@ -247,9 +349,41 @@ describe.skipIf(!hasTestDb)(
 				expect(await inSpeechLog(seed.memberId)).toContain(
 					"Guest's Ice Breaker",
 				);
+				expect(await milestoneSpeeches(seed.memberId)).toBe(1);
+			});
+
+			it("the linked member's Pathways progress shows the speech", async () => {
+				const { guestId, pathId } = await guestWithSpeech();
+				await link(guestId);
 				expect(await pathwaysWins(seed.personId, pathId)).toContain(
 					"Guest's Ice Breaker",
 				);
+			});
+
+			it("unlink leaves a recorded speech a merge moved to another Person with that Person", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				await link(guestId);
+				const keeper = await moveToOtherPerson(speechId);
+				await unlink(guestId);
+				expect(await owner(speechId)).toEqual({
+					personId: keeper,
+					guestId: null,
+				});
+			});
+
+			it("unlink of a record without speechIds succeeds and issues no speech UPDATE", async () => {
+				const { guestId, speechId } = await guestWithSpeech();
+				await link(guestId);
+				await stripSpeechIds();
+				const statements = await txStatementsDuring(() => unlink(guestId));
+				expect(
+					statements.some((q) => /update\s+"guests"/i.test(q)),
+					"no transaction statement observed — the spy has stopped working",
+				).toBe(true);
+				expect(
+					statements.filter((q) => /update\s+"speeches"/i.test(q)),
+				).toEqual([]);
+				expect((await owner(speechId)).personId).toBe(seed.personId);
 			});
 
 			it("unlink gives the guest the speech back", async () => {
