@@ -1777,6 +1777,12 @@ export const meetings = pgTable(
 			.notNull()
 			.references(() => clubs.id, { onDelete: "cascade" }),
 		scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+		// The club-local calendar date this meeting was CREATED on (#1521). Set at
+		// insert, never changed by a reschedule: the schedule top-up reserves it
+		// beside the meeting's current date, so moving a meeting off a rule date
+		// does not let the top-up recreate one there. Null (a writer that misses
+		// it) behaves as before the column existed.
+		slotDate: date("slot_date", { mode: "string" }),
 		// Meeting length in minutes. Copied from the club's defaultMeetingMinutes
 		// at insert (copy-at-insert) so historical end times stay stable when the
 		// club default changes; editable per-meeting via the edit dialog. Non-null

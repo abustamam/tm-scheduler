@@ -37,12 +37,14 @@ export const NON_MEMBER_MEETING_FIELDS = [
 
 /** Columns withheld from a non-member ON PURPOSE. Naming one here is the other
  *  way a new column passes the guard test. */
-export const WITHHELD_MEETING_FIELDS = ["joinUrl"] as const;
+// `slotDate` (#1521) is the date a meeting was CREATED on: after a move it is a
+// date the meeting no longer holds, which `scheduledAt` does not tell a reader.
+export const WITHHELD_MEETING_FIELDS = ["joinUrl", "slotDate"] as const;
 
 /**
  * The meeting row narrowed to `NON_MEMBER_MEETING_FIELDS`. Typed as the row
- * without `joinUrl`: that is the only column withheld today, and the guard test
- * holds every other column to the allowlist, so the type stays true.
+ * without the withheld columns; the guard test holds every other column to the
+ * allowlist, so the type stays true.
  */
 export function nonMemberMeetingRow<M extends object>(
 	meeting: M,

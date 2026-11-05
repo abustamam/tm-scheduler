@@ -303,7 +303,11 @@ export async function selectOldPatternMeetings(
 	);
 
 	const future = await conn
-		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.select({
+			id: meetings.id,
+			scheduledAt: meetings.scheduledAt,
+			slotDate: meetings.slotDate,
+		})
 		.from(meetings)
 		.where(
 			and(
@@ -318,19 +322,34 @@ export async function selectOldPatternMeetings(
 		oldDates.has(utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10)),
 	);
 
+	// A meeting whose slot date differs from its current local date was moved by
+	// an officer (#1521). Landing on another rule date does not make it an
+	// untouched old-pattern meeting: deleting it would undo the move.
+	const isMoved = (m: { scheduledAt: Date; slotDate: string | null }) =>
+		m.slotDate !== null &&
+		m.slotDate !== utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10);
+	const movedIds = new Set(onOldPattern.filter(isMoved).map((m) => m.id));
+	const candidates = onOldPattern.filter((m) => !movedIds.has(m.id));
+
 	const verdicts = await classifyMeetings(
-		onOldPattern.map((m) => m.id),
+		candidates.map((m) => m.id),
 		conn,
 		options,
 	);
 	const kept: { id: string; scheduledAt: Date; reason: KeptReason }[] = [];
 	for (const m of onOldPattern) {
+		if (movedIds.has(m.id)) {
+			kept.push({ id: m.id, scheduledAt: m.scheduledAt, reason: "touched" });
+			continue;
+		}
 		const why = verdicts.get(m.id);
 		// A meeting deleted while we waited for its lock has no verdict: gone.
-		if (why) kept.push({ ...m, reason: why });
+		if (why) kept.push({ id: m.id, scheduledAt: m.scheduledAt, reason: why });
 	}
 	return {
-		deleted: onOldPattern.filter((m) => verdicts.get(m.id) === null),
+		deleted: candidates
+			.filter((m) => verdicts.get(m.id) === null)
+			.map((m) => ({ id: m.id, scheduledAt: m.scheduledAt })),
 		kept,
 	};
 }

@@ -3,12 +3,13 @@
 // testable and never dragged into the client bundle.
 import { eq } from "drizzle-orm";
 import type { db } from "#/db";
-import { meetings, roleSlots } from "#/db/schema";
+import { clubs, meetings, roleSlots } from "#/db/schema";
 import {
 	generateSlotRows,
 	generatesSlots,
 	type SlotGenInput,
 } from "#/lib/agenda";
+import { utcToZonedWallTime } from "#/lib/datetime";
 import {
 	pickSpeakerAndEvaluatorRoles,
 	type RoleDefLite,
@@ -39,6 +40,11 @@ export interface NewMeeting {
 	lengthMinutes: number;
 	location: string | null;
 	/**
+	 * The club's timezone, when the caller already holds it; otherwise
+	 * `insertMeetingWithSlots` reads it, to derive `slot_date` (#1521).
+	 */
+	timezone?: string;
+	/**
 	 * Meeting meta written in the SAME insert (#808).
 	 *
 	 * Omitted by the two callers that predate it (`applyBatchCreateMeetings`,
@@ -60,6 +66,29 @@ export interface NewMeeting {
 }
 
 /**
+ * The club-local calendar date of `scheduledAt`, for `meetings.slot_date`
+ * (#1521). Computed the way the top-up planner computes a meeting's date, so a
+ * meeting near midnight lands on the same day in both. Null only when the club
+ * row is gone (the insert then fails its own foreign key).
+ */
+export async function localSlotDate(
+	conn: DbOrTx,
+	clubId: string,
+	scheduledAt: Date,
+	timezone?: string,
+): Promise<string | null> {
+	let tz = timezone;
+	if (!tz) {
+		const [club] = await conn
+			.select({ timezone: clubs.timezone })
+			.from(clubs)
+			.where(eq(clubs.id, clubId));
+		tz = club?.timezone;
+	}
+	return tz ? utcToZonedWallTime(scheduledAt, tz).slice(0, 10) : null;
+}
+
+/**
  * Insert one meeting (plus its agenda and role slots, `generateMeetingSlots`)
  * idempotently:
  * `ON CONFLICT (club_id, scheduled_at) DO NOTHING`. Returns the new meeting id,
@@ -76,11 +105,18 @@ export async function insertMeetingWithSlots(
 	m: NewMeeting,
 	defs: MeetingSlotDefs[],
 ): Promise<string | null> {
+	const slotDate = await localSlotDate(
+		conn,
+		m.clubId,
+		m.scheduledAt,
+		m.timezone,
+	);
 	const [row] = await conn
 		.insert(meetings)
 		.values({
 			clubId: m.clubId,
 			scheduledAt: m.scheduledAt,
+			slotDate,
 			lengthMinutes: m.lengthMinutes,
 			location: m.location,
 			// Named EXPLICITLY rather than left to the column defaults, so a

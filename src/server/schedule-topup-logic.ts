@@ -69,7 +69,12 @@ export function planTopUpInstants(input: {
 		enabled: boolean;
 	};
 	timezone: string;
-	existing: { scheduledAt: Date; status: string }[];
+	existing: {
+		scheduledAt: Date;
+		status: string;
+		/** `meetings.slot_date` (#1521): reserved even after a move. Null: ignored. */
+		slotDate?: string | null;
+	}[];
 	now: Date;
 }): Date[] {
 	const { rule, timezone, existing, now } = input;
@@ -77,11 +82,13 @@ export function planTopUpInstants(input: {
 	// Existing meetings: count FUTURE `scheduled` toward keep_ahead; every meeting
 	// of ANY status occupies its local calendar date (a cancelled meeting keeps
 	// its date reserved — cancellation is the skip mechanism).
-	const takenDates = new Set(
-		existing.map((m) =>
-			utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10),
-		),
-	);
+	// #1521: a meeting also keeps the date it was created on reserved, so one an
+	// officer moved off a rule date does not get recreated there.
+	const takenDates = new Set<string>();
+	for (const m of existing) {
+		takenDates.add(utcToZonedWallTime(m.scheduledAt, timezone).slice(0, 10));
+		if (m.slotDate) takenDates.add(m.slotDate);
+	}
 	const futureScheduled = existing.filter(
 		(m) => m.status === "scheduled" && m.scheduledAt.getTime() > now.getTime(),
 	).length;
@@ -136,6 +143,7 @@ export async function ensureScheduleToppedUp(
 		.select({
 			scheduledAt: meetings.scheduledAt,
 			status: meetings.status,
+			slotDate: meetings.slotDate,
 		})
 		.from(meetings)
 		.where(eq(meetings.clubId, clubId));
@@ -177,6 +185,7 @@ export async function ensureScheduleToppedUp(
 					scheduledAt,
 					lengthMinutes: defaults.lengthMinutes,
 					location: defaults.location,
+					timezone: club.timezone,
 				},
 				defs,
 			);
