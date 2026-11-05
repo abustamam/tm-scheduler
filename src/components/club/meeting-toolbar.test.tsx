@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/packet", () => ({ getPacketContext: vi.fn() }));
 
 import type { AgendaLayout } from "#/components/agenda/meeting-agenda-print";
+import { buttonVariants } from "#/components/ui/button";
 import type { Slide } from "#/lib/agenda-slides";
 import type { MeetingPhase } from "#/lib/meeting-lifecycle";
 import { meetingViewer } from "#/lib/meeting-viewer";
@@ -76,6 +77,49 @@ async function openManage() {
 const item = (name: RegExp) => screen.queryByRole("menuitem", { name });
 
 const SETUP_PARAMS = { clubId: "club-uuid", meetingId: "meeting-uuid" };
+
+describe("MeetingToolbar View agenda (#1335, #1401)", () => {
+	// protects=every audience reaches the digital agenda from the meeting page
+	// by slug and date key; fails_when=the link is gated on a capability, or its
+	// href is built from anything but the clubSlug and meetingId props;
+	// no_claim=the target page renders (that page's own tests).
+	it.each([
+		["a public visitor", { hasIdentity: false, canManage: false }],
+		["a member", { hasIdentity: true, canManage: false }],
+		["an officer", { hasIdentity: true, canManage: true }],
+	])("shows View agenda to %s", async (_who, over) => {
+		await renderToolbar(over);
+		expect(
+			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
+		).toBe("/club/downtown/meeting/2026-08-10/agenda");
+	});
+
+	// protects=the phone-tall (44px) tap target, DESIGN.md; fails_when=the link
+	// drops back to the compact size; no_claim=layout beyond the size classes.
+	it("renders View agenda at the touch size", async () => {
+		await renderToolbar();
+		const link = screen.getByRole("link", { name: "View agenda" });
+		const touch = buttonVariants({ variant: "outline", size: "touch" }).split(
+			" ",
+		);
+		expect(touch).toContain("h-11");
+		for (const c of touch) expect(link.classList.contains(c)).toBe(true);
+	});
+
+	// protects=the link survives every meeting state; fails_when=it is hidden
+	// for a phase or a cancelled meeting; no_claim=anything about other buttons.
+	it.each([
+		["completed", { phase: "completed" as MeetingPhase }],
+		["upcoming", { phase: "upcoming" as MeetingPhase }],
+		["today", { phase: "today" as MeetingPhase }],
+		["cancelled", { cancelled: true }],
+	])("shows View agenda on a %s meeting", async (_when, over) => {
+		await renderToolbar(over);
+		expect(
+			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
+		).toBe("/club/downtown/meeting/2026-08-10/agenda");
+	});
+});
 
 describe("MeetingToolbar (#541 D2)", () => {
 	it("upcoming: no primary — just share and the export menu", async () => {
@@ -720,8 +764,8 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
 	const button = (name: RegExp) => screen.queryByRole("button", { name });
 	/** Every top-level control: the buttons and links outside any open menu. On
-	 *  the day, for a member, this is Present, Share and Print & export, and
-	 *  Manage; DESIGN.md and the toolbar's doc allow four and no more. */
+	 *  the day, for a member, this is Present, Share, View agenda, Print &
+	 *  export, and Manage; the toolbar's doc allows five and no more. */
 	const topLevelControls = () => [
 		...screen.queryAllByRole("button"),
 		...screen.queryAllByRole("link"),
@@ -800,10 +844,10 @@ describe("MeetingToolbar meeting-setup entries", () => {
 			expect(onEditMeta).toHaveBeenCalledTimes(1);
 		});
 
-		it("the row stays at four top-level controls on the day", async () => {
+		it("the row stays at five top-level controls on the day", async () => {
 			// The worst case: a member on the day has Present as well.
 			await renderToolbar({ ...TMOD(), phase: "today" });
-			expect(topLevelControls().length).toBeLessThanOrEqual(4);
+			expect(topLevelControls().length).toBeLessThanOrEqual(5);
 			expect(button(/^manage$/i)).toBeTruthy();
 		});
 
@@ -827,7 +871,7 @@ describe("MeetingToolbar meeting-setup entries", () => {
 		});
 		expect(button(/edit word of the day/i)).toBeNull();
 		expect(button(/edit meeting/i)).toBeNull();
-		expect(topLevelControls().length).toBeLessThanOrEqual(4);
+		expect(topLevelControls().length).toBeLessThanOrEqual(5);
 		expect(button(/^manage$/i)).toBeTruthy();
 		await openManage();
 		expect(names()).toEqual(["Edit Word of the Day"]);

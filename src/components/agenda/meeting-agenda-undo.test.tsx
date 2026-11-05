@@ -101,7 +101,6 @@ function mount(opts: {
 			unavailableMemberIds={[]}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
-			meetingUrlKey="2026-10-06"
 			meeting={
 				{
 					id: "m1",

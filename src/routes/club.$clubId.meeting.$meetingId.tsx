@@ -1410,8 +1410,6 @@ function MeetingView() {
 							// manager-only.
 							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
 							meeting={meeting}
-							meetingUrlKey={urlKey}
-							clubSlug={clubSlug}
 							onOwnLateRelease={onOwnLateRelease}
 							meetingOver={over}
 							requireIdentity={requireIdentity}

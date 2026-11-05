@@ -8,7 +8,6 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectAmberClaim } from "#/components/club/claim-class-assert";
 import { MeetingAttendancePanel } from "#/components/club/meeting-attendance-panel";
-import { buttonVariants } from "#/components/ui/button";
 import { buildRoleCounts, slotLabel } from "#/lib/agenda";
 import { buildPanelRoleMap, type PlanStatus } from "#/lib/attendance-panel";
 import { lockedViewer } from "#/lib/meeting-lifecycle";
@@ -123,8 +122,6 @@ function renderAgenda(
 			pairedRoleIds={pairedRoleIds}
 			shareUrl="https://gavelup.app/club/test/meeting/m1"
 			meetingDate="Jan 1, 2026"
-			meetingUrlKey="2026-10-06"
-			clubSlug="my-club"
 			meeting={meeting}
 			// The route hands its own frozen answer in; the fixtures are 30 days
 			// out, so "not over" unless a test says otherwise via `extra`.
@@ -138,97 +135,6 @@ function renderAgenda(
 
 describe("MeetingAgenda capability gating", () => {
 	afterEach(() => cleanup());
-
-	// protects=every audience reaches the digital agenda from the meeting page
-	// via the uuid route; fails_when=the link is gated on a capability, or its
-	// href is built from anything but the meeting's own club and meeting uuids;
-	// no_claim=the target page renders, or a signed-out visitor sees nothing
-	// members-only there (that page's own tests).
-	it.each([
-		[
-			"anon",
-			meetingViewer({
-				currentMemberId: null,
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-		],
-		[
-			"member",
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-		],
-		[
-			"manager",
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: true,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-		],
-	])("shows View agenda to %s", (_who, viewer) => {
-		renderAgenda(viewer, [slot({})]);
-		expect(
-			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
-		).toBe("/club/my-club/meeting/2026-10-06/agenda");
-	});
-
-	// protects=the phone-tall (44px) tap target, DESIGN.md; fails_when=the link
-	// drops back to the compact size; no_claim=layout beyond the size classes.
-	it("renders View agenda at the touch size", () => {
-		renderAgenda(
-			meetingViewer({
-				currentMemberId: "me",
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			[slot({})],
-		);
-		const link = screen.getByRole("link", { name: "View agenda" });
-		const touch = buttonVariants({ variant: "outline", size: "touch" }).split(
-			" ",
-		);
-		expect(touch).toContain("h-11");
-		for (const c of touch) expect(link.classList.contains(c)).toBe(true);
-	});
-
-	// protects=the link survives every meeting state; fails_when=it is hidden
-	// for a past or cancelled meeting; no_claim=anything about the claim gates.
-	it.each([
-		["past", { scheduledAt: daysFromNow(-30) }],
-		["upcoming", { scheduledAt: daysFromNow(30) }],
-		["cancelled", { status: "cancelled" }],
-	])("shows View agenda on a %s meeting", (_when, over) => {
-		renderAgenda(
-			meetingViewer({
-				currentMemberId: null,
-				canManage: false,
-				isTmod: false,
-				isGrammarian: false,
-				isEditableWindow: true,
-			}),
-			[slot({})],
-			undefined,
-			undefined,
-			{
-				meeting: meetingFixture(over),
-			},
-		);
-		expect(
-			screen.getByRole("link", { name: "View agenda" }).getAttribute("href"),
-		).toBe("/club/my-club/meeting/2026-10-06/agenda");
-	});
 
 	it("shows admin controls (stats, confirm) for a manager", () => {
 		const filled = slot({
@@ -1193,8 +1099,6 @@ describe("MeetingAgenda confirm nudge records outreach (#662)", () => {
 						unavailableMemberIds={[]}
 						shareUrl="https://gavelup.app/club/test/meeting/m1"
 						meetingDate="Jan 1, 2026"
-						meetingUrlKey="2026-10-06"
-						clubSlug="my-club"
 						meeting={meetingFixture()}
 						contactedMemberIds={contactedMemberIds}
 						onContacted={(memberId) => recordOutreach(memberId)}
@@ -1500,7 +1404,6 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 			shareUrl: "https://gavelup.app/club/test/meeting/m1",
 			meetingDate: "Jan 1, 2026",
 			meeting: meetingFixture(),
-			meetingUrlKey: "2026-10-06",
 			contactedMemberIds: [],
 		};
 		rerender(<MeetingAgenda {...props} />);
