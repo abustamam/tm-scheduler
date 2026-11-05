@@ -704,4 +704,47 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 			"No schedule line is set for guests, so nothing there can be out of date.",
 		]);
 	});
+
+	it("preview and apply agree for a club holding a moved meeting, and its slot date stays reserved (#1521)", async () => {
+		const before = await future();
+		const moved = before[0];
+		const slotDate = utcToZonedWallTime(moved.scheduledAt, TZ).slice(0, 10);
+		await testDb
+			.update(meetings)
+			.set({
+				scheduledAt: new Date(moved.scheduledAt.getTime() + 2 * 86_400_000),
+				slotDate,
+			})
+			.where(eq(meetings.id, moved.id));
+		// Touched, so the time change leaves it alone.
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: seed.memberId, status: "claimed" })
+			.where(eq(roleSlots.meetingId, moved.id));
+
+		const input = { timeOfDay: "19:30" };
+		const p = await preview(input);
+		// `created` is every meeting the apply will leave in place of the deleted ones.
+		const plannedDates = p.plan.created.map((m) => m.date);
+		expect(plannedDates).not.toContain(slotDate);
+		expect(p.plan.recreated.map((m) => m.date)).not.toContain(slotDate);
+
+		const out = await apply(input, p.planHash as string);
+		expect(out.applied).toBe(true);
+		const after = await future();
+		const afterDates = after.map((m) =>
+			utcToZonedWallTime(m.scheduledAt, TZ).slice(0, 10),
+		);
+		expect(afterDates).not.toContain(slotDate);
+		expect(afterDates).toHaveLength(new Set(afterDates).size);
+		// Every date the apply produced was in the preview, plus the staying one.
+		const stayingDate = utcToZonedWallTime(
+			(after.find((m) => m.id === moved.id) as { scheduledAt: Date })
+				.scheduledAt,
+			TZ,
+		).slice(0, 10);
+		expect([...afterDates].sort()).toEqual(
+			[...plannedDates, stayingDate].sort(),
+		);
+	});
 });

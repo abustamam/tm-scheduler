@@ -18,6 +18,8 @@ export const NON_MEMBER_MEETING_FIELDS = [
 	"id",
 	"clubId",
 	"scheduledAt",
+	// A calendar date the public already has through `scheduledAt` (#1521).
+	"slotDate",
 	"lengthMinutes",
 	"digitalVotingDisabled",
 	"location",

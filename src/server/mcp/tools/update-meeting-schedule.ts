@@ -235,6 +235,7 @@ async function buildPlan(
 					id: meetings.id,
 					scheduledAt: meetings.scheduledAt,
 					status: meetings.status,
+					slotDate: meetings.slotDate,
 				})
 				.from(meetings)
 				.where(eq(meetings.clubId, clubId))

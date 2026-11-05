@@ -340,6 +340,9 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 			.values({
 				clubId: input.clubId,
 				scheduledAt,
+				// #1521: the date this meeting was created on; a reschedule never
+				// touches it, so the top-up keeps the vacated date reserved.
+				slotDate: utcToZonedWallTime(scheduledAt, club.timezone).slice(0, 10),
 				lengthMinutes: club.defaultMeetingMinutes,
 				location: input.location?.trim() || null,
 				// Server-authoritative (#731): the client runs the same function for
