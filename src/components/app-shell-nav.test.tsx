@@ -90,11 +90,12 @@ afterEach(() => {
 });
 
 describe("sidebar per role", () => {
-	it("shows an office holder Meetings then Officers, 11 items, Setup collapsed", () => {
+	it("shows an office holder Meetings then Officers, 12 items, Setup collapsed", () => {
 		renderNav(OFFICE_HOLDER);
 		expect(visibleLinkLabels()).toEqual([
 			"Sign-up sheet",
 			"Next meeting",
+			"Role guides",
 			"Past meetings",
 			"Roster",
 			"Activity",
@@ -114,12 +115,12 @@ describe("sidebar per role", () => {
 		expect(screen.queryByText("Platform")).toBeNull();
 	});
 
-	it("shows an admin with no office 10 items: no Officer home", () => {
+	it("shows an admin with no office 11 items: no Officer home", () => {
 		renderNav(ADMIN_NO_OFFICE);
 		const labels = visibleLinkLabels();
 		expect(labels).not.toContain("Officer home");
-		expect(labels.slice(0, 10)).toContain("Action items");
-		expect(labels).toHaveLength(15);
+		expect(labels.slice(0, 11)).toContain("Action items");
+		expect(labels).toHaveLength(16);
 	});
 
 	it("shows a plain member Meetings and Me, with no empty group headers", () => {
@@ -129,7 +130,7 @@ describe("sidebar per role", () => {
 		expect(screen.queryByText("Officers")).toBeNull();
 		expect(screen.queryByRole("button", { name: /setup/i })).toBeNull();
 		expect(screen.queryByText("Platform")).toBeNull();
-		expect(visibleLinkLabels()).toHaveLength(10);
+		expect(visibleLinkLabels()).toHaveLength(11);
 	});
 
 	it("adds Platform for a superadmin", () => {
@@ -208,8 +209,8 @@ describe("Area Director entries (#1119)", () => {
 				.queryAllByRole("link")
 				.filter((a) => /^Area /.test(a.textContent ?? "")),
 		).toHaveLength(0);
-		// The registered entries are unchanged (control): a plain member's ten.
-		expect(visibleLinkLabels()).toHaveLength(10);
+		// The registered entries are unchanged (control): a plain member's eleven.
+		expect(visibleLinkLabels()).toHaveLength(11);
 	});
 
 	it("marks the entry current on its own page and no other", () => {
@@ -235,7 +236,7 @@ describe("collapsible Setup", () => {
 		);
 		expect(panel).not.toBeNull();
 		expect(panel?.hidden).toBe(true);
-		expect(visibleLinkLabels()).not.toContain("Meeting roles");
+		expect(visibleLinkLabels()).not.toContain("Role setup");
 	});
 
 	it("remembers the open/closed choice across a reload", async () => {
@@ -243,7 +244,7 @@ describe("collapsible Setup", () => {
 		await userEvent.click(setupToggle());
 		expect(setupToggle().getAttribute("aria-expanded")).toBe("true");
 		expect(window.localStorage.getItem(SETUP_KEY)).toBe("1");
-		expect(visibleLinkLabels()).toContain("Meeting roles");
+		expect(visibleLinkLabels()).toContain("Role setup");
 		first.unmount();
 
 		// A fresh mount reads storage after hydration.
@@ -262,7 +263,7 @@ describe("collapsible Setup", () => {
 			renderNav(OFFICE_HOLDER, "/admin/roles");
 			const toggle = setupToggle();
 			expect(toggle.getAttribute("aria-expanded")).toBe("true");
-			expect(visibleLinkLabels()).toContain("Meeting roles");
+			expect(visibleLinkLabels()).toContain("Role setup");
 			// The button is NOT `disabled`, so this click reaches the handler.
 			// Without that, "writes nothing" would be proven by the browser
 			// dropping the click, not by the handler refusing to store.

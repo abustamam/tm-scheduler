@@ -46,6 +46,7 @@ describe("visibleDestinations", () => {
 		expect(keysIn(MEMBER, "meetings")).toEqual([
 			"Sign-up sheet",
 			"Next meeting",
+			"Role guides",
 			"Past meetings",
 			"Roster",
 			"Activity",
@@ -59,7 +60,7 @@ describe("visibleDestinations", () => {
 		]);
 	});
 
-	it("gives an office holder 11 items in Meetings + Officers, and Setup", () => {
+	it("gives an office holder 12 items in Meetings + Officers, and Setup", () => {
 		expect(keysIn(OFFICE_HOLDER, "officers")).toEqual([
 			"Officer home",
 			"VP Education",
@@ -71,11 +72,11 @@ describe("visibleDestinations", () => {
 		expect(
 			keysIn(OFFICE_HOLDER, "meetings").length +
 				keysIn(OFFICE_HOLDER, "officers").length,
-		).toBe(11);
+		).toBe(12);
 		expect(keysIn(OFFICE_HOLDER, "setup")).toEqual([
 			"New meetings",
 			"Recurring schedule",
-			"Meeting roles",
+			"Role setup",
 			"Agendas",
 			"Club settings",
 			"Charter",
@@ -85,12 +86,12 @@ describe("visibleDestinations", () => {
 		expect(keysIn(OFFICE_HOLDER, "platform")).toEqual([]);
 	});
 
-	it("hides Officer home from an admin holding no office (10 items)", () => {
+	it("hides Officer home from an admin holding no office (11 items)", () => {
 		expect(keysIn(ADMIN_NO_OFFICE, "officers")).not.toContain("Officer home");
 		expect(
 			keysIn(ADMIN_NO_OFFICE, "meetings").length +
 				keysIn(ADMIN_NO_OFFICE, "officers").length,
-		).toBe(10);
+		).toBe(11);
 	});
 
 	it("shows Platform to superadmins only", () => {

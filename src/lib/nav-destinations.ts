@@ -11,6 +11,7 @@ import {
 	Handshake,
 	History,
 	LayoutGrid,
+	LibraryBig,
 	List,
 	ListChecks,
 	type LucideIcon,
@@ -97,6 +98,17 @@ export const NAV_DESTINATIONS = [
 		group: "meetings",
 		grant: "everyone",
 		icon: CalendarDays,
+	},
+	{
+		// The club's public roles guide (`/club/:slug/roles-guide`), reached
+		// through a shortcut route like Next meeting. Not the officers' role
+		// setup page, which is "Role setup" below.
+		key: "role-guides",
+		to: "/roles-guide",
+		label: "Role guides",
+		group: "meetings",
+		grant: "everyone",
+		icon: LibraryBig,
 	},
 	{
 		key: "past-meetings",
@@ -194,13 +206,13 @@ export const NAV_DESTINATIONS = [
 	{
 		key: "meeting-roles",
 		to: "/admin/roles",
-		label: "Meeting roles",
+		label: "Role setup",
 		group: "setup",
 		grant: "officer",
 		icon: ListChecks,
 	},
 	{
-		// The club's own agendas and its default (#910). Between Meeting roles
+		// The club's own agendas and its default (#910). Between Role setup
 		// and Club settings: it is the other half of "how our meeting runs".
 		key: "agendas",
 		to: "/admin/agendas",

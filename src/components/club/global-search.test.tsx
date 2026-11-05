@@ -131,11 +131,15 @@ describe("searchWorkspace", () => {
 	});
 
 	it("hides officer-only pages from plain members", () => {
-		const plain = searchWorkspace("roles", [], NOBODY);
-		expect(plain.pages.map((p) => p.label)).toEqual(["My roles"]);
-		const officer = searchWorkspace("roles", [], OFFICER);
+		const plain = searchWorkspace("role", [], NOBODY);
+		expect(plain.pages.map((p) => p.label)).toEqual([
+			"Role guides",
+			"My roles",
+		]);
+		const officer = searchWorkspace("role", [], OFFICER);
 		expect(officer.pages.map((p) => p.label)).toEqual([
-			"Meeting roles",
+			"Role guides",
+			"Role setup",
 			"My roles",
 		]);
 	});
