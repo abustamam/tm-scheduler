@@ -150,6 +150,12 @@ describe("searchWorkspace", () => {
 		).toContain("Roles guide");
 	});
 
+	it("leaves Role setup out of 'roles', deliberately: it is no longer named like the guide", () => {
+		expect(
+			searchWorkspace("roles", [], OFFICER).pages.map((p) => p.label),
+		).toEqual(["Roles guide", "My roles"]);
+	});
+
 	it("hides Superadmin unless the user is a superadmin", () => {
 		expect(searchWorkspace("super", [], OFFICER).pages).toEqual([]);
 		expect(

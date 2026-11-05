@@ -103,7 +103,7 @@ export const NAV_DESTINATIONS = [
 		// The club's public roles guide (`/club/:slug/roles-guide`), reached
 		// through a shortcut route like Next meeting. Not the officers' role
 		// setup page, which is "Role setup" below.
-		key: "role-guides",
+		key: "roles-guide",
 		to: "/roles-guide",
 		label: "Roles guide",
 		group: "meetings",
@@ -204,7 +204,7 @@ export const NAV_DESTINATIONS = [
 		icon: CalendarDays,
 	},
 	{
-		key: "meeting-roles",
+		key: "role-setup",
 		to: "/admin/roles",
 		label: "Role setup",
 		group: "setup",
