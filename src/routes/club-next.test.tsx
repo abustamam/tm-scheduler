@@ -27,6 +27,7 @@ vi.mock("#/server/meetings", () => ({ getPublicNextMeetingKey: vi.fn() }));
 
 import { getPublicNextMeetingKey } from "#/server/meetings";
 import { Route as AuthedNextRoute } from "./_authed/next";
+import { Route as AuthedRolesGuideRoute } from "./_authed/roles-guide";
 import { Route as ClubNextRoute } from "./club.$clubId.next";
 
 const CLUB_UUID = "11111111-1111-4111-8111-111111111111";
@@ -290,5 +291,39 @@ describe("/_authed/next loader (#1140)", () => {
 		const opts = redirectOptions(thrown);
 		expect(opts.to).toBe("/club/$clubId/next");
 		expect(opts.params).toEqual({ clubId: SLUG });
+	});
+});
+
+describe("/_authed/roles-guide loader", () => {
+	it("with no active club, goes to the dashboard without asking the seam", async () => {
+		const { thrown } = await run(AuthedRolesGuideRoute, {
+			context: { activeClubId: null },
+		});
+		expect(redirectOptions(thrown).to).toBe("/dashboard");
+		expect(getPublicNextMeetingKey).not.toHaveBeenCalled();
+	});
+
+	it("with an unreadable or archived (null) club, goes to the dashboard", async () => {
+		vi.mocked(getPublicNextMeetingKey).mockResolvedValue(null);
+		const { thrown } = await run(AuthedRolesGuideRoute, {
+			context: { activeClubId: CLUB_UUID },
+		});
+		expect(getPublicNextMeetingKey).toHaveBeenCalledWith({ data: CLUB_UUID });
+		expect(redirectOptions(thrown).to).toBe("/dashboard");
+	});
+
+	it("goes to the club's guide by slug in one hop, with or without a next meeting", async () => {
+		for (const urlKey of ["2030-06-11", null]) {
+			vi.mocked(getPublicNextMeetingKey).mockResolvedValue({
+				clubSlug: SLUG,
+				urlKey,
+			});
+			const { thrown } = await run(AuthedRolesGuideRoute, {
+				context: { activeClubId: CLUB_UUID },
+			});
+			const opts = redirectOptions(thrown);
+			expect(opts.to).toBe("/club/$clubId/roles-guide");
+			expect(opts.params).toEqual({ clubId: SLUG });
+		}
 	});
 });

@@ -334,6 +334,8 @@ const EXCLUDED: Record<string, string> = {
 		"redirect only when the fixture club has an upcoming meeting: answers with a redirect to /club/$clubId/meeting/$meetingId, which is swept",
 	"/next":
 		"redirect only: answers with a redirect to the next meeting's /club/$clubId/meeting/$meetingId, or to /club/$clubId/next when none is scheduled",
+	"/roles-guide":
+		"redirect only: answers with a redirect to the club's public /club/$clubId/roles-guide, which is swept",
 	"/oauth/consent":
 		"renders only for a query the OAuth provider SIGNS; an unsigned one is refused before any page renders",
 	"/agenda-plan/$planId":

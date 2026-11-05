@@ -32,6 +32,7 @@ import { Route as ApiDevLoginRouteImport } from './routes/api/dev-login'
 import { Route as AuthedSuperadminRouteImport } from './routes/_authed/superadmin'
 import { Route as AuthedScheduleRouteImport } from './routes/_authed/schedule'
 import { Route as AuthedRosterRouteImport } from './routes/_authed/roster'
+import { Route as AuthedRolesGuideRouteImport } from './routes/_authed/roles-guide'
 import { Route as AuthedOfficersRouteImport } from './routes/_authed/officers'
 import { Route as AuthedNextRouteImport } from './routes/_authed/next'
 import { Route as AuthedMentorsRouteImport } from './routes/_authed/mentors'
@@ -213,6 +214,11 @@ const AuthedScheduleRoute = AuthedScheduleRouteImport.update({
 const AuthedRosterRoute = AuthedRosterRouteImport.update({
   id: '/roster',
   path: '/roster',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedRolesGuideRoute = AuthedRolesGuideRouteImport.update({
+  id: '/roles-guide',
+  path: '/roles-guide',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedOfficersRoute = AuthedOfficersRouteImport.update({
@@ -594,6 +600,7 @@ export interface FileRoutesByFullPath {
   '/mentors': typeof AuthedMentorsRoute
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
+  '/roles-guide': typeof AuthedRolesGuideRoute
   '/roster': typeof AuthedRosterRoute
   '/schedule': typeof AuthedScheduleRoute
   '/superadmin': typeof AuthedSuperadminRouteWithChildren
@@ -685,6 +692,7 @@ export interface FileRoutesByTo {
   '/mentors': typeof AuthedMentorsRoute
   '/next': typeof AuthedNextRoute
   '/officers': typeof AuthedOfficersRoute
+  '/roles-guide': typeof AuthedRolesGuideRoute
   '/roster': typeof AuthedRosterRoute
   '/schedule': typeof AuthedScheduleRoute
   '/api/dev-login': typeof ApiDevLoginRoute
@@ -776,6 +784,7 @@ export interface FileRoutesById {
   '/_authed/mentors': typeof AuthedMentorsRoute
   '/_authed/next': typeof AuthedNextRoute
   '/_authed/officers': typeof AuthedOfficersRoute
+  '/_authed/roles-guide': typeof AuthedRolesGuideRoute
   '/_authed/roster': typeof AuthedRosterRoute
   '/_authed/schedule': typeof AuthedScheduleRoute
   '/_authed/superadmin': typeof AuthedSuperadminRouteWithChildren
@@ -869,6 +878,7 @@ export interface FileRouteTypes {
     | '/mentors'
     | '/next'
     | '/officers'
+    | '/roles-guide'
     | '/roster'
     | '/schedule'
     | '/superadmin'
@@ -960,6 +970,7 @@ export interface FileRouteTypes {
     | '/mentors'
     | '/next'
     | '/officers'
+    | '/roles-guide'
     | '/roster'
     | '/schedule'
     | '/api/dev-login'
@@ -1050,6 +1061,7 @@ export interface FileRouteTypes {
     | '/_authed/mentors'
     | '/_authed/next'
     | '/_authed/officers'
+    | '/_authed/roles-guide'
     | '/_authed/roster'
     | '/_authed/schedule'
     | '/_authed/superadmin'
@@ -1330,6 +1342,13 @@ declare module '@tanstack/react-router' {
       path: '/roster'
       fullPath: '/roster'
       preLoaderRoute: typeof AuthedRosterRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/roles-guide': {
+      id: '/_authed/roles-guide'
+      path: '/roles-guide'
+      fullPath: '/roles-guide'
+      preLoaderRoute: typeof AuthedRolesGuideRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/officers': {
@@ -1831,6 +1850,7 @@ interface AuthedRouteChildren {
   AuthedMentorsRoute: typeof AuthedMentorsRoute
   AuthedNextRoute: typeof AuthedNextRoute
   AuthedOfficersRoute: typeof AuthedOfficersRoute
+  AuthedRolesGuideRoute: typeof AuthedRolesGuideRoute
   AuthedRosterRoute: typeof AuthedRosterRoute
   AuthedScheduleRoute: typeof AuthedScheduleRoute
   AuthedSuperadminRoute: typeof AuthedSuperadminRouteWithChildren
@@ -1865,6 +1885,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedMentorsRoute: AuthedMentorsRoute,
   AuthedNextRoute: AuthedNextRoute,
   AuthedOfficersRoute: AuthedOfficersRoute,
+  AuthedRolesGuideRoute: AuthedRolesGuideRoute,
   AuthedRosterRoute: AuthedRosterRoute,
   AuthedScheduleRoute: AuthedScheduleRoute,
   AuthedSuperadminRoute: AuthedSuperadminRouteWithChildren,

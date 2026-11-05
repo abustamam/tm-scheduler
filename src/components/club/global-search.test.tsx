@@ -131,13 +131,29 @@ describe("searchWorkspace", () => {
 	});
 
 	it("hides officer-only pages from plain members", () => {
-		const plain = searchWorkspace("roles", [], NOBODY);
-		expect(plain.pages.map((p) => p.label)).toEqual(["My roles"]);
-		const officer = searchWorkspace("roles", [], OFFICER);
-		expect(officer.pages.map((p) => p.label)).toEqual([
-			"Meeting roles",
+		const plain = searchWorkspace("role", [], NOBODY);
+		expect(plain.pages.map((p) => p.label)).toEqual([
+			"Roles guide",
 			"My roles",
 		]);
+		const officer = searchWorkspace("role", [], OFFICER);
+		expect(officer.pages.map((p) => p.label)).toEqual([
+			"Roles guide",
+			"Role setup",
+			"My roles",
+		]);
+	});
+
+	it("finds the roles guide for the query a member types: 'roles'", () => {
+		expect(
+			searchWorkspace("roles", [], NOBODY).pages.map((p) => p.label),
+		).toContain("Roles guide");
+	});
+
+	it("leaves Role setup out of 'roles', deliberately: it is no longer named like the guide", () => {
+		expect(
+			searchWorkspace("roles", [], OFFICER).pages.map((p) => p.label),
+		).toEqual(["Roles guide", "My roles"]);
 	});
 
 	it("hides Superadmin unless the user is a superadmin", () => {
