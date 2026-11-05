@@ -133,15 +133,21 @@ describe("searchWorkspace", () => {
 	it("hides officer-only pages from plain members", () => {
 		const plain = searchWorkspace("role", [], NOBODY);
 		expect(plain.pages.map((p) => p.label)).toEqual([
-			"Role guides",
+			"Roles guide",
 			"My roles",
 		]);
 		const officer = searchWorkspace("role", [], OFFICER);
 		expect(officer.pages.map((p) => p.label)).toEqual([
-			"Role guides",
+			"Roles guide",
 			"Role setup",
 			"My roles",
 		]);
+	});
+
+	it("finds the roles guide for the query a member types: 'roles'", () => {
+		expect(
+			searchWorkspace("roles", [], NOBODY).pages.map((p) => p.label),
+		).toContain("Roles guide");
 	});
 
 	it("hides Superadmin unless the user is a superadmin", () => {

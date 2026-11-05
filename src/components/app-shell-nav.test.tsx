@@ -95,7 +95,7 @@ describe("sidebar per role", () => {
 		expect(visibleLinkLabels()).toEqual([
 			"Sign-up sheet",
 			"Next meeting",
-			"Role guides",
+			"Roles guide",
 			"Past meetings",
 			"Roster",
 			"Activity",

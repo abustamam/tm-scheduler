@@ -105,7 +105,7 @@ export const NAV_DESTINATIONS = [
 		// setup page, which is "Role setup" below.
 		key: "role-guides",
 		to: "/roles-guide",
-		label: "Role guides",
+		label: "Roles guide",
 		group: "meetings",
 		grant: "everyone",
 		icon: LibraryBig,
