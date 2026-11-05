@@ -105,6 +105,7 @@ function previewFor(contacts: string) {
 					],
 				}
 			: { emails: 0, phones: 0, warnings: [] },
+		officialRoster: { official: 6, active: 6, complete: true },
 		canApply: true,
 		savedResolutions: {},
 		report: null,

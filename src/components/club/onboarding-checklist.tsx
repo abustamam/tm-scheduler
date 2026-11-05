@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 import { ShareLinkButton } from "#/components/share-link-button";
 import {
 	buildOnboardingChecklistItems,
+	isNewClubFor,
+	type OnboardingPath,
 	onboardingDismissKey,
+	onboardingPathKey,
+	resolveOnboardingPath,
 } from "#/lib/onboarding-checklist";
 import type { OnboardingChecklistStatus } from "#/server/onboarding-checklist-logic";
 
@@ -29,7 +33,11 @@ export function OnboardingChecklist({
 	// may see a brief flash before this settles, which is an acceptable
 	// tradeoff for "no schema change."
 	const [mounted, setMounted] = useState(false);
+	// SSR and the first client render use the stored-choice-free path; the
+	// stored choice is read with the dismiss key after mount.
+	const [storedPath, setStoredPath] = useState<OnboardingPath | null>(null);
 	const storageKey = onboardingDismissKey(clubId);
+	const pathKey = onboardingPathKey(clubId);
 
 	useEffect(() => {
 		try {
@@ -37,14 +45,33 @@ export function OnboardingChecklist({
 		} catch {
 			// localStorage unavailable (private mode) — never block showing it.
 		}
+		try {
+			setStoredPath(
+				localStorage.getItem(pathKey) === "easy-speak" ? "easy-speak" : null,
+			);
+		} catch {
+			// Same: fall back to the data-derived path.
+		}
 		setMounted(true);
-	}, [storageKey]);
+	}, [storageKey, pathKey]);
 
-	if (!status.isNewClub) return null;
+	const path: OnboardingPath = resolveOnboardingPath(status, storedPath);
+	if (!isNewClubFor(status, path)) return null;
 	if (mounted && dismissed) return null;
 
-	const items = buildOnboardingChecklistItems(status);
+	const items = buildOnboardingChecklistItems(status, path);
 	const doneCount = items.filter((item) => item.complete).length;
+	const nextKey = items.find((item) => !item.complete)?.key;
+
+	function choosePath(choice: OnboardingPath) {
+		setStoredPath(choice === "easy-speak" ? "easy-speak" : null);
+		try {
+			if (choice === "easy-speak") localStorage.setItem(pathKey, "easy-speak");
+			else localStorage.removeItem(pathKey);
+		} catch {
+			// Best-effort persistence — the switch still applies to this render.
+		}
+	}
 
 	function handleDismiss() {
 		setDismissed(true);
@@ -63,11 +90,31 @@ export function OnboardingChecklist({
 			<div className="flex items-start justify-between gap-3">
 				<div>
 					<h2 className="font-display text-lg font-semibold tracking-[-0.01em]">
-						Get your club set up
+						{path === "easy-speak"
+							? "Move your club to GavelUp"
+							: "Get your club set up"}
 					</h2>
 					<p className="mt-0.5 text-xs text-muted-foreground">
 						{doneCount} of {items.length} done
 					</p>
+					{status.hasImport ? null : (
+						<p className="mt-1 text-xs text-muted-foreground">
+							{path === "easy-speak"
+								? "Not moving from Easy-Speak? "
+								: "Moving from Easy-Speak? "}
+							<button
+								type="button"
+								onClick={() =>
+									choosePath(path === "easy-speak" ? "fresh" : "easy-speak")
+								}
+								className="font-semibold text-foreground underline"
+							>
+								{path === "easy-speak"
+									? "Show the standard steps"
+									: "Show the migration steps"}
+							</button>
+						</p>
+					)}
 				</div>
 				<button
 					type="button"
@@ -80,12 +127,9 @@ export function OnboardingChecklist({
 			</div>
 
 			<ul className="space-y-1">
-				{items.map((item) => (
-					<li key={item.key}>
-						<Link
-							to={item.to}
-							className="group flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-surface-soft"
-						>
+				{items.map((item, index) => {
+					const body = (
+						<>
 							{item.complete ? (
 								<CheckCircle2
 									className="size-5 shrink-0 text-success"
@@ -105,15 +149,42 @@ export function OnboardingChecklist({
 											: "text-sm font-semibold text-foreground"
 									}
 								>
-									{item.label}
+									<span data-testid="checklist-number" className="mr-1">
+										{index + 1}.
+									</span>
+									<span>{item.label}</span>
+									{item.key === nextKey ? (
+										<span
+											data-testid="checklist-next"
+											className="ml-2 rounded-full bg-surface-soft px-2 py-0.5 text-xs font-semibold text-foreground no-underline"
+										>
+											Next
+										</span>
+									) : null}
 								</div>
 								<div className="truncate text-xs text-muted-foreground">
-									{item.description}
+									{item.locked ?? item.description}
 								</div>
 							</div>
-						</Link>
-					</li>
-				))}
+						</>
+					);
+					return (
+						<li key={item.key}>
+							{item.locked ? (
+								<div className="flex items-center gap-3 rounded-lg px-2.5 py-2">
+									{body}
+								</div>
+							) : (
+								<Link
+									to={item.to}
+									className="group flex items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-surface-soft"
+								>
+									{body}
+								</Link>
+							)}
+						</li>
+					);
+				})}
 			</ul>
 
 			<div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2.5">

@@ -6,9 +6,10 @@
 // (`onboarding-checklist.ts`, imported by client route files) so `#/db` never
 // leaks into the client bundle — see `members-logic.ts` and
 // `server-modules.guard.test.ts`.
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	clubImports,
 	clubMeetingRecurrence,
 	clubs,
 	meetings,
@@ -19,7 +20,10 @@ import {
 import {
 	CHECKLIST_MEMBER_THRESHOLD,
 	clubDetailsComplete,
+	officialRosterComplete,
+	thresholdShareReached,
 } from "#/lib/onboarding-checklist";
+import { mayRunHistoryImport } from "./guards";
 
 export interface OnboardingChecklistStatus {
 	clubSlug: string;
@@ -52,6 +56,52 @@ export interface OnboardingChecklistStatus {
 	 *  clear, the club has "graduated" and the checklist stops showing —
 	 *  independent of any per-admin localStorage dismissal. */
 	isNewClub: boolean;
+	/** Active members whose Person has a Toastmasters Customer ID (loaded from the Club Central CSV). Same active-membership set as `memberCount`. */
+	officialRosterCount: number;
+	/** `officialRosterComplete(officialRosterCount, memberCount)`. */
+	hasOfficialRoster: boolean;
+	/** The club has any `club_imports` row (applied or not): switches every admin to the Easy-Speak path. */
+	hasImport: boolean;
+	/** The club has a `club_imports` row with `applied_at` set. */
+	hasAppliedImport: boolean;
+	/** A meeting with status `scheduled` and `scheduled_at` in the future. */
+	hasUpcomingMeeting: boolean;
+	/** Easy-Speak path graduation: `!hasAppliedImport || !hasUpcomingMeeting || !hasInvitedMembers`. */
+	isNewClubEasySpeak: boolean;
+	/** Whether the viewer may run the Easy-Speak import; set by the server function, which knows the viewer (false from the club-only loader). */
+	canRunImport: boolean;
+}
+
+/** Active members, and how many of them have a Toastmasters Customer ID; shared with the import preview's roster notice. */
+export async function countOfficialRosterMembers(
+	clubId: string,
+): Promise<{ official: number; active: number }> {
+	const [row] = await db
+		.select({
+			active: sql<number>`count(*)::int`,
+			official: sql<number>`count(${people.customerId})::int`,
+		})
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(and(eq(members.clubId, clubId), eq(members.status, "active")));
+	return { official: row?.official ?? 0, active: row?.active ?? 0 };
+}
+
+/**
+ * The status as one viewer sees it: `canRunImport` is `mayRunHistoryImport`,
+ * the guard the import's own server functions use, asked for THIS viewer and
+ * THIS club. The server function calls this and nothing else, so a test that
+ * calls it reaches the same wiring (#1498).
+ */
+export async function getOnboardingChecklistStatusForViewer(
+	userId: string,
+	clubId: string,
+): Promise<OnboardingChecklistStatus> {
+	const [status, canRunImport] = await Promise.all([
+		getOnboardingChecklistStatus(clubId),
+		mayRunHistoryImport(userId, clubId),
+	]);
+	return { ...status, canRunImport };
 }
 
 /** Setup-checklist status for one club. Throws when the club doesn't exist.
@@ -66,6 +116,9 @@ export async function getOnboardingChecklistStatus(
 		recurrenceRow,
 		meetingCountRow,
 		officerTermRow,
+		roster,
+		importRows,
+		upcomingRow,
 	] = await Promise.all([
 		db
 			.select({
@@ -112,6 +165,24 @@ export async function getOnboardingChecklistStatus(
 			.innerJoin(members, eq(members.id, officerTerms.membershipId))
 			.where(and(eq(members.clubId, clubId), isNull(officerTerms.termEnd)))
 			.limit(1),
+		countOfficialRosterMembers(clubId),
+		db
+			.select({
+				applied: sql<boolean>`bool_or(${clubImports.appliedAt} is not null)`,
+			})
+			.from(clubImports)
+			.where(eq(clubImports.clubId, clubId)),
+		db
+			.select({ id: meetings.id })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, clubId),
+					eq(meetings.status, "scheduled"),
+					gt(meetings.scheduledAt, sql`now()`),
+				),
+			)
+			.limit(1),
 	]);
 
 	const club = clubRow[0];
@@ -125,9 +196,15 @@ export async function getOnboardingChecklistStatus(
 	// 3 — the bar is "everyone you have, up to the threshold", not a count a
 	// small club can never reach. `memberCount > 0` keeps an empty roster from
 	// clearing it vacuously (0 >= min(5, 0)).
-	const hasInvitedMembers =
-		memberCount > 0 &&
-		invitedMemberCount >= Math.min(CHECKLIST_MEMBER_THRESHOLD, memberCount);
+	const hasInvitedMembers = thresholdShareReached(
+		invitedMemberCount,
+		memberCount,
+	);
+
+	const hasAppliedImport = importRows[0]?.applied === true;
+	// An aggregate over zero rows still returns one row, with a null.
+	const hasImport = importRows[0]?.applied != null;
+	const hasUpcomingMeeting = upcomingRow.length > 0;
 
 	return {
 		clubSlug: club.slug,
@@ -140,5 +217,13 @@ export async function getOnboardingChecklistStatus(
 		hasMeeting,
 		hasOfficerTerm: officerTermRow.length > 0,
 		isNewClub: !hasMeeting || !hasEnoughMembers || !hasInvitedMembers,
+		officialRosterCount: roster.official,
+		hasOfficialRoster: officialRosterComplete(roster.official, memberCount),
+		hasImport,
+		hasAppliedImport,
+		hasUpcomingMeeting,
+		isNewClubEasySpeak:
+			!hasAppliedImport || !hasUpcomingMeeting || !hasInvitedMembers,
+		canRunImport: false,
 	};
 }

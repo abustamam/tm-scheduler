@@ -139,6 +139,7 @@ import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { localDateKey } from "#/lib/meeting-url";
 import { monthLabel } from "#/lib/month-label";
+import { officialRosterComplete } from "#/lib/onboarding-checklist";
 import { toStoredPhone } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { ROLE_TEMPLATE } from "#/lib/role-template";
@@ -168,6 +169,7 @@ import { insertMeetingWithSlots } from "./meeting-create-logic";
 import { loadMeetingShapeDefs } from "./meeting-templates-logic";
 import { insertRosterMember } from "./members-logic";
 import { openOfficerTermIfAbsent } from "./officer-terms-logic";
+import { countOfficialRosterMembers } from "./onboarding-checklist-logic";
 
 export type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -992,6 +994,8 @@ export interface ImportPreview {
 	canApply: boolean;
 	savedResolutions: Record<string, PersonResolution>;
 	report: ImportReport | null;
+	/** How much of the active roster came from the Toastmasters CSV (#1498); drives the panel's "load the roster first" notice. */
+	officialRoster: { official: number; active: number; complete: boolean };
 }
 
 function previewPerson(p: PlanPerson): ImportPreviewPerson {
@@ -1164,6 +1168,7 @@ export async function previewEasySpeakImport(input: {
 		}
 	}
 	warnings.push(...plan.notes);
+	const officialCounts = await countOfficialRosterMembers(input.clubId);
 	return {
 		importId: input.importId,
 		planHash: planFingerprint(plan, input.contacts),
@@ -1200,6 +1205,13 @@ export async function previewEasySpeakImport(input: {
 		canApply: plan.canApply,
 		savedResolutions: stored.state.resolutions,
 		report: stored.state.report,
+		officialRoster: {
+			...officialCounts,
+			complete: officialRosterComplete(
+				officialCounts.official,
+				officialCounts.active,
+			),
+		},
 	};
 }
 

@@ -92,6 +92,7 @@ const preview = {
 	futureMeetings: [],
 	roster: [{ memberId: M1, name: "Elliot Dovecott" }],
 	contacts: { emails: 0, phones: 0, warnings: [] },
+	officialRoster: { official: 6, active: 6, complete: true },
 	unresolvedCount: 1,
 	canApply: false,
 	savedResolutions: {},

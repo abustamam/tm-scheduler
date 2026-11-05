@@ -36,7 +36,8 @@ export type OnboardingChecklistTarget =
 	| "/admin/club-settings"
 	| "/roster"
 	| "/admin/schedule"
-	| "/admin/meetings/batch";
+	| "/admin/meetings/batch"
+	| "/admin/import-history";
 
 export interface OnboardingChecklistItem {
 	key: string;
@@ -44,6 +45,55 @@ export interface OnboardingChecklistItem {
 	description: string;
 	to: OnboardingChecklistTarget;
 	complete: boolean;
+	/** Set when the viewer cannot do this step: the row renders as plain text with this in place of the description (#1498). */
+	locked?: string;
+}
+
+export type OnboardingPath = "fresh" | "easy-speak";
+
+/**
+ * `count` of the active members reach `min(threshold, active)`, never on an
+ * empty roster (0 >= min(5, 0) would clear vacuously). The one rule behind the
+ * invite row and the official-roster row.
+ */
+export function thresholdShareReached(
+	count: number,
+	memberCount: number,
+): boolean {
+	return (
+		memberCount > 0 &&
+		count >= Math.min(CHECKLIST_MEMBER_THRESHOLD, memberCount)
+	);
+}
+
+/** Whether the official-roster row is done: active members carrying a Toastmasters Customer ID. */
+export function officialRosterComplete(
+	officialCount: number,
+	memberCount: number,
+): boolean {
+	return thresholdShareReached(officialCount, memberCount);
+}
+
+/** The per-club localStorage key for the Easy-Speak path choice (#1498). The only stored value is "easy-speak". */
+export function onboardingPathKey(clubId: string): string {
+	return `gavelup:onboarding-path:${clubId}`;
+}
+
+/** Data beats storage: any import puts every admin on the Easy-Speak path; the stored choice only counts before the first upload. */
+export function resolveOnboardingPath(
+	status: Pick<OnboardingChecklistStatus, "hasImport">,
+	storedChoice: string | null,
+): OnboardingPath {
+	if (status.hasImport) return "easy-speak";
+	return storedChoice === "easy-speak" ? "easy-speak" : "fresh";
+}
+
+/** Whether the checklist still shows on this path. */
+export function isNewClubFor(
+	status: Pick<OnboardingChecklistStatus, "isNewClub" | "isNewClubEasySpeak">,
+	path: OnboardingPath,
+): boolean {
+	return path === "easy-speak" ? status.isNewClubEasySpeak : status.isNewClub;
 }
 
 /**
@@ -55,7 +105,9 @@ export interface OnboardingChecklistItem {
  */
 export function buildOnboardingChecklistItems(
 	status: OnboardingChecklistStatus,
+	path: OnboardingPath = "fresh",
 ): OnboardingChecklistItem[] {
+	if (path === "easy-speak") return buildEasySpeakItems(status);
 	return [
 		{
 			key: "club-details",
@@ -92,6 +144,71 @@ export function buildOnboardingChecklistItems(
 			description: "Create meetings from your schedule.",
 			to: "/admin/meetings/batch",
 			complete: status.hasMeeting,
+		},
+		{
+			key: "officers",
+			label: "Assign officer roles",
+			description: "Open a member's profile to set their office.",
+			to: "/roster",
+			complete: status.hasOfficerTerm,
+		},
+	];
+}
+
+const LOCKED_TEXT = "A club admin does this step.";
+
+function buildEasySpeakItems(
+	status: OnboardingChecklistStatus,
+): OnboardingChecklistItem[] {
+	const locked = status.canRunImport ? undefined : LOCKED_TEXT;
+	return [
+		{
+			key: "club-details",
+			label: "Confirm your club details",
+			description:
+				"Name, club number (once chartered), time zone, and meeting day/time.",
+			to: "/admin/club-settings",
+			complete: status.clubDetailsComplete,
+		},
+		{
+			key: "official-roster",
+			label: "Load your official roster",
+			description:
+				"Upload the membership CSV from Toastmasters Club Central, so the import matches people to your members.",
+			to: "/roster",
+			complete: status.hasOfficialRoster,
+		},
+		{
+			key: "history",
+			label: "Import your Easy-Speak history",
+			description:
+				"Export it with the GavelUp browser extension, then upload it here. Re-run it later to pick up meetings held since.",
+			to: "/admin/import-history",
+			complete: status.hasAppliedImport,
+			locked,
+		},
+		{
+			key: "upcoming",
+			label: "Bring over your upcoming meetings",
+			description:
+				'Tick "include upcoming meetings" when you import, so role holders come with them.',
+			to: "/admin/import-history",
+			complete: status.hasUpcomingMeeting,
+			locked,
+		},
+		{
+			key: "recurrence",
+			label: "Set your recurring meeting schedule",
+			description: "How often and when your club meets.",
+			to: "/admin/schedule",
+			complete: status.hasRecurrence,
+		},
+		{
+			key: "invite",
+			label: "Invite your members",
+			description: "Send sign-in links so members can claim roles.",
+			to: "/roster",
+			complete: status.hasInvitedMembers,
 		},
 		{
 			key: "officers",

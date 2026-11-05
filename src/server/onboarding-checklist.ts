@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireClubAdminView, requireUser } from "./guards";
-import { getOnboardingChecklistStatus } from "./onboarding-checklist-logic";
+import { getOnboardingChecklistStatusForViewer } from "./onboarding-checklist-logic";
 
 const uuid = z.string().uuid();
 
@@ -19,5 +19,5 @@ export const getOnboardingChecklist = createServerFn({ method: "GET" })
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		return getOnboardingChecklistStatus(clubId);
+		return getOnboardingChecklistStatusForViewer(currentUser.id, clubId);
 	});
