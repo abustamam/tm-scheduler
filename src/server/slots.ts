@@ -27,6 +27,7 @@ import {
 	editSlotSpeech,
 	reassignSlotCore,
 	releaseSlotCore,
+	speechOwnerOf,
 	writeSpeakerDetails,
 } from "./slots-logic";
 import {
@@ -378,12 +379,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		}
 		// A speech has exactly one owner (#1046): the member's Person, or the
 		// guest holding the slot (#1518). An empty slot has nobody to own it.
-		const owner =
-			slot.assignedMemberId && slot.personId
-				? { personId: slot.personId }
-				: slot.assignedGuestId
-					? { guestId: slot.assignedGuestId }
-					: null;
+		const owner = speechOwnerOf(slot);
 		if (!owner) {
 			throw new Error("Assign a member before adding speech details.");
 		}

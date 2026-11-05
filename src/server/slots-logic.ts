@@ -1339,6 +1339,29 @@ async function applyProjectDisplay(
 /** Who owns a new speech (#1518): the slot holder's Person, or the guest. */
 export type SpeechOwner = { personId: string } | { guestId: string };
 
+/** Picks just the owner out of args that carry one, for passing it on. */
+function ownerOf(args: SpeechOwner): SpeechOwner {
+	return "guestId" in args
+		? { guestId: args.guestId }
+		: { personId: args.personId };
+}
+
+/**
+ * The owner of a speaker slot's speech: the member's Person, else the guest
+ * holding it, else null (an empty slot has nobody to own one).
+ */
+export function speechOwnerOf(slot: {
+	assignedMemberId: string | null;
+	personId: string | null;
+	assignedGuestId: string | null;
+}): SpeechOwner | null {
+	if (slot.assignedMemberId && slot.personId) {
+		return { personId: slot.personId };
+	}
+	if (slot.assignedGuestId) return { guestId: slot.assignedGuestId };
+	return null;
+}
+
 /**
  * Attach a new Speech to a freshly-claimed speaker slot and point
  * the slot at it. Pure-TBA / empty input creates nothing (slot stays TBA,
@@ -2578,9 +2601,7 @@ export async function updateOrAttachSlotSpeech(
 	}
 	await attachSpeechToSlot(conn, {
 		slotId: args.slotId,
-		...("guestId" in args
-			? { guestId: args.guestId }
-			: { personId: args.personId }),
+		...ownerOf(args),
 		input: args.input,
 	});
 }

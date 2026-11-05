@@ -11,6 +11,7 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	meetings,
 	members,
 	pathwaysPaths,
 	pathwaysProjects,
@@ -566,8 +567,26 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			expect(kept?.guestId).toBe(guestId);
 		});
 
-		it("never shows up under a member's Person", async () => {
+		it("never shows up in a member's speech log, milestones or Pathways", async () => {
+			// A past, completed meeting so milestones could count it if it leaked.
+			await testDb
+				.update(meetings)
+				.set({
+					scheduledAt: new Date(Date.now() - 3 * 86_400_000),
+					status: "completed",
+				})
+				.where(eq(meetings.id, seed.meetingId));
 			await createGuestOwned("Guest talk");
+			const { loadSpeechLog } = await import("./my-activity-logic");
+			const { loadMilestoneCounts } = await import("./milestones-logic");
+			const { pathwaysForPerson } = await import("./pathways-read-logic");
+			const log = await loadSpeechLog([seed.memberId], seed.clubId, null);
+			expect(log.rows.map((r) => r.speechTitle)).not.toContain("Guest talk");
+			expect(log.rows).toHaveLength(0);
+			expect((await loadMilestoneCounts(seed.memberId)).speechesDelivered).toBe(
+				0,
+			);
+			expect(await pathwaysForPerson(seed.personId)).toHaveLength(0);
 			const owned = await testDb
 				.select({ id: speeches.id })
 				.from(speeches)

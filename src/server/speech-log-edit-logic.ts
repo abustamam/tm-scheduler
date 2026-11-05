@@ -183,7 +183,8 @@ export async function applySpeechLogEdit(args: {
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}
-		if (!slot.assignedMemberId || !slot.personId) {
+		const personId = slot.personId;
+		if (!slot.assignedMemberId || !personId) {
 			throw new Error("Only a member's speech can be edited here.");
 		}
 		const input = keepUnsent(args.speakerDetails, slot);
@@ -204,7 +205,7 @@ export async function applySpeechLogEdit(args: {
 			write: () =>
 				updateOrAttachSlotSpeech(tx, {
 					slotId: args.slotId,
-					personId: slot.personId as string,
+					personId,
 					currentSpeechId: slot.speechId,
 					input,
 				}),
