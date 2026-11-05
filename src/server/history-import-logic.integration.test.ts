@@ -41,6 +41,7 @@ import type {
 	EasySpeakBundleV3,
 } from "#/lib/easy-speak-bundle";
 import {
+	ERASED_ACCOUNT_REASON,
 	isBindingRefusal,
 	isJsonbSafeText,
 	MEETING_LEFT_ALONE,
@@ -1665,6 +1666,106 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		);
 		expect(row?.count).toBe(4);
 		expect(report.reconciled).toBe(true);
+	});
+
+	// ---------------------------------------------------------------------
+	// Skipped people are omissions, not missing records (#1496)
+	// ---------------------------------------------------------------------
+
+	const ERASED = { esUserId: "900901", name: "Forgotten User" };
+
+	/** The fixture's first meeting with an erased account holding a role, a speech, an attendance, an award and a Table Topics turn. */
+	function erasedBundleText(): string {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		const m = bundle.meetings.find((x) => x.esMeetingId === "644304");
+		const joke = m?.roles.find((r) => r.role === "Joke Master");
+		const speaker = m?.roles.find((r) => r.role === "1st Speaker");
+		const award = m?.awards.find((a) => a.category === "best_speaker");
+		if (!m || !joke || !speaker?.speech || !award) throw new Error("fixture");
+		joke.holder = ERASED;
+		speaker.holder = ERASED;
+		award.who = ERASED;
+		m.attendance.push({ who: ERASED, plan: null, record: "attended" });
+		m.tableTopics.push({ who: ERASED, topic: "A topic" });
+		return JSON.stringify(bundle);
+	}
+
+	const omitted = (
+		report: Awaited<ReturnType<typeof apply>>["report"],
+		what: string,
+		reason: string,
+	) => report.notImported.find((r) => r.what === what && r.reason === reason);
+
+	// protects=an erased account's role, speech, attendance, award and Table Topics
+	// turn are recorded as omissions with the erased-account reason, so the import
+	// reads reconciled with nothing missing;
+	// fails_when=any of the five kinds stops recording its omission (it lands in
+	// that count's missing list and reconciled goes false);
+	// no_claim=the panel's wording, or an erased account's records ever being written.
+	it("an erased account's records are not missing: they are omitted with the erased-account reason", async () => {
+		const stored = await upload(erasedBundleText());
+		const { resolutions } = await resolveAll(stored.importId);
+		const { report } = await apply(stored.importId, resolutions);
+		for (const c of report.counts) expect(c.missing, c.key).toEqual([]);
+		expect(report.meetings.failed).toEqual([]);
+		expect(report.reconciled).toBe(true);
+		const reason = ERASED_ACCOUNT_REASON;
+		expect(omitted(report, "Role assignments", reason)?.count).toBe(2);
+		expect(omitted(report, "Speeches", reason)?.count).toBe(1);
+		expect(omitted(report, "Attendance records", reason)?.count).toBe(1);
+		expect(omitted(report, "Awards", reason)?.count).toBe(1);
+		expect(omitted(report, "Table Topics turns", reason)?.count).toBe(1);
+		expect(omitted(report, "Speeches", reason)?.sourceIds).toEqual(["1472116"]);
+	});
+
+	// protects=a person the admin skips keeps THEIR reason on their omitted records,
+	// distinct from the erased-account rows;
+	// fails_when=the omission uses a fixed reason instead of the person's, or a
+	// skipped guest's records stay in the missing lists;
+	// no_claim=the erased account rows (the test above).
+	it("a person the admin skips has their records omitted with that reason", async () => {
+		const bundle = JSON.parse(erasedBundleText()) as EasySpeakBundleV1;
+		const stored = await upload(JSON.stringify(bundle));
+		const { resolutions } = await resolveAll(stored.importId);
+		resolutions["es:900025"] = {
+			action: "skip",
+			reason: "Asked to be left out",
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		for (const c of report.counts) expect(c.missing, c.key).toEqual([]);
+		expect(report.reconciled).toBe(true);
+		const mine = "Asked to be left out";
+		expect(omitted(report, "Role assignments", mine)?.count).toBe(1);
+		expect(omitted(report, "Speeches", mine)?.count).toBe(1);
+		expect(
+			omitted(report, "Role assignments", ERASED_ACCOUNT_REASON)?.count,
+		).toBe(2);
+	});
+
+	// protects=a record that is genuinely missing still fails the report, beside
+	// the skipped people's omissions;
+	// fails_when=the omission rows swallow a failed meeting;
+	// no_claim=which counts the failed meeting loses (the test of the failed meeting).
+	it("a failed meeting still makes the report unreconciled and is listed, with erased records omitted", async () => {
+		const stored = await upload(erasedBundleText());
+		const { resolutions } = await resolveAll(stored.importId, NOW_TWO_PAST);
+		lockHook.run = async (tx, call) => {
+			if (call !== 3) return;
+			await (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+				(await import("drizzle-orm")).sql.raw(
+					"ALTER TABLE role_slots ADD CONSTRAINT zz_import_test_fail CHECK (false) NOT VALID",
+				),
+			);
+		};
+		const { report } = await apply(stored.importId, resolutions, NOW_TWO_PAST);
+		lockHook.run = null;
+		expect(report.reconciled).toBe(false);
+		expect(report.counts.find((c) => c.key === "meetings")?.missing).toEqual([
+			"644360",
+		]);
+		expect(
+			omitted(report, "Role assignments", ERASED_ACCOUNT_REASON)?.count,
+		).toBe(2);
 	});
 
 	// ---------------------------------------------------------------------

@@ -1265,6 +1265,8 @@ interface Resolved {
 	guests: Map<string, string>;
 	/** Person keys an earlier import named and a human has since deleted (D2). */
 	deleted: Set<string>;
+	/** Person keys the plan skipped (an erased account, or the admin's choice), with the reason (#1496). */
+	skipped: Map<string, string>;
 	roleDefIds: Map<string, string>;
 	newGuests: number;
 	newRoleDefinitions: string[];
@@ -1393,6 +1395,7 @@ export async function writePeopleAndRoles(
 			members: new Map(),
 			guests: new Map(),
 			deleted: new Set(),
+			skipped: new Map(),
 			roleDefIds: new Map(),
 			newGuests: 0,
 			newRoleDefinitions: [],
@@ -1547,6 +1550,8 @@ export async function writePeopleAndRoles(
 				}
 			} else if (o.status === "deleted") {
 				out.deleted.add(person.key);
+			} else if (o.status === "skipped") {
+				out.skipped.set(person.key, o.reason);
 			} else if (o.status === "guest") {
 				if (o.guestId) {
 					// The saved answer's kind is the stored guest's kind: a changed answer
@@ -1629,6 +1634,18 @@ const ownerOf = (env: MeetingEnv, key: string | null): Owner => {
 	return null;
 };
 
+/** Why the plan skipped this person (an erased account, the admin's choice), or null: none of their records are written (#1496). */
+const skipCause = (
+	env: MeetingEnv,
+	key: string | null,
+	kind: Omission["kind"],
+): { what: string; reason: string } | null => {
+	const reason = key === null ? undefined : env.resolved.skipped.get(key);
+	return reason === undefined
+		? null
+		: { what: SKIPPED_PERSON_WHAT[kind], reason };
+};
+
 /** A person an earlier import named and a human has since deleted (D2): nothing of theirs is written. */
 const isTombstoned = (env: MeetingEnv, key: string | null): boolean =>
 	key !== null && env.resolved.deleted.has(key);
@@ -1651,6 +1668,17 @@ async function stillThere(
 export const importTestHooks: {
 	beforeUpcomingSlotWrite?: (slotId: string) => Promise<void>;
 } = {};
+
+/** The `what` of a record left out because its person was skipped, by kind (#1496): one report line per kind and reason. */
+const SKIPPED_PERSON_WHAT: Record<Omission["kind"], string> = {
+	meeting: "Meetings of skipped people",
+	roleAssignment: "Role assignments",
+	speech: "Speeches",
+	attendance: "Attendance records",
+	award: "Awards",
+	tableTopic: "Table Topics turns",
+	rsvp: "RSVP answers",
+};
 
 type OmitFn = (
 	kind: Omission["kind"],
@@ -1978,6 +2006,14 @@ async function applyMeeting(
 				omit("roleAssignment", ps.sourceId);
 				if (ps.speech) omit("speech", ps.speech.sourceId);
 			}
+			const roleSkipped = skipCause(env, ps.holderKey, "roleAssignment");
+			if (roleSkipped) {
+				omit("roleAssignment", ps.sourceId, roleSkipped);
+				const speechSkipped = skipCause(env, ps.holderKey, "speech");
+				if (ps.speech && speechSkipped) {
+					omit("speech", ps.speech.sourceId, speechSkipped);
+				}
+			}
 			let slot =
 				existingSlots.find((s) => s.id === refTarget && !used.has(s.id)) ??
 				existingSlots.find(
@@ -2076,7 +2112,11 @@ async function applyMeeting(
 				continue;
 			}
 			const owner = ownerOf(env, a.personKey);
-			if (!owner) continue;
+			if (!owner) {
+				const cause = skipCause(env, a.personKey, "attendance");
+				if (cause) omit("attendance", a.sourceId, cause);
+				continue;
+			}
 			const attendanceRef = refOf("attendance", a.sourceId);
 			if (attendanceRef && !keptAttendance.has(attendanceRef)) {
 				omit("attendance", a.sourceId);
@@ -2135,7 +2175,11 @@ async function applyMeeting(
 				continue;
 			}
 			const owner = ownerOf(env, a.personKey);
-			if (!owner) continue;
+			if (!owner) {
+				const cause = skipCause(env, a.personKey, "award");
+				if (cause) omit("award", a.sourceId, cause);
+				continue;
+			}
 			const awardRef = refOf("award", a.sourceId);
 			if (awardRef && !keptAwards.has(awardRef)) {
 				omit("award", a.sourceId);
@@ -2178,7 +2222,11 @@ async function applyMeeting(
 				continue;
 			}
 			const owner = ownerOf(env, t.personKey);
-			if (!owner) continue;
+			if (!owner) {
+				const cause = skipCause(env, t.personKey, "tableTopic");
+				if (cause) omit("tableTopic", t.sourceId, cause);
+				continue;
+			}
 			const topicRef = refOf("table_topic", t.sourceId);
 			if (topicRef) {
 				if (!keptTopics.has(topicRef)) omit("tableTopic", t.sourceId);
@@ -2421,7 +2469,12 @@ async function applyUpcomingMeeting(
 		const blockedFor = (ps: PlanMeeting["slots"][number]) => {
 			if (isTombstoned(env, ps.holderKey)) return DELETED_SINCE_IMPORT;
 			const owner = ownerOf(env, ps.holderKey);
-			if (!owner) return UPCOMING_NO_OWNER;
+			if (!owner) {
+				const skipped = skipCause(env, ps.holderKey, "roleAssignment");
+				return skipped
+					? { what: UPCOMING_NO_OWNER.what, reason: skipped.reason }
+					: UPCOMING_NO_OWNER;
+			}
 			if ("memberId" in owner) {
 				if (!activeIds.has(owner.memberId)) return UPCOMING_INACTIVE_MEMBER;
 				if (answered.get(owner.memberId) === "not_coming") {

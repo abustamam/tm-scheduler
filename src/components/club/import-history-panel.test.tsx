@@ -37,6 +37,12 @@ const listings = vi.hoisted(() => ({
 }));
 vi.mock("#/lib/extension-listings", () => listings);
 
+import {
+	buildAppCss,
+	candidatesIn,
+	renderAndReadTitle,
+} from "#/test/pinned-column-scroll";
+import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 import { ImportHistoryPanel } from "./import-history-panel";
 
 const CLUB = "3f0b5c1e-6a3d-4d1b-9f5e-2c7a8b9d0e1f";
@@ -306,9 +312,85 @@ describe("ImportHistoryPanel (#1051)", () => {
 		);
 		await openImport();
 		expect(await screen.findByText(/differences found/)).toBeTruthy();
+		expect(screen.queryByText(/1472117/)).toBeNull();
+		fireEvent.click(screen.getByText(/Show source ids/));
 		expect(screen.getByText("1472117")).toBeTruthy();
 		expect(screen.getByText(/644360: boom/)).toBeTruthy();
 		expect(screen.getByText(/Mentors: 7/)).toBeTruthy();
+	});
+
+	const reportWith = (over: Record<string, unknown>) => ({
+		reconciled: true,
+		counts: [],
+		meetings: { applied: 1, failed: [] },
+		notImported: [],
+		skippedPeople: [],
+		created: { guests: 0, roleDefinitions: [] },
+		...over,
+	});
+
+	// protects=a long list of source ids stays out of the page until asked for;
+	// fails_when=the ids are rendered inline (collapsed by CSS or not) or the count line drops;
+	// no_claim=the server's id cap.
+	it("keeps a grouped line's 1,000 source ids out of the page until its disclosure is opened", async () => {
+		const ids = Array.from({ length: 1000 }, (_, i) => `src-${i}`);
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(
+				true,
+				reportWith({
+					notImported: [
+						{
+							what: "Role assignments",
+							count: 1204,
+							reason: "Erased Easy-Speak account",
+							sourceIds: ids,
+						},
+					],
+				}),
+			),
+		);
+		await openImport();
+		expect(
+			await screen.findByText(
+				/Role assignments: 1,204\. Erased Easy-Speak account/,
+			),
+		).toBeTruthy();
+		expect(document.body.textContent).not.toContain("src-999");
+		fireEvent.click(screen.getByText(/Show Source ids/));
+		expect(document.body.textContent).toContain("src-999");
+		expect(screen.getByText(/every count matches/)).toBeTruthy();
+		expect(
+			screen.getByText(/No counts with unexplained differences/),
+		).toBeTruthy();
+	});
+
+	// protects=a report stored before #1496 (no sourceIds, no notes) renders;
+	// fails_when=the panel reads a field only a new report has;
+	// no_claim=the report's contents.
+	it("renders a stored report with none of the newer fields", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(
+				true,
+				reportWith({
+					reconciled: false,
+					counts: [
+						{
+							key: "awards",
+							label: "Awards",
+							bundle: 3,
+							gavelup: 2,
+							missing: ["a1"],
+						},
+					],
+					notImported: [
+						{ what: "Mentors", count: 7, reason: "Imported elsewhere." },
+					],
+				}),
+			),
+		);
+		await openImport();
+		expect(await screen.findByText(/Mentors: 7/)).toBeTruthy();
+		expect(screen.getByText(/differences found/)).toBeTruthy();
 	});
 
 	it("refuses a file over the cap by its size, before it reads the file or calls the server", async () => {
@@ -1085,3 +1167,62 @@ describe("the roster notice (#1498)", () => {
 		expect(notice.querySelector("a")).toBeNull();
 	});
 });
+
+// protects=the opened report at 375px: the table stays inside its container and
+// the page does not scroll sideways, with a long unbroken id list open;
+// fails_when=the ids go back inline in a nowrap cell, or the table loses its
+// width bound; no_claim=any width but 375px. The markup is the REAL panel,
+// serialised from jsdom, laid out with the app's compiled Tailwind.
+describe.skipIf(findChrome() === null)(
+	"the import report at 375px",
+	{ timeout: CHROME_TEST_TIMEOUT_MS },
+	() => {
+		it("keeps the report table inside its container with the ids open", async () => {
+			const ids = Array.from({ length: 300 }, (_, i) => `${1472000 + i}`);
+			// One id longer than the screen: only the cell's own wrapping holds it.
+			ids[299] = `x${"y".repeat(120)}`;
+			fns.previewEasySpeakImport.mockResolvedValue(
+				previewFor(true, {
+					reconciled: false,
+					counts: [
+						{
+							key: "speeches",
+							label: "Speeches with an introduction",
+							bundle: 2000,
+							gavelup: 1700,
+							missing: ids,
+						},
+					],
+					meetings: { applied: 1, failed: [] },
+					notImported: [],
+					skippedPeople: [],
+					created: { guests: 0, roleDefinitions: [] },
+				}),
+			);
+			await openImport();
+			fireEvent.click(await screen.findByText(/Show source ids/));
+			await screen.findByText(new RegExp(ids[299] as string));
+			const table = document.querySelector("table");
+			expect(table).not.toBeNull();
+			const html = document.body.innerHTML;
+			const css = await buildAppCss(candidatesIn(html));
+			const script = `<script>
+				const t=document.querySelector("table");
+				const box=t.parentElement.getBoundingClientRect();
+				document.title="doc="+(document.documentElement.scrollWidth>innerWidth)
+					+";over="+(t.getBoundingClientRect().right-box.right);
+			</script>`;
+			const title = renderAndReadTitle({
+				bodyHtml: html,
+				css,
+				script,
+				viewport: { width: 375, height: 812 },
+				tmpPrefix: "import-report-",
+			});
+			expect(title).toMatch(/doc=false/);
+			expect(Number(/over=([-\d.]+)/.exec(title)?.[1])).toBeLessThanOrEqual(
+				0.5,
+			);
+		});
+	},
+);
