@@ -203,6 +203,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_schedule",
 			"list_meetings",
 			"record_guest_book",
+			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",
 			"set_awards",
@@ -617,6 +618,10 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				role: "Toastmaster",
 			}),
 			// Preview only (no planHash): writes nothing.
+			toolsCall("reschedule_meeting", {
+				meetingId: seed.meetingId,
+				lengthMinutes: 45,
+			}),
 			toolsCall("update_meeting_schedule", {
 				clubId: seed.clubId,
 				scheduleText: "Tuesdays 7 PM",

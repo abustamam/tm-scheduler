@@ -26,6 +26,7 @@ import { getMyFeedbackTool } from "./get-my-feedback";
 import { getMyScheduleTool } from "./get-my-schedule";
 import { listMeetingsTool } from "./list-meetings";
 import { recordGuestBookTool } from "./record-guest-book";
+import { rescheduleMeetingTool } from "./reschedule-meeting";
 import { restoreMeetingTool } from "./restore-meeting";
 import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
@@ -53,5 +54,6 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	editAgendaTool,
 	cancelMeetingTool,
 	restoreMeetingTool,
+	rescheduleMeetingTool,
 	updateMeetingScheduleTool,
 ];

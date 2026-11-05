@@ -52,6 +52,7 @@ import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 import { clubLocalParts } from "./list-meetings";
+import { meetingEndsAt } from "./reschedule-meeting";
 
 const inputSchema = { meetingId: z.string().uuid() };
 
@@ -79,7 +80,7 @@ export const getAgendaTool: McpToolDefinition = {
 	config: {
 		title: "Get agenda",
 		description:
-			"One meeting's agenda: theme, Word of the Day, whether it is locked, " +
+			"One meeting's agenda: length in minutes, club-local end time, theme, Word of the Day, whether it is locked, " +
 			"and every role slot with its assignee or `open`. Slot ids from here " +
 			"are what role assignment takes. `runSheet` is the timed agenda: each " +
 			"row's id, kind, label, minutes, start time and flex range, and when " +
@@ -102,6 +103,7 @@ export const getAgendaTool: McpToolDefinition = {
 			.select({
 				id: meetings.id,
 				scheduledAt: meetings.scheduledAt,
+				lengthMinutes: meetings.lengthMinutes,
 				status: meetings.status,
 				theme: meetings.theme,
 				wordOfTheDay: meetings.wordOfTheDay,
@@ -134,6 +136,13 @@ export const getAgendaTool: McpToolDefinition = {
 			date,
 			weekday,
 			time,
+			lengthMinutes: meeting.lengthMinutes,
+			// Club-local ISO with offset: start + length.
+			endsAt: meetingEndsAt(
+				meeting.scheduledAt,
+				meeting.lengthMinutes,
+				club.timezone,
+			),
 			timezone: club.timezone,
 			meetingNumber: await resolveMeetingNumber(meeting.id),
 			status: meeting.status,
