@@ -347,7 +347,6 @@ describe("the agenda slot card's confirm draft", () => {
 				shareUrl={SHARE_URL}
 				meetingDate="Tue 9 Sep"
 				personalNudgeBase={PERSONAL}
-				meetingUrlKey="2026-10-06"
 				meeting={
 					{
 						id: "mtg",

@@ -1,6 +1,7 @@
-// #1401: the meeting route hands <MeetingAgenda> the club's canonical SLUG for
-// its "View agenda" link. The component's own tests inject the prop, so they
-// cannot see the call site; the original bug was a uuid reaching it.
+// #1401: the meeting route hands <MeetingToolbar> the club's canonical SLUG,
+// which builds its "View agenda" link (moved there from <MeetingAgenda>). The
+// component's own tests inject the prop, so they cannot see the call site; the
+// original bug was a uuid reaching it.
 //
 // The route cannot be rendered in jsdom (loader plus server fns), so the
 // opening tag is read from source. Order-independent: the tag is located
@@ -26,7 +27,7 @@ function openingTag(src: string, tag: string): string {
 	return "";
 }
 
-describe("meeting route wiring for MeetingAgenda's slug (#1401)", () => {
+describe("meeting route wiring for MeetingToolbar's slug (#1401)", () => {
 	const src = readSource(ROUTE);
 
 	it("finds the tag whatever the prop order, and ignores `>` inside braces", () => {
@@ -35,13 +36,16 @@ describe("meeting route wiring for MeetingAgenda's slug (#1401)", () => {
 		expect(openingTag("<B x={1} />", "A")).toBe("");
 	});
 
-	it("feeds clubSlug from the route context's slug, not the $clubId param or a uuid", () => {
-		const tag = openingTag(src, "MeetingAgenda");
+	it("feeds clubSlug from the route's $clubId param, never a uuid", () => {
+		const tag = openingTag(src, "MeetingToolbar");
 		expect(tag).not.toBe("");
-		expect(tag).toMatch(/\bclubSlug=\{clubSlug\}/);
-		// `clubSlug` is the slug beforeLoad resolved, destructured from context.
+		expect(tag).toMatch(/\bclubSlug=\{clubId\}/);
+		// `clubId` is the `$clubId` param, destructured from useParams. It is the
+		// canonical slug only because the parent route's `resolveClubOrRedirect`
+		// (src/lib/club-route.ts) redirects a uuid or old slug to it before render;
+		// a route without that redirect cannot trust the param this way.
 		expect(src).toMatch(
-			/const\s*\{[^}]*\bclubSlug\b[^}]*\}\s*=\s*Route\.useRouteContext\(\)/,
+			/const\s*\{[^}]*\bclubId\b[^}]*\}\s*=\s*Route\.useParams\(\)/,
 		);
 	});
 });

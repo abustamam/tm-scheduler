@@ -5,6 +5,7 @@ import {
 	ChevronDown,
 	ClipboardList,
 	FilePenLine,
+	FileText,
 	LayoutTemplate,
 	ListChecks,
 	Loader2,
@@ -150,15 +151,16 @@ export function stripIsPrimary({
 }
 
 /**
- * The meeting view's toolbar (#541 D2): at most four top-level things —
+ * The meeting view's toolbar (#541 D2): at most five top-level things —
  * a phase-driven primary (today → Present, completed → Minutes anchor,
- * upcoming → none), the share chip, the Print & export menu, and one
+ * upcoming → none), the share chip, View agenda (every viewer, every
+ * phase), the Print & export menu, and one
  * "Manage" menu holding the officer extras and Lineup blast (#1307). The
  * meeting-setup entries (Edit meeting, Edit Word of the Day, Change meeting
  * type, Edit agenda) lead that menu for every audience: a person with a narrower
  * edit right (the Toastmaster's Edit meeting, the Grammarian's Edit Word of the
  * Day) gets the menu with their one entry in it, never a button beside it, so
- * the row stays at four. Pure component so the phase × persona matrix is
+ * the row stays at five. Pure component so the phase × persona matrix is
  * testable in jsdom; the route only wires props and owns the mutation handlers
  * and the dialogs.
  */
@@ -283,6 +285,18 @@ export function MeetingToolbar({
 				path={sharePath}
 				className="h-11 gap-2 md:h-8 md:gap-1.5"
 			/>
+			{/* The digital agenda (#1335): every viewer, every phase, cancelled or
+			    not, so it sits outside the phase and canManage gates. Slug and
+			    date key, never a uuid (#1401). */}
+			<Button asChild variant="outline" size="touch">
+				<Link
+					to="/club/$clubId/meeting/$meetingId/agenda"
+					params={{ clubId: clubSlug, meetingId }}
+				>
+					<FileText />
+					View agenda
+				</Link>
+			</Button>
 			<MeetingExportMenu
 				clubSlug={clubSlug}
 				meetingId={meetingId}
