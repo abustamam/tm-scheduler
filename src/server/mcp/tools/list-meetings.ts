@@ -29,7 +29,7 @@ import { deriveMeetingNumber } from "#/lib/meeting-number";
 import { ensureScheduleToppedUp } from "#/server/schedule-topup-logic";
 import { authorizeToken } from "../authz-logic";
 import type { McpToolDefinition } from "../tool";
-import { isoInTimezone } from "./get-my-schedule";
+import { meetingEndsAt } from "./reschedule-meeting";
 
 // `get_agenda` reads `clubLocalParts` through this module. Re-exported rather
 // than repointed because `get-agenda.ts` is outside #776's declared change set;
@@ -128,10 +128,7 @@ export const listMeetingsTool: McpToolDefinition = {
 					weekday,
 					lengthMinutes: m.lengthMinutes,
 					// Club-local ISO with offset: start + length.
-					endsAt: isoInTimezone(
-						new Date(m.scheduledAt.getTime() + m.lengthMinutes * 60_000),
-						club.timezone,
-					),
+					endsAt: meetingEndsAt(m.scheduledAt, m.lengthMinutes, club.timezone),
 					time,
 					// Numbers freeze when a meeting is completed (#358); until then
 					// the displayed one is derived and can still move, so say which

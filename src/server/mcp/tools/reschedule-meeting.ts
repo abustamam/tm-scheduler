@@ -13,8 +13,8 @@
  *
  * The web dialog's own writer: it writes only the columns that changed, logs one
  * `meeting_edit` entry with before and after, and refuses a cancelled meeting.
- * Going through it keeps the audit entry and everything keyed on `scheduledAt`
- * (the reminder poller) right. An omitted field keeps its stored value, so
+ * Going through it keeps the audit entry and everything else keyed on
+ * `scheduledAt` right. An omitted field keeps its stored value, so
  * sending only `startTime` keeps the club-local DATE, including across a DST
  * change.
  *
@@ -36,8 +36,9 @@
 import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings } from "#/db/schema";
+import { clubs, meetings } from "#/db/schema";
 import { agendaRunSheet } from "#/lib/agenda-run-sheet";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
 import { clubLocalParts, localDate } from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import { planHash } from "#/lib/mcp-plan";
@@ -46,6 +47,7 @@ import { applyMeetingMetaPatch } from "#/server/meetings-logic";
 import { isUniqueViolation } from "#/server/pg-errors";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
+import type { DbOrTx } from "../member-meeting";
 import type { McpToolDefinition } from "../tool";
 import { isoInTimezone } from "./get-my-schedule";
 
@@ -121,11 +123,28 @@ type Planned = {
 	newLength: number | null;
 };
 
-const addMinutes = (d: Date, m: number) => new Date(d.getTime() + m * 60_000);
+/** Club-local ISO (with offset) of a meeting's end: start + length. The one
+ *  place the end is computed; `get_agenda` and `list_meetings` use it too. */
+export function meetingEndsAt(
+	scheduledAt: Date,
+	lengthMinutes: number,
+	timezone: string,
+): string {
+	return isoInTimezone(
+		new Date(scheduledAt.getTime() + lengthMinutes * 60_000),
+		timezone,
+	);
+}
+
+// The seam (`applyMeetingMetaPatch`) and its datetime-local input are
+// minute-precision; so is every instant this tool shows (`isoInTimezone` drops
+// seconds). Compare at the same granularity, or a stored start with seconds would
+// read as "changed" to this tool and the plan could not say what moved.
+const toMinute = (d: Date) => Math.floor(d.getTime() / 60_000);
 
 /** Build the plan from what is stored now. `lock` takes the meeting row. */
 async function buildPlan(
-	conn: typeof db,
+	conn: DbOrTx,
 	meetingId: string,
 	timezone: string,
 	args: Args,
@@ -171,7 +190,9 @@ async function buildPlan(
 		}
 	}
 	const newLength = args.lengthMinutes ?? meeting.lengthMinutes;
-	const startChanged = newStart.getTime() !== meeting.scheduledAt.getTime();
+	const startChanged = toMinute(newStart) !== toMinute(meeting.scheduledAt);
+	// Same minute: keep the stored instant (and its seconds); nothing is written.
+	if (!startChanged) newStart = meeting.scheduledAt;
 	const lengthChanged = newLength !== meeting.lengthMinutes;
 
 	if (startChanged) {
@@ -218,11 +239,8 @@ async function buildPlan(
 			to: isoInTimezone(newStart, timezone),
 		},
 		end: {
-			from: isoInTimezone(
-				addMinutes(meeting.scheduledAt, meeting.lengthMinutes),
-				timezone,
-			),
-			to: isoInTimezone(addMinutes(newStart, newLength), timezone),
+			from: meetingEndsAt(meeting.scheduledAt, meeting.lengthMinutes, timezone),
+			to: meetingEndsAt(newStart, newLength, timezone),
 		},
 		date: { from: stored.date, to: newDate },
 		lengthMinutes: { from: meeting.lengthMinutes, to: newLength },
@@ -348,10 +366,26 @@ export const rescheduleMeetingTool: McpToolDefinition = {
 		let outcome: Outcome;
 		try {
 			outcome = await db.transaction(async (tx): Promise<Outcome> => {
+				// The timezone and archived state are read INSIDE the transaction,
+				// under a share lock on the club row, and the plan is built with
+				// THAT zone: `applyMeetingMetaPatch` reloads the club and converts
+				// with whatever it finds, so a zone read at authorization could
+				// write a different instant than the one approved. A changed zone
+				// changes the plan, hence the hash: PLAN_STALE, not a surprise.
+				const [fresh] = await tx
+					.select({ timezone: clubs.timezone, archivedAt: clubs.archivedAt })
+					.from(clubs)
+					.where(eq(clubs.id, club.clubId))
+					.limit(1)
+					.for("share");
+				if (!fresh) throw new McpError("NOT_FOUND", "Club not found.");
+				if (isClubArchived(fresh)) {
+					throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+				}
 				const planned = await buildPlan(
-					tx as unknown as typeof db,
+					tx,
 					meetingId,
-					club.timezone,
+					fresh.timezone,
 					args,
 					now,
 					true,

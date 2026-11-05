@@ -51,8 +51,8 @@ import {
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
-import { isoInTimezone } from "./get-my-schedule";
 import { clubLocalParts } from "./list-meetings";
+import { meetingEndsAt } from "./reschedule-meeting";
 
 const inputSchema = { meetingId: z.string().uuid() };
 
@@ -138,10 +138,9 @@ export const getAgendaTool: McpToolDefinition = {
 			time,
 			lengthMinutes: meeting.lengthMinutes,
 			// Club-local ISO with offset: start + length.
-			endsAt: isoInTimezone(
-				new Date(
-					meeting.scheduledAt.getTime() + meeting.lengthMinutes * 60_000,
-				),
+			endsAt: meetingEndsAt(
+				meeting.scheduledAt,
+				meeting.lengthMinutes,
 				club.timezone,
 			),
 			timezone: club.timezone,
