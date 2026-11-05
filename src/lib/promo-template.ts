@@ -37,6 +37,8 @@ export const PROMO_PLACEHOLDERS = [
 	"wordOfTheDay",
 	"meetingNumber",
 	"meetingLink",
+	"rsvpLink",
+	"agendaLink",
 	"clubLink",
 	"note",
 ] as const;
@@ -55,7 +57,7 @@ export function isPromoPlaceholder(name: string): name is PromoPlaceholder {
 }
 
 /** The parts of the template a channel may include or leave out. The headline
- *  and the meeting link are always included. */
+ *  and the RSVP and agenda links are always included. */
 export const PROMO_PARTS = ["intro", "whyJoin", "callToAction"] as const;
 export type PromoPart = (typeof PROMO_PARTS)[number];
 
@@ -71,8 +73,9 @@ export const PROMO_LIMITS = {
 	/** A meeting's promo note — one short line. */
 	note: 300,
 	/** Roughly what reads as one message in a group chat. A soft limit: the
-	 *  sheet warns past it, it never truncates. */
-	whatsappSoft: 600,
+	 *  sheet warns past it, it never truncates. 700, not 600, since the
+	 *  message ends on two links (RSVP and agenda) rather than one. */
+	whatsappSoft: 700,
 } as const;
 
 const partsSchema = z.object({
@@ -263,7 +266,7 @@ export function promoTime(scheduledAt: Date | string, timeZone: string) {
 }
 
 /**
- * Every placeholder's value for this club and meeting. `origin` makes the two
+ * Every placeholder's value for this club and meeting. `origin` makes the
  * links absolute (`window.location.origin` in the browser); pass `""` where it
  * is not known yet and the lines holding a link drop until it is.
  */
@@ -273,6 +276,7 @@ export function promoValues(
 	origin: string,
 ): PromoValues {
 	const tz = club.timezone;
+	const meetingPath = promoMeetingPath(club.slug, meeting.urlKey);
 	return {
 		club: club.name,
 		date: promoDate(meeting.scheduledAt, tz),
@@ -283,9 +287,9 @@ export function promoValues(
 		wordOfTheDay: meeting.wordOfTheDay?.trim() ?? "",
 		meetingNumber:
 			meeting.meetingNumber != null ? String(meeting.meetingNumber) : "",
-		meetingLink: origin
-			? `${origin}${promoMeetingPath(club.slug, meeting.urlKey)}`
-			: "",
+		meetingLink: origin ? `${origin}${meetingPath}` : "",
+		rsvpLink: origin ? `${origin}${meetingPath}/rsvp` : "",
+		agendaLink: origin ? `${origin}${meetingPath}/agenda` : "",
 		clubLink: origin ? `${origin}/club/${club.slug}` : "",
 		note: meeting.promoNote?.trim() ?? "",
 	};
@@ -296,8 +300,7 @@ export const WHY_JOIN_HEADING = "Why come?";
 
 /**
  * The WhatsApp message: WhatsApp's own `*bold*` headline, the parts this
- * channel is set to include, and the meeting link ALONE on the last line so
- * the chat renders its preview card.
+ * channel is set to include, and the RSVP and agenda links last.
  */
 export function buildWhatsAppBlast(
 	template: PromoTemplate,
@@ -319,13 +322,13 @@ export function buildWhatsAppBlast(
 	if (parts.callToAction) {
 		blocks.push(renderPromoText(template.callToAction, values));
 	}
-	// Appended only when the officer's template has not already placed it —
-	// twice in one message reads as a mistake.
-	const placed = placesMeetingLink(
+	const footer = linkFooter(
 		[template.headline, ...channelTexts(template, parts)],
 		values,
 	);
-	if (values.meetingLink && !placed) blocks.push(values.meetingLink);
+	if (footer.length > 0) {
+		blocks.push(footer.map((l) => `${l.label}: ${l.url}`).join("\n"));
+	}
 	return blocks.filter(Boolean).join("\n\n");
 }
 
@@ -341,16 +344,33 @@ function channelTexts(
 	];
 }
 
+/** One line of the links appended to a WhatsApp message or an email. */
+interface PromoFooterLink {
+	label: "RSVP" | "Agenda";
+	url: string;
+}
+
 /**
- * Whether one of `texts` puts `{meetingLink}` into the output. A line holding
- * it is dropped only when the link is empty, so with a link present the
- * placeholder always renders.
+ * The RSVP and agenda links appended after the template, minus any the
+ * officer's `texts` already place — twice in one message reads as a mistake.
+ * A template that places `{meetingLink}` has chosen its own link (that page
+ * links to both), so nothing is appended at all.
+ *
+ * A line holding a link placeholder is dropped only when the link is empty, so
+ * with a link present the placeholder always renders.
  */
-function placesMeetingLink(texts: string[], values: PromoValues): boolean {
-	return (
-		Boolean(values.meetingLink) &&
-		texts.some((t) => t.includes("{meetingLink}"))
-	);
+function linkFooter(texts: string[], values: PromoValues): PromoFooterLink[] {
+	const places = (name: PromoPlaceholder) =>
+		Boolean(values[name]) && texts.some((t) => t.includes(`{${name}}`));
+	if (places("meetingLink")) return [];
+	const out: PromoFooterLink[] = [];
+	if (values.rsvpLink && !places("rsvpLink")) {
+		out.push({ label: "RSVP", url: values.rsvpLink });
+	}
+	if (values.agendaLink && !places("agendaLink")) {
+		out.push({ label: "Agenda", url: values.agendaLink });
+	}
+	return out;
 }
 
 export interface EmailBlast {
@@ -360,7 +380,8 @@ export interface EmailBlast {
 }
 
 /** The email draft: the headline is the subject, and the body ends on the
- *  meeting link. Plain text for the mail app, simple HTML for pasting. */
+ *  RSVP and agenda links. Plain text for the mail app, simple HTML for
+ *  pasting. */
 export function buildEmailBlast(
 	template: PromoTemplate,
 	values: PromoValues,
@@ -375,11 +396,9 @@ export function buildEmailBlast(
 	const cta = parts.callToAction
 		? renderPromoText(template.callToAction, values)
 		: "";
-	// Not appended when the body already carries it (the subject does not
-	// count: a link in a subject line is not one a reader can open).
-	const link = placesMeetingLink(channelTexts(template, parts), values)
-		? ""
-		: values.meetingLink;
+	// The subject does not count as placing a link: a link in a subject line
+	// is not one a reader can open.
+	const footer = linkFooter(channelTexts(template, parts), values);
 
 	const text = [
 		intro,
@@ -387,7 +406,7 @@ export function buildEmailBlast(
 			? [WHY_JOIN_HEADING, ...bullets.map((b) => `- ${b}`)].join("\n")
 			: "",
 		cta,
-		link ? `Details and agenda: ${link}` : "",
+		footer.map((l) => `${l.label}: ${l.url}`).join("\n"),
 	]
 		.filter(Boolean)
 		.join("\n\n");
@@ -402,8 +421,13 @@ export function buildEmailBlast(
 					.join("")}</ul>`
 			: "",
 		cta ? para(cta) : "",
-		link
-			? `<p>Details and agenda: <a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p>`
+		footer.length > 0
+			? `<p>${footer
+					.map(
+						(l) =>
+							`${l.label}: <a href="${escapeHtml(l.url)}">${escapeHtml(l.url)}</a>`,
+					)
+					.join("<br>")}</p>`
 			: "",
 	]
 		.filter(Boolean)
