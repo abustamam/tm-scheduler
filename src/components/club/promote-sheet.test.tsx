@@ -75,7 +75,9 @@ describe("the WhatsApp draft", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		const copied = writeText.mock.calls[0]?.[0] as string;
 		expect(copied.startsWith("*You're invited: Downtown Speakers")).toBe(true);
-		expect(copied.endsWith(LINK)).toBe(true);
+		expect(copied.endsWith(`RSVP: ${LINK}/rsvp\nAgenda: ${LINK}/agenda`)).toBe(
+			true,
+		);
 	});
 
 	it("a one-time edit is what gets copied", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FileRoutesByFullPath } from "#/routeTree.gen";
 import {
 	buildEmailBlast,
 	buildFlyerContent,
@@ -14,7 +15,9 @@ import {
 	type PromoTemplate,
 	type PublicFlyerMeeting,
 	projectFlyerMeeting,
+	promoAgendaPath,
 	promoMailtoHref,
+	promoRsvpPath,
 	promoTemplateSchema,
 	promoValues,
 	renderPromoText,
@@ -46,6 +49,9 @@ const MEETING: PromoMeeting = {
 
 const ORIGIN = "https://gavelup.app";
 const LINK = "https://gavelup.app/club/downtown/meeting/2026-10-01";
+const RSVP = `${LINK}/rsvp`;
+const AGENDA = `${LINK}/agenda`;
+const FOOTER = `RSVP: ${RSVP}\nAgenda: ${AGENDA}`;
 
 /** A video-call link as a careless caller might hand it over. */
 const ROOM = "https://zoom.example/j/931-secret-room";
@@ -65,10 +71,23 @@ describe("promoValues", () => {
 		expect(v.date).toBe("Friday, October 2");
 	});
 
-	it("links to the public meeting page and the club page, absolute", () => {
+	it("links to the meeting, RSVP, agenda and club pages, absolute", () => {
 		const v = values();
 		expect(v.meetingLink).toBe(LINK);
+		expect(v.rsvpLink).toBe(RSVP);
+		expect(v.agendaLink).toBe(AGENDA);
 		expect(v.clubLink).toBe("https://gavelup.app/club/downtown");
+	});
+
+	it("builds the RSVP and agenda paths of routes that exist", () => {
+		// Typed against the generated route tree: renaming either route fails
+		// typecheck here instead of silently breaking every blast's links.
+		const rsvp: keyof FileRoutesByFullPath =
+			"/club/$clubId/meeting/$meetingId/rsvp";
+		const agenda: keyof FileRoutesByFullPath =
+			"/club/$clubId/meeting/$meetingId/agenda";
+		expect(promoRsvpPath("$clubId", "$meetingId")).toBe(rsvp);
+		expect(promoAgendaPath("$clubId", "$meetingId")).toBe(agenda);
 	});
 
 	it("says the meeting is online without carrying a link", () => {
@@ -214,10 +233,18 @@ describe("buildWhatsAppBlast", () => {
 		);
 	});
 
-	it("puts the meeting link alone on the last line", () => {
-		const lines = msg.split("\n");
-		expect(lines[lines.length - 1]).toBe(LINK);
-		expect(lines[lines.length - 2]).toBe("");
+	it("ends on the RSVP and agenda links, not the bare meeting page", () => {
+		expect(msg.endsWith(`\n\n${FOOTER}`)).toBe(true);
+		expect(msg.split("\n")).not.toContain(LINK);
+	});
+
+	it("appends no link lines when the origin is not known yet", () => {
+		const noOrigin = buildWhatsAppBlast(
+			DEFAULT_PROMO_TEMPLATE,
+			promoValues(CLUB, MEETING, ""),
+		);
+		expect(noOrigin).not.toContain("RSVP:");
+		expect(noOrigin).not.toContain("Agenda:");
 	});
 
 	it("carries the why-join bullets, the call to action and the note", () => {
@@ -231,6 +258,13 @@ describe("buildWhatsAppBlast", () => {
 		expect(msg.length).toBeLessThanOrEqual(PROMO_LIMITS.whatsappSoft);
 	});
 
+	it("the default fills most of the soft limit, so the limit is not slack", () => {
+		// 662 characters with every optional line filled. Pins that the limit
+		// was raised for the second link, not loosened past what the default
+		// needs: a cut of the limit below the default fails the test above.
+		expect(msg.length).toBeGreaterThan(600);
+	});
+
 	it("honours the channel toggles", () => {
 		const t: PromoTemplate = {
 			...DEFAULT_PROMO_TEMPLATE,
@@ -240,7 +274,7 @@ describe("buildWhatsAppBlast", () => {
 			},
 		};
 		expect(buildWhatsAppBlast(t, values())).toBe(
-			`*You're invited: Downtown Speakers, Thursday, October 1*\n\n${LINK}`,
+			`*You're invited: Downtown Speakers, Thursday, October 1*\n\n${FOOTER}`,
 		);
 	});
 });
@@ -254,9 +288,11 @@ describe("buildEmailBlast", () => {
 		);
 	});
 
-	it("ends the body on the meeting link", () => {
-		expect(email.text.endsWith(`Details and agenda: ${LINK}`)).toBe(true);
-		expect(email.html).toContain(`<a href="${LINK}">`);
+	it("ends the body on the RSVP and agenda links", () => {
+		expect(email.text.endsWith(FOOTER)).toBe(true);
+		expect(email.html).toContain(
+			`<p>RSVP: <a href="${RSVP}">${RSVP}</a><br>Agenda: <a href="${AGENDA}">${AGENDA}</a></p>`,
+		);
 	});
 
 	it("escapes what an officer typed in the HTML body", () => {
@@ -355,6 +391,11 @@ describe("a template that places {meetingLink} itself", () => {
 		expect(e.html).not.toContain("Details and agenda");
 	});
 
+	it("appends no RSVP or agenda lines beside it", () => {
+		expect(buildWhatsAppBlast(t, values())).not.toContain("RSVP: ");
+		expect(buildEmailBlast(t, values()).html).not.toContain("Agenda: <a");
+	});
+
 	it("a toggled-OFF part does not count as placing it", () => {
 		const off: PromoTemplate = {
 			...t,
@@ -363,14 +404,76 @@ describe("a template that places {meetingLink} itself", () => {
 				whatsapp: { ...t.channels.whatsapp, callToAction: false },
 			},
 		};
-		expect(count(buildWhatsAppBlast(off, values()))).toBe(1);
-		expect(buildWhatsAppBlast(off, values()).endsWith(LINK)).toBe(true);
+		const msg = buildWhatsAppBlast(off, values());
+		expect(msg.endsWith(FOOTER)).toBe(true);
+		// Each link once: the footer's, and no bare meeting-page line.
+		expect(msg.split(RSVP).length - 1).toBe(1);
+		expect(msg.split(AGENDA).length - 1).toBe(1);
+		expect(msg.split("\n")).not.toContain(LINK);
 	});
 
-	it("the default template does not place it, so it is appended (control)", () => {
-		expect(count(buildWhatsAppBlast(DEFAULT_PROMO_TEMPLATE, values()))).toBe(1);
-		expect(buildEmailBlast(DEFAULT_PROMO_TEMPLATE, values()).text).toContain(
-			`Details and agenda: ${LINK}`,
+	it("the default template does not place it, so the footer is appended (control)", () => {
+		expect(buildWhatsAppBlast(DEFAULT_PROMO_TEMPLATE, values())).toContain(
+			FOOTER,
 		);
+		expect(buildEmailBlast(DEFAULT_PROMO_TEMPLATE, values()).text).toContain(
+			FOOTER,
+		);
+	});
+});
+
+describe("a template that places {rsvpLink} or {agendaLink} itself", () => {
+	const count = (s: string, link: string) => s.split(link).length - 1;
+
+	it("each link appears once, and only the unplaced one is appended", () => {
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			callToAction: "Save your seat: {rsvpLink}",
+		};
+		const msg = buildWhatsAppBlast(t, values());
+		const email = buildEmailBlast(t, values());
+		expect(msg).toContain(`Save your seat: ${RSVP}`);
+		expect(msg).not.toContain("RSVP: ");
+		expect(msg.endsWith(`Agenda: ${AGENDA}`)).toBe(true);
+		expect(count(email.text, RSVP)).toBe(1);
+		expect(email.text.endsWith(`Agenda: ${AGENDA}`)).toBe(true);
+		expect(email.html).toContain(
+			`<p>Agenda: <a href="${AGENDA}">${AGENDA}</a></p>`,
+		);
+		expect(email.html).not.toContain("<br>Agenda");
+		expect(count(email.html, `RSVP: <a`)).toBe(0);
+	});
+
+	it("placing only {agendaLink} appends only the RSVP line", () => {
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			callToAction: "See the agenda: {agendaLink}",
+		};
+		const msg = buildWhatsAppBlast(t, values());
+		const email = buildEmailBlast(t, values());
+		expect(count(msg, AGENDA)).toBe(1);
+		expect(msg).not.toContain("Agenda: ");
+		expect(msg.endsWith(`RSVP: ${RSVP}`)).toBe(true);
+		expect(email.text.endsWith(`RSVP: ${RSVP}`)).toBe(true);
+		expect(email.html).toContain(`<p>RSVP: <a href="${RSVP}">${RSVP}</a></p>`);
+	});
+
+	it("placing both appends nothing", () => {
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			callToAction: "RSVP {rsvpLink} · agenda {agendaLink}",
+		};
+		const msg = buildWhatsAppBlast(t, values());
+		expect(count(msg, RSVP)).toBe(1);
+		expect(count(msg, AGENDA)).toBe(1);
+		expect(msg.endsWith("agenda " + AGENDA)).toBe(true);
+	});
+
+	it("a placed link in the email SUBJECT still appends it to the body", () => {
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			headline: "RSVP {rsvpLink}",
+		};
+		expect(buildEmailBlast(t, values()).text.endsWith(FOOTER)).toBe(true);
 	});
 });
