@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FileRoutesByFullPath } from "#/routeTree.gen";
 import {
 	buildEmailBlast,
 	buildFlyerContent,
@@ -14,7 +15,9 @@ import {
 	type PromoTemplate,
 	type PublicFlyerMeeting,
 	projectFlyerMeeting,
+	promoAgendaPath,
 	promoMailtoHref,
+	promoRsvpPath,
 	promoTemplateSchema,
 	promoValues,
 	renderPromoText,
@@ -68,12 +71,23 @@ describe("promoValues", () => {
 		expect(v.date).toBe("Friday, October 2");
 	});
 
-	it("links to the public meeting page and the club page, absolute", () => {
+	it("links to the meeting, RSVP, agenda and club pages, absolute", () => {
 		const v = values();
 		expect(v.meetingLink).toBe(LINK);
 		expect(v.rsvpLink).toBe(RSVP);
 		expect(v.agendaLink).toBe(AGENDA);
 		expect(v.clubLink).toBe("https://gavelup.app/club/downtown");
+	});
+
+	it("builds the RSVP and agenda paths of routes that exist", () => {
+		// Typed against the generated route tree: renaming either route fails
+		// typecheck here instead of silently breaking every blast's links.
+		const rsvp: keyof FileRoutesByFullPath =
+			"/club/$clubId/meeting/$meetingId/rsvp";
+		const agenda: keyof FileRoutesByFullPath =
+			"/club/$clubId/meeting/$meetingId/agenda";
+		expect(promoRsvpPath("$clubId", "$meetingId")).toBe(rsvp);
+		expect(promoAgendaPath("$clubId", "$meetingId")).toBe(agenda);
 	});
 
 	it("says the meeting is online without carrying a link", () => {
@@ -244,6 +258,13 @@ describe("buildWhatsAppBlast", () => {
 		expect(msg.length).toBeLessThanOrEqual(PROMO_LIMITS.whatsappSoft);
 	});
 
+	it("the default fills most of the soft limit, so the limit is not slack", () => {
+		// 662 characters with every optional line filled. Pins that the limit
+		// was raised for the second link, not loosened past what the default
+		// needs: a cut of the limit below the default fails the test above.
+		expect(msg.length).toBeGreaterThan(600);
+	});
+
 	it("honours the channel toggles", () => {
 		const t: PromoTemplate = {
 			...DEFAULT_PROMO_TEMPLATE,
@@ -269,8 +290,9 @@ describe("buildEmailBlast", () => {
 
 	it("ends the body on the RSVP and agenda links", () => {
 		expect(email.text.endsWith(FOOTER)).toBe(true);
-		expect(email.html).toContain(`RSVP: <a href="${RSVP}">`);
-		expect(email.html).toContain(`Agenda: <a href="${AGENDA}">`);
+		expect(email.html).toContain(
+			`<p>RSVP: <a href="${RSVP}">${RSVP}</a><br>Agenda: <a href="${AGENDA}">${AGENDA}</a></p>`,
+		);
 	});
 
 	it("escapes what an officer typed in the HTML body", () => {
@@ -382,7 +404,12 @@ describe("a template that places {meetingLink} itself", () => {
 				whatsapp: { ...t.channels.whatsapp, callToAction: false },
 			},
 		};
-		expect(buildWhatsAppBlast(off, values()).endsWith(FOOTER)).toBe(true);
+		const msg = buildWhatsAppBlast(off, values());
+		expect(msg.endsWith(FOOTER)).toBe(true);
+		// Each link once: the footer's, and no bare meeting-page line.
+		expect(msg.split(RSVP).length - 1).toBe(1);
+		expect(msg.split(AGENDA).length - 1).toBe(1);
+		expect(msg.split("\n")).not.toContain(LINK);
 	});
 
 	it("the default template does not place it, so the footer is appended (control)", () => {
@@ -410,6 +437,25 @@ describe("a template that places {rsvpLink} or {agendaLink} itself", () => {
 		expect(msg.endsWith(`Agenda: ${AGENDA}`)).toBe(true);
 		expect(count(email.text, RSVP)).toBe(1);
 		expect(email.text.endsWith(`Agenda: ${AGENDA}`)).toBe(true);
+		expect(email.html).toContain(
+			`<p>Agenda: <a href="${AGENDA}">${AGENDA}</a></p>`,
+		);
+		expect(email.html).not.toContain("<br>Agenda");
+		expect(count(email.html, `RSVP: <a`)).toBe(0);
+	});
+
+	it("placing only {agendaLink} appends only the RSVP line", () => {
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			callToAction: "See the agenda: {agendaLink}",
+		};
+		const msg = buildWhatsAppBlast(t, values());
+		const email = buildEmailBlast(t, values());
+		expect(count(msg, AGENDA)).toBe(1);
+		expect(msg).not.toContain("Agenda: ");
+		expect(msg.endsWith(`RSVP: ${RSVP}`)).toBe(true);
+		expect(email.text.endsWith(`RSVP: ${RSVP}`)).toBe(true);
+		expect(email.html).toContain(`<p>RSVP: <a href="${RSVP}">${RSVP}</a></p>`);
 	});
 
 	it("placing both appends nothing", () => {

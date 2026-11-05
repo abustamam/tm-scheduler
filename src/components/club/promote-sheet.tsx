@@ -10,7 +10,7 @@
 // they never change the template, and they reset when another meeting is
 // picked. The #731 source guard sweeps this file raw, so
 // it never names the meeting's video-call field; the drafts carry the public
-// meeting page, which is where that link lives.
+// RSVP and agenda pages, which link to the meeting page where that link lives.
 
 import { Link } from "@tanstack/react-router";
 import { Copy, Loader2, Mail, Printer, Share2 } from "lucide-react";
