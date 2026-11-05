@@ -40,7 +40,10 @@ describe("meeting route wiring for MeetingToolbar's slug (#1401)", () => {
 		const tag = openingTag(src, "MeetingToolbar");
 		expect(tag).not.toBe("");
 		expect(tag).toMatch(/\bclubSlug=\{clubId\}/);
-		// `clubId` is the `$clubId` slug param, destructured from useParams.
+		// `clubId` is the `$clubId` param, destructured from useParams. It is the
+		// canonical slug only because the parent route's `resolveClubOrRedirect`
+		// (src/lib/club-route.ts) redirects a uuid or old slug to it before render;
+		// a route without that redirect cannot trust the param this way.
 		expect(src).toMatch(
 			/const\s*\{[^}]*\bclubId\b[^}]*\}\s*=\s*Route\.useParams\(\)/,
 		);

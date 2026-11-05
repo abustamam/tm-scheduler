@@ -153,7 +153,8 @@ export function stripIsPrimary({
 /**
  * The meeting view's toolbar (#541 D2): at most five top-level things —
  * a phase-driven primary (today → Present, completed → Minutes anchor,
- * upcoming → none), the share chip, View agenda (every viewer, every phase), the Print & export menu, and one
+ * upcoming → none), the share chip, View agenda (every viewer, every
+ * phase), the Print & export menu, and one
  * "Manage" menu holding the officer extras and Lineup blast (#1307). The
  * meeting-setup entries (Edit meeting, Edit Word of the Day, Change meeting
  * type, Edit agenda) lead that menu for every audience: a person with a narrower
