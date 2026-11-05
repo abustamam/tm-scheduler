@@ -3,7 +3,7 @@
  * so the schedule top-up does not recreate a meeting on a date an officer moved
  * one away from.
  */
-import { and, eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clubMeetingRecurrence, meetings } from "#/db/schema";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
@@ -81,8 +81,7 @@ describe.skipIf(!hasTestDb)("meetings.slot_date (#1521)", () => {
 			.insert(clubMeetingRecurrence)
 			.values({ clubId: club.clubId, ...RULE, location: "Main Hall" });
 		await testDb.execute(
-			(await import("drizzle-orm"))
-				.sql`update clubs set timezone = ${TZ} where id = ${club.clubId}`,
+			sql`update clubs set timezone = ${TZ} where id = ${club.clubId}`,
 		);
 	});
 	afterEach(async () => {
@@ -116,10 +115,16 @@ describe.skipIf(!hasTestDb)("meetings.slot_date (#1521)", () => {
 		await testDb
 			.update(meetings)
 			.set({ status: "cancelled" })
-			.where(and(eq(meetings.id, rows[1].id)));
+			.where(eq(meetings.id, rows[1].id));
+		const before = (await all()).length;
 		await ensureScheduleToppedUp(club.clubId, NOW);
 
-		const dates = (await all()).map((m) => local(m.scheduledAt));
+		const after = await all();
+		const dates = after.map((m) => local(m.scheduledAt));
+		// Not vacuous: the second top-up created something (the next free
+		// occurrence), and it is not the vacated Jun 4.
+		expect(after.length).toBeGreaterThan(before);
+		expect(dates).toContain("2026-07-02");
 		expect(dates.filter((d) => d === "2026-06-04")).toHaveLength(0);
 		expect(dates).toHaveLength(new Set(dates).size);
 		expect(dates.filter((d) => d === "2026-06-06")).toHaveLength(1);
@@ -129,7 +134,7 @@ describe.skipIf(!hasTestDb)("meetings.slot_date (#1521)", () => {
 		const { meetingId } = await applyCreateMeeting({
 			clubId: club.clubId,
 			scheduledAt: "2026-07-02T23:30", // near midnight UTC-5 is still Jul 2 local
-		} as Parameters<typeof applyCreateMeeting>[0]);
+		});
 		const [m] = await testDb
 			.select()
 			.from(meetings)

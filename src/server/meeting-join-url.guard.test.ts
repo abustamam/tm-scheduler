@@ -105,6 +105,19 @@ describe("the allowlist", () => {
 		expect(out).toEqual({ id: "m", theme: "Hope", location: null });
 		expect("joinUrl" in out).toBe(false);
 	});
+
+	// protects=#1521: the creation date is the officers', not a stranger's.
+	// fails_when=slotDate moves back into NON_MEMBER_MEETING_FIELDS.
+	it("withholds slotDate from a non-member", () => {
+		const out = nonMemberMeetingRow({
+			id: "m",
+			slotDate: "2026-06-04",
+			joinUrl: JOIN_URL,
+		});
+		expect(out).toEqual({ id: "m" });
+		expect(Object.hasOwn(out, "slotDate")).toBe(false);
+		expect(WITHHELD_MEETING_FIELDS).toContain("slotDate");
+	});
 });
 
 describe.skipIf(!hasTestDb)("the meeting detail payload", () => {

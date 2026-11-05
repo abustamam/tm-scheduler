@@ -574,8 +574,9 @@ async function loadMeetingDetail(
 	// saying one exists, so the page can offer "RSVP to get the video link"; the
 	// URL itself rides the RSVP confirmation. An allowlist, not a delete: see
 	// `#/lib/public-meeting-payload`.
-	const meetingOut: Omit<typeof meeting, "joinUrl"> & {
+	const meetingOut: Omit<typeof meeting, "joinUrl" | "slotDate"> & {
 		joinUrl?: string | null;
+		slotDate?: string | null;
 	} = viewerIsMember ? meeting : nonMemberMeetingRow(meeting);
 
 	return {

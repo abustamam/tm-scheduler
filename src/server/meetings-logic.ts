@@ -46,7 +46,7 @@ import {
 	loadRosterWithContact,
 	type RosterContact,
 } from "./meeting-contacts-logic";
-import { generateMeetingSlots } from "./meeting-create-logic";
+import { generateMeetingSlots, localSlotDate } from "./meeting-create-logic";
 import {
 	freezeMeetingNumber,
 	resolveMeetingNumber,
@@ -342,7 +342,7 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 				scheduledAt,
 				// #1521: the date this meeting was created on; a reschedule never
 				// touches it, so the top-up keeps the vacated date reserved.
-				slotDate: utcToZonedWallTime(scheduledAt, club.timezone).slice(0, 10),
+				slotDate: await localSlotDate(tx, club.id, scheduledAt, club.timezone),
 				lengthMinutes: club.defaultMeetingMinutes,
 				location: input.location?.trim() || null,
 				// Server-authoritative (#731): the client runs the same function for
