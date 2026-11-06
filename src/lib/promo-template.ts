@@ -22,6 +22,18 @@
 // opens in their own app (#899's rule, `nudge.ts`), so a blast needs no mailing
 // list, consent store or unsubscribe flow.
 //
+// ## Editor aliases, and the one round-trip exception
+//
+// The editor shows `{Word of the Day}`; the database holds `{wordOfTheDay}`
+// (`toEditorText` / `toStoredText`). `toStoredText(toEditorText(s)) === s` for
+// every stored `s` EXCEPT this: in editor text an exact label IS its variable,
+// so a stored literal that exactly equals a label (`{Date}`, `{Time}`,
+// `{Theme}`, `{Note}`, `{Location}`) or is a whitespace-padded key or label
+// (`{ date }`) is read as that variable and stored as its key on the next save.
+// The old editor flagged such literals as "Not a placeholder", so the reading
+// repairs the officer's evident intent. Every other stored token (`{DATE}`,
+// `{Date!}`, `{nope}`, canonical keys) round-trips unchanged.
+//
 // ## The video-call link is opt-in, and never on the flyer
 //
 // `{online}` renders a sentence pointing at the public meeting page, which is
@@ -295,6 +307,13 @@ export function normalizePromoName(name: string): string {
  * A stored `{DATE}` or `{Date!}` renders as a literal today; it is left exactly
  * as typed, so the editor shows it as an unknown token with a "Did you mean
  * Date?" fix and the officer decides. Idempotent: a label is never a key.
+ *
+ * Round trip: `toStoredText(toEditorText(s)) === s` except that an exact label
+ * (`{Date}`) or a whitespace-padded key or label (`{ date }`) is stored as its
+ * key (`{date}`), because in editor text an exact label IS its variable. The
+ * old editor flagged those literals as "Not a placeholder", so this repairs the
+ * officer's evident intent. `{DATE}`, `{Date!}`, `{nope}` and canonical keys
+ * round-trip unchanged.
  */
 export function toEditorText(stored: string): string {
 	return stored.replace(TOKEN, (whole, inner: string) =>
@@ -302,6 +321,12 @@ export function toEditorText(stored: string): string {
 	);
 }
 
+/**
+ * The variable an editor token names, or null. An exact key or label matches
+ * for any token, single-word included, so a stored literal `{Date}` or a padded
+ * `{ date }` is read as that variable (the documented round-trip exception, see
+ * the module header); `{DATE}` and `{Date!}` match neither and stay literal.
+ */
 function matchTypedVariable(inner: string): PromoVariable | null {
 	if (isPromoPlaceholder(inner)) return promoVariable(inner);
 	const byLabel = PROMO_VARIABLES.find((v) => v.label === inner);
@@ -329,6 +354,10 @@ function matchTypedVariable(inner: string): PromoVariable | null {
  * variable's label or key case-, space- and punctuation-insensitively; a
  * single-word token must be the exact key or label (see `toEditorText` for why
  * `{DATE}` is not converted). Idempotent.
+ *
+ * Because an exact label is its variable here, a stored literal `{Date}` or
+ * `{ date }` is stored as `{date}` on the next save: the one exception to
+ * `toStoredText(toEditorText(s)) === s` (see the module header).
  */
 export function toStoredText(editor: string): string {
 	return editor.replace(TOKEN, (whole, inner: string) => {

@@ -4,9 +4,37 @@ import {
 	useParams,
 	useRouter,
 } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { StatusScreen } from "#/components/status-screen";
 import { Button } from "#/components/ui/button";
+
+// What each engine throws when `fetch` cannot reach the server at all.
+const FETCH_FAILURE_MESSAGES = [
+	/^failed to fetch/i, // Chrome, Edge
+	/^load failed/i, // Safari
+	/^networkerror when attempting to fetch resource/i, // Firefox
+];
+
+/**
+ * True when `error` is the browser failing to reach the network rather than the
+ * server failing to answer: the device reports itself offline, or `fetch`
+ * rejected with the engine's TypeError. On the server (no `navigator`) it is
+ * never a network failure. Pure so it can be unit-tested.
+ */
+export function isNetworkFailure(
+	error: unknown,
+	onLine: boolean | undefined = typeof navigator === "undefined"
+		? undefined
+		: navigator.onLine,
+): boolean {
+	if (onLine === false) return true;
+	return (
+		error instanceof TypeError &&
+		FETCH_FAILURE_MESSAGES.some((re) => re.test(error.message))
+	);
+}
+
+const noopSubscribe = () => () => {};
 
 /**
  * The router-level error page (`defaultErrorComponent` in `src/router.tsx`),
@@ -42,6 +70,21 @@ export function RouteError({ error }: ErrorComponentProps) {
 		console.error("[route-error]", error);
 	}, [error]);
 
+	// A snapshot, not an effect: the first client render already knows, and the
+	// server snapshot (`false`) matches the HTML the server rendered.
+	const offline = useSyncExternalStore(
+		noopSubscribe,
+		() => isNetworkFailure(error),
+		() => false,
+	);
+
+	function reload() {
+		// A full document load: the service worker answers it from the copy it
+		// cached when the page was last opened online. `invalidate` cannot, since
+		// it refetches the same server function, which the worker never caches.
+		window.location.reload();
+	}
+
 	function retry() {
 		// `invalidate` alone, deliberately. It re-runs the loaders (a loader error
 		// needs that), and the router keys every match's error boundary on
@@ -54,12 +97,12 @@ export function RouteError({ error }: ErrorComponentProps) {
 
 	return (
 		<StatusScreen
-			title="Something went wrong"
+			title={offline ? "You're offline" : "Something went wrong"}
 			className="min-h-[70svh]"
 			actions={
 				<>
-					<Button type="button" onClick={retry}>
-						Try again
+					<Button type="button" onClick={offline ? reload : retry}>
+						{offline ? "Reload page" : "Try again"}
 					</Button>
 					{/* Beside "Go home", never instead of it: when the club layout or the
 					    club page itself is what failed, this link is the page that just
@@ -83,8 +126,9 @@ export function RouteError({ error }: ErrorComponentProps) {
 				</>
 			}
 		>
-			This page couldn't load. Try again, and if it keeps happening, let a club
-			officer know.
+			{offline
+				? "This page needs a connection. Pages you opened while online, like a meeting and its Present view, reload from this device."
+				: "This page couldn't load. Try again, and if it keeps happening, let a club officer know."}
 		</StatusScreen>
 	);
 }
