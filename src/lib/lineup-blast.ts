@@ -27,6 +27,7 @@ import {
 	promoDate,
 	promoMeetingPath,
 	promoTime,
+	rsvpPageUrl,
 } from "#/lib/promo-template";
 
 /**
@@ -172,12 +173,9 @@ export function lineupMeetingUrl(data: LineupBlastData): string {
 	return `${data.origin}${promoMeetingPath(data.club.slug, data.meeting.urlKey)}`;
 }
 
-/** The one-tap RSVP page under a meeting page's URL or path (#1442). The ONE
- *  place `/rsvp` is appended: the blast, the officer nudge and the page's own
- *  sign-in redirect all build it here. */
-export function rsvpPageUrl(meetingUrlOrPath: string): string {
-	return `${meetingUrlOrPath}/rsvp`;
-}
+// `rsvpPageUrl` is defined in `promo-template.ts` (#1535) and re-exported so the
+// two route callers and the wiring guard keep importing it from here.
+export { rsvpPageUrl };
 
 export function lineupRsvpUrl(data: LineupBlastData): string {
 	return rsvpPageUrl(lineupMeetingUrl(data));

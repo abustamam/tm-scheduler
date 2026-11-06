@@ -2,14 +2,21 @@ import { describe, expect, it } from "vitest";
 import type { FileRoutesByFullPath } from "#/routeTree.gen";
 import {
 	buildEmailBlast,
+	buildEmailBlocks,
+	buildFlyerBlocks,
 	buildFlyerContent,
 	buildWhatsAppBlast,
+	buildWhatsAppBlocks,
 	DEFAULT_PROMO_TEMPLATE,
+	examplePromoMeeting,
 	FLYER_MEETING_FIELDS,
 	MAILTO_MAX_LENGTH,
+	normalizePromoName,
 	ONLINE_TEXT,
 	PROMO_LIMITS,
 	PROMO_PLACEHOLDERS,
+	PROMO_VARIABLE_GROUPS,
+	PROMO_VARIABLES,
 	type PromoClub,
 	type PromoMeeting,
 	type PromoTemplate,
@@ -20,10 +27,16 @@ import {
 	promoRsvpPath,
 	promoTemplateSchema,
 	promoValues,
+	renderPromoLines,
 	renderPromoText,
 	resolvePromoTemplate,
 	resolvePromoTemplateState,
+	rsvpPageUrl,
+	suggestPlaceholder,
+	templatesEqual,
 	templateWarnings,
+	toEditorText,
+	toStoredText,
 	unknownPlaceholders,
 } from "./promo-template";
 
@@ -475,5 +488,564 @@ describe("a template that places {rsvpLink} or {agendaLink} itself", () => {
 			headline: "RSVP {rsvpLink}",
 		};
 		expect(buildEmailBlast(t, values()).text.endsWith(FOOTER)).toBe(true);
+	});
+});
+
+// ─── #1535: variable metadata, aliases, line rendering, suggestions, blocks ───
+//
+// Each test states its card: protects=<observable>; fails_when=<wrong result>;
+// no_claim=<what green does not prove>.
+
+const TEMPLATE_FIXTURES = [
+	"{club} meets {date} at {time}",
+	"Theme: {theme}\nWhere: {location}",
+	"Hello\n{note}\nBye",
+	"A\n\n\nTheme: {theme}\n\n\nB",
+	"Typo {thme} stays; {Word of Day} too",
+	"{wordOfTheDay} and {meetingNumber}\n   \n{online}",
+	"line one  \r\nline two {clubLink}",
+	...Object.values({
+		headline: DEFAULT_PROMO_TEMPLATE.headline,
+		intro: DEFAULT_PROMO_TEMPLATE.intro,
+		cta: DEFAULT_PROMO_TEMPLATE.callToAction,
+	}),
+	...DEFAULT_PROMO_TEMPLATE.whyJoin,
+];
+
+describe("PROMO_VARIABLES", () => {
+	it("derives the 13 placeholders in table order, groups contiguous in menu order", () => {
+		// protects=PROMO_PLACEHOLDERS is exactly the variable keys, in order;
+		// fails_when=a key is added to one list and not the other, or reordered;
+		// no_claim=that every caller's switch over keys handles the new key.
+		expect(PROMO_PLACEHOLDERS).toEqual(PROMO_VARIABLES.map((v) => v.key));
+		expect(PROMO_PLACEHOLDERS).toHaveLength(13);
+		const groupOrder = PROMO_VARIABLE_GROUPS.map((g) => g.id);
+		const seen = PROMO_VARIABLES.map((v) => v.group).filter(
+			(g, i, all) => all.indexOf(g) === i,
+		);
+		expect(seen).toEqual(groupOrder);
+		const lastIndex = (g: string) =>
+			PROMO_VARIABLES.map((v) => v.group).lastIndexOf(g as never);
+		const firstIndex = (g: string) =>
+			PROMO_VARIABLES.map((v) => v.group).indexOf(g as never);
+		for (const g of groupOrder) {
+			expect(lastIndex(g) - firstIndex(g) + 1).toBe(
+				PROMO_VARIABLES.filter((v) => v.group === g).length,
+			);
+		}
+	});
+
+	it("gives every row a non-empty label and description, and unique keys", () => {
+		// protects=the menu never shows a blank row; fails_when=a label or
+		// description is "" or a key repeats; no_claim=the copy reads well.
+		for (const v of PROMO_VARIABLES) {
+			expect(v.label.trim()).not.toBe("");
+			expect(v.description.trim()).not.toBe("");
+		}
+		expect(new Set(PROMO_VARIABLES.map((v) => v.key)).size).toBe(
+			PROMO_VARIABLES.length,
+		);
+	});
+
+	it("has unique normalised labels, none equal to another variable's normalised key", () => {
+		// protects=an alias always names exactly one variable; fails_when=two
+		// labels, or one label and another variable's key, normalise alike;
+		// no_claim=that a label is unambiguous to a human.
+		const labels = PROMO_VARIABLES.map((v) => normalizePromoName(v.label));
+		expect(new Set(labels).size).toBe(labels.length);
+		for (const v of PROMO_VARIABLES) {
+			for (const other of PROMO_VARIABLES) {
+				if (other.key === v.key) continue;
+				expect(normalizePromoName(v.label)).not.toBe(
+					normalizePromoName(other.key),
+				);
+			}
+			// A label is never a canonical key, so toEditorText is idempotent.
+			expect(PROMO_PLACEHOLDERS).not.toContain(v.label);
+		}
+	});
+});
+
+describe("rsvpPageUrl", () => {
+	it("is what promoRsvpPath is built on", () => {
+		// protects=one definition of "/rsvp"; fails_when=promoRsvpPath appends it
+		// itself again and the two drift; no_claim=the route exists (typed above).
+		expect(rsvpPageUrl("/club/a/meeting/b")).toBe("/club/a/meeting/b/rsvp");
+		expect(promoRsvpPath("a", "b")).toBe(rsvpPageUrl("/club/a/meeting/b"));
+	});
+});
+
+describe("toEditorText / toStoredText", () => {
+	it("shows a stored key as its label and stores the label back", () => {
+		// protects=the editor's friendly face; fails_when=the label is wrong or the
+		// stored form is not restored; no_claim=pills render at the right width.
+		expect(toEditorText("{wordOfTheDay} at {time}")).toBe(
+			"{Word of the Day} at {Time}",
+		);
+		expect(toStoredText("{Word of the Day} at {Time}")).toBe(
+			"{wordOfTheDay} at {time}",
+		);
+	});
+
+	it("stores every spelling of a variable as its key", () => {
+		// protects=pasted and hand-typed tokens normalise; fails_when=any spelling
+		// is left as typed; no_claim=single-word look-alikes like {DATE} (below).
+		for (const t of [
+			"{WORD OF THE DAY}",
+			"{ word of the day }",
+			"{Word of the Day}",
+			"{wordOfTheDay}",
+			"{ Word  of the Day! }",
+		]) {
+			expect(toStoredText(t)).toBe("{wordOfTheDay}");
+		}
+	});
+
+	it("leaves a near miss as typed, in both directions", () => {
+		// protects=a typo is never silently rewritten; fails_when={Word of Day} is
+		// converted; no_claim=that it is flagged (unknownPlaceholders does that).
+		expect(toStoredText("{Word of Day}")).toBe("{Word of Day}");
+		expect(toEditorText("{Word of Day}")).toBe("{Word of Day}");
+		expect(toEditorText("{nope} {Date}")).toBe("{nope} {Date}");
+	});
+
+	it("converts canonical keys only when loading: {DATE} and {Date!} stay literal", () => {
+		// protects=a stored template never changes meaning on load; fails_when=
+		// toEditorText rewrites a token the renderer treats as a literal;
+		// no_claim=the editor's Fix prompt (second issue).
+		expect(toEditorText("{DATE}")).toBe("{DATE}");
+		expect(toEditorText("{Date!}")).toBe("{Date!}");
+		const stored = "On {DATE}, {Date!} and {date}";
+		expect(toEditorText(stored)).toBe("On {DATE}, {Date!} and {Date}");
+	});
+
+	it("round-trips every default-template field", () => {
+		// protects=the editor never starts dirty on a default template;
+		// fails_when=a field changes through the pair; no_claim=non-canonical
+		// multi-word look-alikes: {word of the day} stored is read as typed text
+		// by toEditorText and stored as {wordOfTheDay} (reported in the PR).
+		const fields = [
+			DEFAULT_PROMO_TEMPLATE.headline,
+			DEFAULT_PROMO_TEMPLATE.intro,
+			DEFAULT_PROMO_TEMPLATE.callToAction,
+			...DEFAULT_PROMO_TEMPLATE.whyJoin,
+			"On {DATE}, {Date!}, {nope} and {date}",
+		];
+		for (const f of fields) {
+			expect(toStoredText(toEditorText(f))).toBe(f);
+		}
+	});
+
+	it("is idempotent in both directions", () => {
+		// protects=applying a conversion twice is harmless; fails_when=a second
+		// pass changes the text; no_claim=nothing about unbalanced braces.
+		for (const f of TEMPLATE_FIXTURES) {
+			expect(toEditorText(toEditorText(f))).toBe(toEditorText(f));
+			expect(toStoredText(toStoredText(f))).toBe(toStoredText(f));
+		}
+	});
+});
+
+describe("the token regex", () => {
+	it("flags a token with spaces as unknown, and renders it as typed", () => {
+		// protects=a spaced typo is no longer invisible; fails_when={Word of Day}
+		// is missing from the warnings or is blanked in the output;
+		// no_claim=anything about nested braces.
+		expect(unknownPlaceholders("{Word of Day}")).toEqual(["Word of Day"]);
+		expect(renderPromoText("x {Word of Day} y", values())).toBe(
+			"x {Word of Day} y",
+		);
+		expect(unknownPlaceholders("{ date }")).toEqual([" date "]);
+	});
+});
+
+describe("renderPromoLines", () => {
+	it("returns one entry per source line, blanks included, nothing trimmed away", () => {
+		// protects=the preview can lay out every line; fails_when=a blank line or a
+		// dropped line is missing; no_claim=CRLF handling beyond splitting.
+		const lines = renderPromoLines("A\n\nB\r\nC", values());
+		expect(lines.map((l) => l.source)).toEqual(["A", "", "B", "C"]);
+		expect(lines.every((l) => l.droppedBy === null)).toBe(true);
+	});
+
+	it("keeps a filled line with its rendered text", () => {
+		// protects=kept lines carry rendered text and no reason; fails_when=text is
+		// the source or droppedBy is set; no_claim=trailing whitespace on the source.
+		expect(renderPromoLines("When: {date}  ", values())).toEqual([
+			{
+				source: "When: {date}  ",
+				text: "When: Thursday, October 1",
+				droppedBy: null,
+			},
+		]);
+	});
+
+	it("drops a line holding an empty placeholder and names the FIRST empty one", () => {
+		// protects=the preview's "hidden: no Theme set" reason; fails_when=the
+		// wrong placeholder is named or the text survives; no_claim=that the
+		// reason reads well in the UI.
+		const v = values({ theme: null, wordOfTheDay: null });
+		expect(renderPromoLines("{wordOfTheDay} / {theme}", v)).toEqual([
+			{
+				source: "{wordOfTheDay} / {theme}",
+				text: "",
+				droppedBy: "wordOfTheDay",
+			},
+		]);
+		expect(renderPromoLines("Theme: {theme}", v)[0].droppedBy).toBe("theme");
+	});
+
+	it("does not drop a line for an unknown placeholder", () => {
+		// protects=a typo stays visible; fails_when=an unknown token drops its line;
+		// no_claim=nothing about the warning.
+		expect(renderPromoLines("{thme}", values())[0]).toMatchObject({
+			text: "{thme}",
+			droppedBy: null,
+		});
+	});
+
+	it("renderPromoText is the collapse-and-trim of the kept lines, for every fixture", () => {
+		// protects=the string renderer and the line renderer cannot disagree;
+		// fails_when=either changes alone; no_claim=that the collapse rule is the
+		// right one (the older tests pin that).
+		const empties = [
+			values(),
+			values({ theme: null, promoNote: null, location: null }),
+			promoValues(CLUB, MEETING, ""),
+		];
+		for (const t of TEMPLATE_FIXTURES) {
+			for (const v of empties) {
+				const kept: string[] = [];
+				for (const l of renderPromoLines(t, v)) {
+					if (l.droppedBy !== null) continue;
+					if (
+						!l.text.trim() &&
+						kept.length > 0 &&
+						!kept[kept.length - 1].trim()
+					)
+						continue;
+					kept.push(l.text);
+				}
+				expect(renderPromoText(t, v)).toBe(kept.join("\n").trim());
+			}
+		}
+	});
+});
+
+describe("suggestPlaceholder", () => {
+	it("repairs a typo by edit distance (insert, delete, substitute, transposition)", () => {
+		// protects=the "Did you mean" Fix for one-slip typos, each OSA operation;
+		// fails_when=any operation costs more than 1 or the threshold is off;
+		// no_claim=ranking among equally-close candidates beyond table order.
+		expect(suggestPlaceholder("date")?.key).toBe("date"); // identity
+		expect(suggestPlaceholder("daet")?.key).toBe("date"); // transposition
+		expect(suggestPlaceholder("tiem")?.key).toBe("time");
+		expect(suggestPlaceholder("locaton")?.key).toBe("location"); // insert
+		expect(suggestPlaceholder("datee")?.key).toBe("date"); // delete
+		expect(suggestPlaceholder("themx")?.key).toBe("theme"); // substitute
+	});
+
+	it("allows two edits for a longer name, one for a short one", () => {
+		// protects=the threshold; fails_when=it is raised or lowered by one;
+		// no_claim=that it never over-suggests for 5-character names.
+		expect(suggestPlaceholder("locatn")?.key).toBe("location"); // 2 edits
+		expect(suggestPlaceholder("dxxe")).toBeNull(); // 2 edits, 4 chars
+		expect(suggestPlaceholder("themme")?.key).toBe("theme");
+		expect(suggestPlaceholder("thmmmx")).toBeNull(); // 3 edits
+	});
+
+	it("matches a label's words as a subsequence", () => {
+		// protects=dropped small words are forgiven; fails_when=Word of Day misses
+		// Word of the Day; no_claim=that every shortened label is found.
+		expect(suggestPlaceholder("wordOfDay")?.label).toBe("Word of the Day");
+		expect(suggestPlaceholder("Word of Day")?.label).toBe("Word of the Day");
+	});
+
+	it("matches by containment when exactly one variable fits", () => {
+		// protects=rsvp finds RSVP link, clubname finds Club name;
+		// fails_when=containment is dropped; no_claim=the 4-character floor.
+		expect(suggestPlaceholder("rsvp")?.label).toBe("RSVP link");
+		expect(suggestPlaceholder("clubname")?.label).toBe("Club name");
+	});
+
+	it("says nothing when the name is ambiguous or unrelated", () => {
+		// protects=no wrong guess offered; fails_when=meeting or link picks one of
+		// several; no_claim=that a null always means "no variable was meant".
+		expect(suggestPlaceholder("meeting")).toBeNull();
+		expect(suggestPlaceholder("link")).toBeNull();
+		expect(suggestPlaceholder("xyz")).toBeNull();
+		expect(suggestPlaceholder("")).toBeNull();
+		expect(suggestPlaceholder("!!")).toBeNull();
+	});
+
+	it("prefers the closer variable, then table order", () => {
+		// protects=a stable pick; fails_when=a farther match beats an exact one;
+		// no_claim=nothing about equal-distance ties between non-adjacent rows.
+		expect(suggestPlaceholder("Date")?.key).toBe("date");
+		expect(suggestPlaceholder("meetinglink")?.key).toBe("meetingLink");
+	});
+});
+
+describe("examplePromoMeeting", () => {
+	const example = (now: string, tz: string) => {
+		const m = examplePromoMeeting(new Date(now), tz);
+		return { m, v: promoValues({ ...CLUB, timezone: tz }, m, ORIGIN) };
+	};
+
+	it("fills every value", () => {
+		// protects=the preview and the menu have something to show for every
+		// variable; fails_when=any value is empty; no_claim=origin "" (links drop).
+		const { v } = example("2026-11-06T15:00:00Z", "America/Chicago");
+		for (const key of PROMO_PLACEHOLDERS) expect(v[key]).not.toBe("");
+	});
+
+	it("is 14 calendar days out at 7:00 PM local, across a spring-forward", () => {
+		// protects=calendar arithmetic in the zone; fails_when=+14*24h lands at
+		// 6:00 or 8:00 PM; no_claim=zones with a transition at 19:00.
+		const { v } = example("2026-03-01T12:00:00Z", "America/Los_Angeles");
+		expect(v.date).toBe("Sunday, March 15");
+		expect(v.time).toBe("7:00 PM");
+	});
+
+	it("uses the zone's date for 'today', not UTC's, and survives fall-back", () => {
+		// protects=a late-evening club still counts its own day; fails_when=UTC's
+		// date is used; no_claim=a southern-hemisphere zone.
+		// 2026-03-02T03:00Z is still Mar 1 19:00 in Los Angeles.
+		const west = example("2026-03-02T03:00:00Z", "America/Los_Angeles");
+		expect(west.v.date).toBe("Sunday, March 15");
+		expect(west.v.time).toBe("7:00 PM");
+		const chicago = example("2026-10-28T12:00:00Z", "America/Chicago");
+		expect(chicago.v.date).toBe("Wednesday, November 11");
+		expect(chicago.v.time).toBe("7:00 PM");
+	});
+
+	it("carries the fixed example content", () => {
+		// protects=the copy the maintainer specified; fails_when=a field drifts;
+		// no_claim=the copy reads well.
+		const { m } = example("2026-11-06T15:00:00Z", "America/Chicago");
+		expect(m).toMatchObject({
+			id: "example",
+			urlKey: "example",
+			online: true,
+			theme: "Gratitude",
+			wordOfTheDay: "Serendipity",
+			meetingNumber: 412,
+			location: "Community Hall, Room 2",
+			promoNote: "Open house: bring a friend",
+		});
+	});
+});
+
+const kinds = (b: { kind: string }[]) => b.map((x) => x.kind);
+
+describe("channel blocks", () => {
+	it("WhatsApp: headline, intro, whyJoin, callToAction, footer, each with its kind", () => {
+		// protects=the block order the preview renders; fails_when=a block is
+		// missing or out of order; no_claim=the string form (older tests).
+		expect(
+			kinds(buildWhatsAppBlocks(DEFAULT_PROMO_TEMPLATE, values())),
+		).toEqual(["headline", "intro", "whyJoin", "callToAction", "footer"]);
+	});
+
+	it("honours the channel's part toggles and omits an empty footer", () => {
+		// protects=toggled-off parts are absent; fails_when=a disabled part shows;
+		// no_claim=toggle UI.
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			channels: {
+				...DEFAULT_PROMO_TEMPLATE.channels,
+				email: { intro: false, whyJoin: false, callToAction: true },
+			},
+		};
+		expect(kinds(buildEmailBlocks(t, values()).blocks)).toEqual([
+			"callToAction",
+			"footer",
+		]);
+		expect(
+			kinds(buildWhatsAppBlocks(t, promoValues(CLUB, MEETING, ""))),
+		).not.toContain("footer");
+	});
+
+	it("keeps a dropped line in its block with the placeholder that dropped it", () => {
+		// protects=the preview can strike a dropped line in every channel;
+		// fails_when=a dropped line disappears from a block; no_claim=the strike.
+		const v = values({ theme: null });
+		const hasDropped = (blocks: { lines: { droppedBy: unknown }[] }[]) =>
+			blocks.some((b) => b.lines.some((l) => l.droppedBy === "theme"));
+		expect(hasDropped(buildWhatsAppBlocks(DEFAULT_PROMO_TEMPLATE, v))).toBe(
+			true,
+		);
+		expect(hasDropped(buildEmailBlocks(DEFAULT_PROMO_TEMPLATE, v).blocks)).toBe(
+			true,
+		);
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			channels: {
+				...DEFAULT_PROMO_TEMPLATE.channels,
+				flyer: { intro: true, whyJoin: true, callToAction: true },
+			},
+		};
+		expect(hasDropped(buildFlyerBlocks(t, v))).toBe(true);
+	});
+
+	it("carries a dropped headline's reason in the email subject lines", () => {
+		// protects=the subject is explainable; fails_when=subject loses droppedBy;
+		// no_claim=a blank subject is refused anywhere.
+		const t: PromoTemplate = { ...DEFAULT_PROMO_TEMPLATE, headline: "{theme}" };
+		const { subject } = buildEmailBlocks(t, values({ theme: null }));
+		expect(subject).toEqual([
+			{ source: "{theme}", text: "", droppedBy: "theme" },
+		]);
+		expect(buildEmailBlast(t, values({ theme: null })).subject).toBe("");
+	});
+
+	it("puts the heading and bullet markers in the whyJoin block, only when a bullet is kept", () => {
+		// protects=WHY_JOIN_HEADING and markers owned once; fails_when=a heading
+		// stays over an all-dropped list; no_claim=email's "- " markers (below).
+		const wa = buildWhatsAppBlocks(DEFAULT_PROMO_TEMPLATE, values()).find(
+			(b) => b.kind === "whyJoin",
+		);
+		expect(wa?.lines[0].text).toBe("Why come?");
+		expect(wa?.lines[1].text).toBe(`• ${DEFAULT_PROMO_TEMPLATE.whyJoin[0]}`);
+		const em = buildEmailBlocks(DEFAULT_PROMO_TEMPLATE, values()).blocks.find(
+			(b) => b.kind === "whyJoin",
+		);
+		expect(em?.lines[1].text).toBe(`- ${DEFAULT_PROMO_TEMPLATE.whyJoin[0]}`);
+		const dropped: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			whyJoin: ["{theme}", "{theme} again"],
+		};
+		const none = buildWhatsAppBlocks(dropped, values({ theme: null })).find(
+			(b) => b.kind === "whyJoin",
+		);
+		expect(none?.lines.map((l) => l.droppedBy)).toEqual(["theme", "theme"]);
+		expect(none?.lines.map((l) => l.text).join("")).toBe("");
+	});
+
+	it("derives the three blast strings from the blocks", () => {
+		// protects=one owner for the channel rules; fails_when=the strings differ
+		// from the blocks' kept lines; no_claim=the exact copy (older tests).
+		const t = DEFAULT_PROMO_TEMPLATE;
+		const keptText = (
+			blocks: { lines: { droppedBy: unknown; text: string }[] }[],
+		) =>
+			blocks
+				.flatMap((b) => b.lines)
+				.filter((l) => l.droppedBy === null)
+				.map((l) => l.text)
+				.filter(Boolean)
+				.join("\n");
+		const wa = buildWhatsAppBlast(t, values()).replace(/\n\n/g, "\n");
+		expect(wa.replace(/\*/g, "")).toBe(
+			keptText(buildWhatsAppBlocks(t, values())),
+		);
+		const email = buildEmailBlast(t, values());
+		expect(email.text.replace(/\n\n/g, "\n")).toBe(
+			keptText(buildEmailBlocks(t, values()).blocks),
+		);
+		const flyer = buildFlyerContent(t, values());
+		expect(flyer.headline).toBe(buildFlyerBlocks(t, values())[0].lines[0].text);
+		expect(flyer.whyJoin).toEqual(t.whyJoin);
+	});
+
+	it("flyer blocks are headline plus the toggled fields, with no footer", () => {
+		// protects=the flyer's four fields per its toggles; fails_when=a footer or
+		// a disabled intro appears; no_claim=the QR code.
+		expect(kinds(buildFlyerBlocks(DEFAULT_PROMO_TEMPLATE, values()))).toEqual([
+			"headline",
+			"whyJoin",
+			"callToAction",
+		]);
+	});
+});
+
+describe("link footer, decided from the KEPT lines", () => {
+	const dropsItsLink: PromoTemplate = {
+		...DEFAULT_PROMO_TEMPLATE,
+		intro: "Theme: {theme}, details at {meetingLink}",
+	};
+
+	it("a link placed only on a line that drops still gets the footer, in WhatsApp and email", () => {
+		// protects=the message never goes out with no link (the #1531 hole);
+		// fails_when=the footer is suppressed by an unrendered {meetingLink};
+		// no_claim=the officer is told the line dropped (the preview does that).
+		const v = values({ theme: null });
+		const msg = buildWhatsAppBlast(dropsItsLink, v);
+		expect(msg).not.toContain("details at");
+		expect(msg.endsWith(FOOTER)).toBe(true);
+		const email = buildEmailBlast(dropsItsLink, v);
+		expect(email.text.endsWith(FOOTER)).toBe(true);
+		expect(email.html).toContain(`RSVP: <a href="${RSVP}">`);
+	});
+
+	it("the same line, kept, still suppresses the whole footer", () => {
+		// protects=#1531's rule where it was right; fails_when=a kept
+		// {meetingLink} still gets a footer; no_claim=anything about {clubLink}.
+		const blocks = buildWhatsAppBlocks(dropsItsLink, values());
+		expect(kinds(blocks)).not.toContain("footer");
+		expect(buildWhatsAppBlast(dropsItsLink, values())).toContain(
+			`details at ${LINK}`,
+		);
+		expect(buildEmailBlast(dropsItsLink, values()).text).not.toContain("RSVP:");
+	});
+
+	it("a kept RSVP link is not mistaken for the meeting link it starts with", () => {
+		// protects=placing {rsvpLink} still appends the agenda; fails_when=the
+		// meeting URL's prefix match hides the footer; no_claim=query strings.
+		const t: PromoTemplate = {
+			...DEFAULT_PROMO_TEMPLATE,
+			callToAction: "RSVP here: {rsvpLink}",
+		};
+		const footer = buildWhatsAppBlocks(t, values()).find(
+			(b) => b.kind === "footer",
+		);
+		expect(footer?.lines.map((l) => l.text)).toEqual([`Agenda: ${AGENDA}`]);
+	});
+});
+
+describe("templatesEqual", () => {
+	it("is true for a copy with its keys in another order", () => {
+		// protects=Discard changes hides when nothing changed; fails_when=key order
+		// matters; no_claim=deep equality of unknown extra keys (zod strips them).
+		const reordered: PromoTemplate = {
+			channels: {
+				flyer: { callToAction: true, whyJoin: true, intro: false },
+				email: { callToAction: true, whyJoin: true, intro: true },
+				whatsapp: { callToAction: true, whyJoin: true, intro: true },
+			},
+			callToAction: DEFAULT_PROMO_TEMPLATE.callToAction,
+			whyJoin: [...DEFAULT_PROMO_TEMPLATE.whyJoin],
+			intro: DEFAULT_PROMO_TEMPLATE.intro,
+			headline: DEFAULT_PROMO_TEMPLATE.headline,
+		};
+		expect(JSON.stringify(reordered)).not.toBe(
+			JSON.stringify(DEFAULT_PROMO_TEMPLATE),
+		);
+		expect(templatesEqual(reordered, DEFAULT_PROMO_TEMPLATE)).toBe(true);
+	});
+
+	it("is false when any one field, bullet or toggle differs", () => {
+		// protects=every field is compared; fails_when=a field is skipped;
+		// no_claim=trimmed or case-folded comparison (it is exact).
+		const base = DEFAULT_PROMO_TEMPLATE;
+		const variants: PromoTemplate[] = [
+			{ ...base, headline: `${base.headline}!` },
+			{ ...base, intro: `${base.intro}!` },
+			{ ...base, callToAction: `${base.callToAction}!` },
+			{ ...base, whyJoin: base.whyJoin.slice(1) },
+			{ ...base, whyJoin: [`${base.whyJoin[0]}!`, ...base.whyJoin.slice(1)] },
+		];
+		for (const c of ["whatsapp", "email", "flyer"] as const) {
+			for (const p of ["intro", "whyJoin", "callToAction"] as const) {
+				variants.push({
+					...base,
+					channels: {
+						...base.channels,
+						[c]: { ...base.channels[c], [p]: !base.channels[c][p] },
+					},
+				});
+			}
+		}
+		for (const v of variants) expect(templatesEqual(v, base)).toBe(false);
 	});
 });
