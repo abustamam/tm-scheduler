@@ -215,7 +215,27 @@ describe("the join link is on the authed meeting page (vacuity floor)", () => {
 	});
 });
 
+/** `joinLink` (the Promote variable, #1534) is not a spelling `JOIN_URL`
+ *  catches, so the three flyer files are swept for it by name. */
+const JOIN_LINK = /joinLink/;
+const FLYER_SOURCES = [
+	"src/routes/club.$clubId_.meeting.$meetingId.flyer.tsx",
+	"src/components/agenda/meeting-flyer.tsx",
+	"src/components/agenda/flyer-square-export.tsx",
+] as const;
+
 describe("the join link is on NO in-room artifact (#731)", () => {
+	for (const rel of FLYER_SOURCES) {
+		it(`${rel} never reads the Promote joinLink variable (#1534)`, () => {
+			const src = raw(rel);
+			expect(src.length).toBeGreaterThan(200);
+			expect(
+				JOIN_LINK.test(src),
+				`${rel} mentions joinLink. The flyer is public and shared onward; the Promote variable is admin-only and is blanked by buildFlyerBlocks.`,
+			).toBe(false);
+		});
+	}
+
 	for (const rel of WITHHELD) {
 		it(`${rel} contains no join-link reference`, () => {
 			const src = raw(rel);

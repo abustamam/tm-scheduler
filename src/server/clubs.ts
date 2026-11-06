@@ -16,9 +16,11 @@ import {
 	applyClubAgendaSettingsUpdate,
 	applyClubProfileUpdate,
 	applyClubTimezoneUpdate,
+	applyDefaultJoinUrlToUpcoming,
 	clubAgendaSettingsSchema,
 	clubProfileSchema,
 	clubTimezoneSchema,
+	countUpcomingMeetingsWithoutJoinUrl,
 	getClubAgendaSettings,
 	getClubProfile,
 	getClubTimezoneSettings,
@@ -27,7 +29,12 @@ import {
 } from "./clubs-logic";
 import { isDemoClub } from "./demo-club-flag";
 import { DemoError, resetDemoClub } from "./demo-reset-logic";
-import { requireClubRole, requireClubViewAccess, requireUser } from "./guards";
+import {
+	requireClubAdminView,
+	requireClubRole,
+	requireClubViewAccess,
+	requireUser,
+} from "./guards";
 
 const uuid = z.string().uuid();
 
@@ -173,4 +180,27 @@ export const updateCharterDate = createServerFn({ method: "POST" })
 		const currentUser = await requireUser();
 		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
 		return updateClubCharterDate(data);
+	});
+
+/** How many upcoming meetings have no link (#1534), N on the club-settings
+ *  "Apply" button. AUTHED: club admin (read). */
+export const countMeetingsWithoutJoinUrl = createServerFn({ method: "GET" })
+	.validator((clubId: unknown) => uuid.parse(clubId))
+	.handler(async ({ data: clubId }) => {
+		const currentUser = await requireUser();
+		await requireClubAdminView(currentUser.id, clubId);
+		return countUpcomingMeetingsWithoutJoinUrl(clubId);
+	});
+
+const applyDefaultJoinUrlSchema = z.object({ clubId: uuid });
+
+/** Write the stored default link onto upcoming meetings that have none (#1534).
+ *  AUTHED: requires admin club role in `clubId`, which also refuses an archived
+ *  club (`requireClubRole` carries the archive gate). */
+export const applyDefaultJoinUrl = createServerFn({ method: "POST" })
+	.validator((input: unknown) => applyDefaultJoinUrlSchema.parse(input))
+	.handler(async ({ data }) => {
+		const currentUser = await requireUser();
+		await requireClubRole(currentUser.id, data.clubId, ["admin"]);
+		return applyDefaultJoinUrlToUpcoming(data.clubId);
 	});

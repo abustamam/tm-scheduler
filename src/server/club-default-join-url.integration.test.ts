@@ -217,6 +217,21 @@ describe.skipIf(!hasTestDb)("club default video-call link (#1534)", () => {
 			expect((await classifyMeetings([id])).get(id)).toBe("defaults_differ");
 		});
 
+		it("a meeting with a NULL link, from before the default was set, is untouched (#1534 review)", async () => {
+			// The state the bug left behind: the meeting was auto-created while the
+			// club had no default, THEN the admin saved one. The meeting never
+			// carried the default, but nobody touched it either.
+			await testDb
+				.update(clubs)
+				.set({ defaultMeetingMinutes: 60 })
+				.where(eq(clubs.id, club.clubId));
+			const id = await addMeeting(club.clubId, 33, {
+				lengthMinutes: 60,
+				joinUrl: null,
+			});
+			expect((await classifyMeetings([id])).get(id)).toBeNull();
+		});
+
 		it("with no club default, any link is still a per-meeting override", async () => {
 			await testDb
 				.update(clubs)

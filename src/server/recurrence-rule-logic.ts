@@ -81,10 +81,10 @@ function patternChanged(
 /**
  * Why a meeting is NOT safe to reconcile.
  * - `touched`: someone changed or answered something on this meeting.
- * - `defaults_differ`: nothing but its length or location differs from the
+ * - `defaults_differ`: nothing but its length, location or video-call link differs from the
  *   club's CURRENT defaults. Meetings copy those values when they are created,
  *   so this is also what a meeting looks like after the club changed its default
- *   length or venue; there is no record of which of the two happened.
+ *   length, venue or video-call link; there is no record of which of the two happened.
  */
 export type KeptReason = "touched" | "defaults_differ";
 
@@ -232,9 +232,10 @@ export async function classifyMeetings(
 		return (
 			m.lengthMinutes !== d.lengthMinutes ||
 			m.location !== d.location ||
-			// The link is a per-meeting override only when it differs from what the
-			// top-up copies in (#1534): the club default is not "touched".
-			m.joinUrl !== d.joinUrl
+			// The link is a per-meeting override only when it is set to something
+			// other than the club default (#1534). A null link predates the default
+			// (or the admin cleared it) and is untouched, like the default itself.
+			(m.joinUrl !== null && m.joinUrl !== d.joinUrl)
 		);
 	};
 

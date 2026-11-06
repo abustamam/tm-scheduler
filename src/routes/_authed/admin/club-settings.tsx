@@ -48,7 +48,10 @@ import {
 	type ImageDimensions,
 	readImageDimensions,
 } from "#/lib/image-dimensions";
-import { MEETING_LIMITS } from "#/lib/meeting-limits";
+import {
+	JOIN_URL_NOT_A_LINK_MESSAGE,
+	MEETING_LIMITS,
+} from "#/lib/meeting-limits";
 import { navPageTitle } from "#/lib/page-title";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import {
@@ -67,6 +70,8 @@ import {
 	uploadClubLogo,
 } from "#/server/club-logo";
 import {
+	applyDefaultJoinUrl,
+	countMeetingsWithoutJoinUrl,
 	getClubProfileSettings,
 	loadClubAgendaSettings,
 	loadClubCharter,
@@ -451,15 +456,10 @@ function DemoResetCard({ clubId }: { clubId: string }) {
 	);
 }
 
-const JOIN_URL_HINT_ERROR =
-	"That doesn't look like a link. Paste the full meeting URL, e.g. https://zoom.us/j/1234567890.";
-
 /**
  * "Apply to N upcoming meetings without a link" (#1534). Shown only while a
  * default is saved and some upcoming meeting lacks a link. N comes from the
- * server, and the write re-checks the null. The server fns are imported inside
- * the handlers, like the promo template below: this page's component tests
- * stub server modules by hand and would otherwise load `#/db` under jsdom.
+ * server, and the write re-checks the null.
  */
 function ApplyDefaultJoinUrl({
 	clubId,
@@ -476,8 +476,7 @@ function ApplyDefaultJoinUrl({
 			return;
 		}
 		let live = true;
-		import("#/server/club-default-join-url")
-			.then((m) => m.countMeetingsWithoutJoinUrl({ data: clubId }))
+		countMeetingsWithoutJoinUrl({ data: clubId })
 			.then((n) => {
 				if (live) setCount(n);
 			})
@@ -492,12 +491,11 @@ function ApplyDefaultJoinUrl({
 	async function apply() {
 		setBusy(true);
 		try {
-			const m = await import("#/server/club-default-join-url");
-			const { updated } = await m.applyDefaultJoinUrl({ data: { clubId } });
+			const { updated } = await applyDefaultJoinUrl({ data: { clubId } });
 			toast.success(
 				`Added the link to ${updated} upcoming meeting${updated === 1 ? "" : "s"}.`,
 			);
-			setCount(await m.countMeetingsWithoutJoinUrl({ data: clubId }));
+			setCount(await countMeetingsWithoutJoinUrl({ data: clubId }));
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
 		} finally {
@@ -581,7 +579,7 @@ function ClubSettings() {
 		// Refuse a typo rather than store null: the server normalizes "tbd" to
 		// nothing, and the link would look saved and be gone (#1534).
 		if (defaultJoinUrl && normalizePresentationUrl(defaultJoinUrl) === null) {
-			toast.error(JOIN_URL_HINT_ERROR);
+			toast.error(JOIN_URL_NOT_A_LINK_MESSAGE);
 			return;
 		}
 		setSubmitting(true);

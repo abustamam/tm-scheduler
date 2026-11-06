@@ -33,6 +33,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/clubs", () => ({
+	applyDefaultJoinUrl: vi.fn(),
+	countMeetingsWithoutJoinUrl: vi.fn(),
 	getClubProfileSettings: vi.fn(),
 	loadClubAgendaSettings: vi.fn(),
 	loadClubTimezoneSettings: vi.fn(),
@@ -71,8 +73,14 @@ import {
 	MAX_LOGO_DIMENSION,
 	MAX_LOGO_KB,
 } from "#/lib/club-logo-limits";
+import { JOIN_URL_NOT_A_LINK_MESSAGE } from "#/lib/meeting-limits";
 import { removeClubLogoFn, uploadClubLogo } from "#/server/club-logo";
-import { updateClubTimezone } from "#/server/clubs";
+import {
+	applyDefaultJoinUrl,
+	countMeetingsWithoutJoinUrl,
+	updateClubProfile,
+	updateClubTimezone,
+} from "#/server/clubs";
 import { CLUB_LOGO_COPY, Route, zoneLabel } from "./club-settings";
 
 afterEach(() => {
@@ -105,6 +113,7 @@ function loaderData(
 		timezone?: string;
 		digitalVotingEnabled?: boolean;
 		defaultPrintLayout?: AgendaLayout;
+		defaultJoinUrl?: string | null;
 	} = {},
 ) {
 	return {
@@ -114,6 +123,7 @@ function loaderData(
 			mission: "",
 			meetingSchedule: "",
 			defaultCountryCode: "",
+			defaultJoinUrl: overrides.defaultJoinUrl ?? null,
 		},
 		agenda: {
 			geIntroducesFunctionaries: false,
@@ -954,5 +964,67 @@ describe("Club settings — no role reminders card (#902, ADR-0028)", () => {
 		// … and nothing on it is about reminder emails.
 		expect(screen.queryByText(/reminder/i)).toBeNull();
 		expect(screen.queryByLabelText(/lead time/i)).toBeNull();
+	});
+});
+
+describe("Club settings — default video call link (#1534)", () => {
+	const LINK = "https://zoom.example/j/club-default";
+	const APPLY = /Apply to \d+ upcoming meetings? without a link/;
+
+	it("refuses text that is not a link: a toast, and no save", async () => {
+		const user = userEvent.setup();
+		await renderRoute(loaderData());
+		const field = screen.getByLabelText("Default video call link");
+		await user.type(field, "tbd");
+		await user.click(screen.getByRole("button", { name: "Save club profile" }));
+		expect(toast.error).toHaveBeenCalledWith(JOIN_URL_NOT_A_LINK_MESSAGE);
+		expect(updateClubProfile).not.toHaveBeenCalled();
+	});
+
+	it("hides Apply when no default is saved", async () => {
+		vi.mocked(countMeetingsWithoutJoinUrl).mockResolvedValue(4);
+		await renderRoute(loaderData());
+		expect(screen.queryByRole("button", { name: APPLY })).toBeNull();
+		expect(countMeetingsWithoutJoinUrl).not.toHaveBeenCalled();
+	});
+
+	it("hides Apply when no upcoming meeting lacks a link", async () => {
+		vi.mocked(countMeetingsWithoutJoinUrl).mockResolvedValue(0);
+		await renderRoute(loaderData({ defaultJoinUrl: LINK }));
+		await waitFor(() => expect(countMeetingsWithoutJoinUrl).toHaveBeenCalled());
+		expect(screen.queryByRole("button", { name: APPLY })).toBeNull();
+	});
+
+	it("shows Apply with the count, and a success toast after the write", async () => {
+		const user = userEvent.setup();
+		vi.mocked(countMeetingsWithoutJoinUrl)
+			.mockResolvedValueOnce(3)
+			.mockResolvedValue(0);
+		vi.mocked(applyDefaultJoinUrl).mockResolvedValue({ updated: 3 });
+		await renderRoute(loaderData({ defaultJoinUrl: LINK }));
+		const button = await screen.findByRole("button", {
+			name: "Apply to 3 upcoming meetings without a link",
+		});
+		await user.click(button);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Added the link to 3 upcoming meetings.",
+			),
+		);
+		expect(applyDefaultJoinUrl).toHaveBeenCalledWith({
+			data: { clubId: ADMIN_CLUB.clubId },
+		});
+		await waitFor(() =>
+			expect(screen.queryByRole("button", { name: APPLY })).toBeNull(),
+		);
+	});
+
+	it("toasts the server's message when the apply is refused", async () => {
+		const user = userEvent.setup();
+		vi.mocked(countMeetingsWithoutJoinUrl).mockResolvedValue(1);
+		vi.mocked(applyDefaultJoinUrl).mockRejectedValue(new Error("Nope."));
+		await renderRoute(loaderData({ defaultJoinUrl: LINK }));
+		await user.click(await screen.findByRole("button", { name: APPLY }));
+		await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Nope."));
 	});
 });

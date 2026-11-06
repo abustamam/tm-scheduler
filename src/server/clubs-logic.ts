@@ -15,7 +15,11 @@ import {
 	INVALID_TIMEZONE_MESSAGE,
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
-import { JOIN_URL_FIELD, MEETING_FIELDS } from "#/lib/meeting-limits";
+import {
+	JOIN_URL_FIELD,
+	JOIN_URL_NOT_A_LINK_MESSAGE,
+	MEETING_FIELDS,
+} from "#/lib/meeting-limits";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
@@ -153,7 +157,7 @@ export type ClubProfile = {
 	mission: string | null;
 	meetingSchedule: string | null;
 	defaultLocation: string | null;
-	/** The video-call link new meetings start with (#1534). Admin-only. */
+	/** The video-call link new meetings start with (#1534). Any active member may read it, like `defaultLocation`. */
 	defaultJoinUrl: string | null;
 	defaultCountryCode: string | null;
 };
@@ -246,10 +250,6 @@ const countryCode = z
 	.nullable()
 	.optional();
 
-/** The message for a default link that is not a link. */
-export const DEFAULT_JOIN_URL_ERROR =
-	"That doesn't look like a link. Paste the full meeting URL, e.g. https://zoom.us/j/1234567890.";
-
 /**
  * The club's default video-call link (#1534), validated and normalized HERE so
  * the stored value is the one `normalizePresentationUrl` returns, like the
@@ -260,7 +260,7 @@ const defaultJoinUrl = JOIN_URL_FIELD.transform((raw, ctx) => {
 	if (!raw.trim()) return null;
 	const normalized = normalizePresentationUrl(raw);
 	if (normalized === null) {
-		ctx.addIssue({ code: "custom", message: DEFAULT_JOIN_URL_ERROR });
+		ctx.addIssue({ code: "custom", message: JOIN_URL_NOT_A_LINK_MESSAGE });
 		return z.NEVER;
 	}
 	return normalized;
@@ -381,18 +381,24 @@ export async function applyDefaultJoinUrlToUpcoming(
 	now: Date = new Date(),
 	conn: DbOrTx = db,
 ): Promise<{ updated: number }> {
-	const [club] = await conn
-		.select({ defaultJoinUrl: clubs.defaultJoinUrl })
-		.from(clubs)
-		.where(eq(clubs.id, clubId));
-	if (!club) throw new Error("Club not found.");
-	if (!club.defaultJoinUrl) return { updated: 0 };
-	const rows = await conn
-		.update(meetings)
-		.set({ joinUrl: club.defaultJoinUrl })
-		.where(upcomingWithoutLink(clubId, now))
-		.returning({ id: meetings.id });
-	return { updated: rows.length };
+	// Read the default and write it in ONE transaction, with the club row locked
+	// `FOR UPDATE`, so a default changed between the two cannot leave the stale
+	// value on the meetings. The null/status/future predicate stays in the UPDATE.
+	return conn.transaction(async (tx) => {
+		const [club] = await tx
+			.select({ defaultJoinUrl: clubs.defaultJoinUrl })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("update");
+		if (!club) throw new Error("Club not found.");
+		if (!club.defaultJoinUrl) return { updated: 0 };
+		const rows = await tx
+			.update(meetings)
+			.set({ joinUrl: club.defaultJoinUrl })
+			.where(upcomingWithoutLink(clubId, now))
+			.returning({ id: meetings.id });
+		return { updated: rows.length };
+	});
 }
 
 // ---------------------------------------------------------------------------
