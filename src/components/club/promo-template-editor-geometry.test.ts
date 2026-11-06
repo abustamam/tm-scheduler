@@ -28,11 +28,13 @@ import {
 import { CHROME_TEST_TIMEOUT_MS, findChrome } from "#/test/print-page-count";
 
 const EDITOR = resolve(__dirname, "promo-template-editor.tsx");
+const PREVIEW = resolve(__dirname, "promo-preview.tsx");
+const BUTTON = resolve(__dirname, "../ui/button.tsx");
 const PHONE = 375;
 const THUMB = 320;
 
-function classContaining(fragment: string): string {
-	const hits = [...readSource(EDITOR).matchAll(/className="([^"]*)"/g)]
+function classContaining(fragment: string, file = EDITOR): string {
+	const hits = [...readSource(file).matchAll(/className="([^"]*)"/g)]
 		.map((m) => m[1] as string)
 		.filter((c) => c.includes(fragment));
 	expect(hits, `\`${fragment}\` should match one className`).toHaveLength(1);
@@ -58,10 +60,12 @@ describe.skipIf(!hasChrome)(
 		let grid = "";
 		let aside = "";
 		let actions = "";
+		let panel = "";
 
-		// What `Button` contributes that matters here: `shrink-0`, `whitespace-nowrap`.
+		// `Button`'s real base and default-size classes, read from its source.
+		let buttonClass = "";
 		const btn = (label: string) =>
-			`<button type="button" class="inline-flex shrink-0 items-center whitespace-nowrap px-4 h-9">${label}</button>`;
+			`<button type="button" class="${buttonClass}">${label}</button>`;
 
 		function fixture(g: string, a: string): string {
 			return `
@@ -75,6 +79,10 @@ describe.skipIf(!hasChrome)(
 							</div>
 						</div>
 						<aside class="${aside}" id="aside">
+							<div id="panels">
+								<div class="${panel}" data-state="active" id="panel-on">on</div>
+								<div class="${panel}" data-state="inactive" id="panel-off">off<br>off</div>
+							</div>
 							<div style="width:${THUMB}px;height:${THUMB}px" id="thumb"></div>
 							<span id="tail">end</span>
 						</aside>
@@ -94,6 +102,13 @@ describe.skipIf(!hasChrome)(
 			});
 
 		beforeAll(async () => {
+			const src = readSource(BUTTON);
+			const base = /cva\(\s*"([^"]*)"/.exec(src)?.[1];
+			const size = /default:\s*"(h-9[^"]*)"/.exec(src)?.[1];
+			expect(base, "Button's cva base string").toBeTruthy();
+			expect(size, "Button's default size string").toBeTruthy();
+			buttonClass = `${base} ${size}`;
+			panel = classContaining("data-[state=inactive]:hidden", PREVIEW);
 			grid = classContaining("lg:grid-cols");
 			aside = classContaining("lg:sticky");
 			actions = classContaining("flex flex-wrap gap-2");
@@ -105,6 +120,9 @@ describe.skipIf(!hasChrome)(
 			]);
 		});
 
+		// protects=the fixture's grid, aside, actions and panel classes are the ones in the component source (grid-cols-1, the lg two-column track, lg:top-20, flex-wrap, the inactive-hidden variant);
+		// fails_when=a class is renamed or dropped in the source and the fixture silently measures something else;
+		// no_claim=that the classes lay out correctly (the next tests measure that).
 		it("reads the shipped class strings out of source", () => {
 			expect(grid).toContain("grid-cols-1");
 			expect(grid).toContain("lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]");
@@ -112,6 +130,9 @@ describe.skipIf(!hasChrome)(
 			expect(actions).toContain("flex-wrap");
 		});
 
+		// protects=at 375px the preview column is at most 375px wide yet fits the 320px thumbnail, and the Save / Discard / Reset row does not overflow horizontally;
+		// fails_when=the grid track sizes to the button row, or the row stops wrapping, so content runs past the screen edge;
+		// no_claim=the real editor's markup or the real Button beyond its source class string.
 		it("keeps the preview column and the button row inside the phone", () => {
 			const column = probe(grid, actions, "#aside");
 			expect(column.scrollerClientWidth).toBeLessThanOrEqual(PHONE);
@@ -124,6 +145,19 @@ describe.skipIf(!hasChrome)(
 			).toBe(false);
 		});
 
+		// protects=in headless Chrome a panel with data-state=inactive and the source's class string has a zero-width box while the active one does not;
+		// fails_when=the inactive-hidden variant is dropped or misspelled so a force-mounted panel shows beside the active one;
+		// no_claim=that Radix sets data-state in the real DOM (the jsdom test reads it).
+		it("hides an inactive force-mounted panel and shows the active one", () => {
+			expect(probe(grid, actions, "#panel-off").scrollerClientWidth).toBe(0);
+			expect(
+				probe(grid, actions, "#panel-on").scrollerClientWidth,
+			).toBeGreaterThan(0);
+		});
+
+		// protects=the harness can see the defect: removing grid-cols-1 and flex-wrap makes the column and the row overflow;
+		// fails_when=the harness cannot detect overflow, so the passing test above proves nothing;
+		// no_claim=that the shipped classes are right.
 		it("control: the pre-fix classes push both past the phone", () => {
 			const preGrid = grid.replace(/\bgrid-cols-1\b/, "");
 			const preActions = actions.replace(/\bflex-wrap\b/, "");

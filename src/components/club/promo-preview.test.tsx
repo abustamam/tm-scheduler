@@ -12,6 +12,7 @@ import {
 	buildEmailBlast,
 	buildWhatsAppBlast,
 	DEFAULT_PROMO_TEMPLATE,
+	examplePromoMeeting,
 	type FlyerMeeting,
 	PROMO_LIMITS,
 	type PromoTemplate,
@@ -107,6 +108,32 @@ describe("PromoPreview text equals the blast builders'", () => {
 			);
 		});
 	}
+});
+
+describe("the example meeting", () => {
+	// protects=with the example meeting every variable has a value: no line is struck in any of the three tabs and no `{` placeholder is left in the output;
+	// fails_when=the example lacks a value a default line needs, or a variable renders as its literal placeholder;
+	// no_claim=the example's wording, or a real meeting with empty fields (the dropped-lines tests).
+	it("drops no line and leaves no placeholder in any tab", async () => {
+		const { container, user } = renderPreview({
+			meeting: examplePromoMeeting(
+				new Date("2026-11-06T12:00:00Z"),
+				CLUB.timezone,
+			),
+			isExample: true,
+		});
+		for (const [tab, ch] of [
+			["WhatsApp", "whatsapp"],
+			["Email", "email"],
+			["Flyer", "flyer"],
+		] as const) {
+			await user.click(screen.getByRole("tab", { name: tab }));
+			const out = output(container, ch);
+			expect(out.querySelectorAll("[data-dropped]"), tab).toHaveLength(0);
+			expect(out.textContent, tab).not.toContain("{");
+		}
+		expect(container.querySelectorAll("[data-dropped]")).toHaveLength(0);
+	});
 });
 
 describe("dropped lines", () => {
@@ -299,7 +326,7 @@ describe("header and statuses", () => {
 
 	// protects=only the active tab's panel is displayed while all three stay mounted;
 	// fails_when=a force-mounted panel shows beside the active one (Radix sets no hidden on it);
-	// no_claim=the CSS that implements the hiding (the class is read from the DOM, the 375px check sees it).
+	// no_claim=that any layout engine hides the panels: only the class string is asserted here; the 375px geometry test measures a panel carrying the source's class string and asserts zero height.
 	it("hides the inactive panels but keeps them mounted", async () => {
 		const { container, user } = renderPreview();
 		const panels = () =>

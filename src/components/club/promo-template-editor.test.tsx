@@ -411,6 +411,32 @@ describe("live preview (#1537)", () => {
 		expect(sent.data.template.channels.email.intro).toBe(false);
 	});
 
+	// protects=while the context is STILL rejected, all nine toggles are operable and Save sends the toggled channels;
+	// fails_when=the error state disables Save or drops the toggle state from what Save sends;
+	// no_claim=recovery after Try again (the test above).
+	it("Save submitted while the context is still rejected sends the toggles", async () => {
+		vi.mocked(getPromoContext).mockRejectedValue(new Error("down"));
+		const { user } = renderEditor();
+		expect(
+			(await screen.findAllByText("Couldn't load a meeting for the preview."))
+				.length,
+		).toBeGreaterThan(0);
+		expect(screen.getAllByRole("checkbox", { hidden: true })).toHaveLength(9);
+		await user.click(screen.getByLabelText("Intro in WhatsApp"));
+		await user.click(
+			screen.getByRole("button", { name: /save promo template/i }),
+		);
+		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
+		expect(
+			screen.getAllByText("Couldn't load a meeting for the preview.").length,
+		).toBeGreaterThan(0);
+		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
+			data: { template: typeof DEFAULT_PROMO_TEMPLATE };
+		};
+		expect(sent.data.template.channels.whatsapp.intro).toBe(false);
+		vi.mocked(getPromoContext).mockReset();
+	});
+
 	// protects=unchecking Intro in WhatsApp in the preview removes it there and Save sends channels.whatsapp.intro false;
 	// fails_when=the toggle does not reach the draft Save sends;
 	// no_claim=the other eight toggles.
