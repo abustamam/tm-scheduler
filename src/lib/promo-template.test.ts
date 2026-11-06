@@ -636,6 +636,24 @@ describe("toEditorText / toStoredText", () => {
 		}
 	});
 
+	it("stores a literal exact label or padded name as its key: the documented exception", () => {
+		// protects=the exception in the module header; fails_when=an exact label
+		// or padded key stops converting, or a literal that is not one starts to;
+		// no_claim=that the old editor's "Not a placeholder" flag still shows.
+		expect(toStoredText(toEditorText("{Date}"))).toBe("{date}");
+		expect(toStoredText(toEditorText("{Time}"))).toBe("{time}");
+		expect(toStoredText(toEditorText("{ date }"))).toBe("{date}");
+	});
+
+	it("round-trips every other stored token unchanged", () => {
+		// protects=the rule that only exact labels and padded names convert;
+		// fails_when={DATE}, {Date!}, {nope}, a canonical key or plain text changes
+		// through the pair; no_claim=the exception above.
+		const stored =
+			"Plain text. {DATE} {Date!} {nope} {wordOfTheDay} {date} end";
+		expect(toStoredText(toEditorText(stored))).toBe(stored);
+	});
+
 	it("is idempotent in both directions", () => {
 		// protects=applying a conversion twice is harmless; fails_when=a second
 		// pass changes the text; no_claim=nothing about unbalanced braces.
