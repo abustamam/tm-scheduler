@@ -2,7 +2,14 @@
 //
 // The club's blast template editor (#931): what Save sends, the per-channel
 // toggles, the unknown-placeholder warning, and Reset.
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import {
+	cleanup,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,7 +19,11 @@ vi.mock("#/server/promo", () => ({
 	getPromoContext: vi.fn(),
 }));
 
-import { DEFAULT_PROMO_TEMPLATE, toEditorText } from "#/lib/promo-template";
+import {
+	DEFAULT_PROMO_TEMPLATE,
+	type FlyerMeeting,
+	toEditorText,
+} from "#/lib/promo-template";
 import {
 	getPromoContext,
 	resetPromoTemplate,
@@ -285,5 +296,162 @@ describe("a stored template that no longer parses", () => {
 describe("bulletsFromText", () => {
 	it("trims and drops blank lines", () => {
 		expect(bulletsFromText(" a \n\n b\r\n")).toEqual(["a", "b"]);
+	});
+});
+
+describe("live preview (#1537)", () => {
+	const meeting = (
+		id: string,
+		day: string,
+		theme: string | null,
+	): FlyerMeeting => ({
+		id,
+		urlKey: day,
+		scheduledAt: `${day}T19:00:00Z`,
+		location: "Library",
+		online: false,
+		theme,
+		wordOfTheDay: null,
+		meetingNumber: null,
+		promoNote: null,
+	});
+	const context = (meetings: FlyerMeeting[]) =>
+		({
+			club: { id: CLUB, name: "Acme TM", slug: "acme", timezone: "UTC" },
+			template: DEFAULT_PROMO_TEMPLATE,
+			logoUrl: null,
+			meetings,
+			selectedId: meetings[0]?.id ?? null,
+		}) as never;
+	const whatsapp = () =>
+		document.querySelector('[data-channel-output="whatsapp"]') as HTMLElement;
+
+	// protects=typing in a field changes the preview text at once and calls nothing on the server;
+	// fails_when=the preview reads the stored template, or typing triggers a save;
+	// no_claim=the preview of the other channels (the preview suite).
+	it("typing updates the preview without saving", async () => {
+		vi.mocked(getPromoContext).mockResolvedValue(
+			context([meeting("m1", "2026-12-01", "Beginnings")]),
+		);
+		const { user } = renderEditor();
+		await waitFor(() => expect(whatsapp()).not.toBeNull());
+		const headline = screen.getByLabelText("Headline");
+		await user.clear(headline);
+		await user.type(headline, "Hello {{Club name}");
+		expect(within(whatsapp()).getByText("Hello Acme TM")).toBeTruthy();
+		expect(updatePromoTemplate).not.toHaveBeenCalled();
+	});
+
+	// protects=the picker is absent for one meeting, shown for two and changes the previewed date, and with none the Example badge shows;
+	// fails_when=the picker shows for one meeting, does not drive the preview, or an empty club shows no example;
+	// no_claim=the sheet's own picker.
+	it("shows the picker only with several meetings, and the example badge with none", async () => {
+		vi.mocked(getPromoContext).mockResolvedValue(
+			context([
+				meeting("m1", "2026-12-01", "A"),
+				meeting("m2", "2026-12-08", "B"),
+			]),
+		);
+		const { user } = renderEditor();
+		const picker = (await screen.findByLabelText(
+			"Meeting",
+		)) as HTMLSelectElement;
+		await waitFor(() =>
+			expect(within(whatsapp()).getByText(/Theme: A/)).toBeTruthy(),
+		);
+		await user.selectOptions(picker, "m2");
+		expect(within(whatsapp()).getByText(/Theme: B/)).toBeTruthy();
+		cleanup();
+
+		vi.mocked(getPromoContext).mockResolvedValue(
+			context([meeting("m1", "2026-12-01", "A")]),
+		);
+		renderEditor();
+		await waitFor(() => expect(whatsapp()).not.toBeNull());
+		expect(screen.queryByLabelText("Meeting")).toBeNull();
+		expect(screen.queryByText("Example meeting")).toBeNull();
+		cleanup();
+
+		vi.mocked(getPromoContext).mockResolvedValue(context([]));
+		renderEditor();
+		expect(await screen.findByText("Example meeting")).toBeTruthy();
+		expect(screen.queryByLabelText("Meeting")).toBeNull();
+		expect(within(whatsapp()).getByText(/Theme: Gratitude/)).toBeTruthy();
+	});
+
+	// protects=a rejected context shows the failure sentence in the output area only, keeps all nine toggles operable and Save sending them, and a second call that resolves replaces the sentence;
+	// fails_when=the failure hides or disables the toggles, Save drops them, or Try again does not refetch;
+	// no_claim=the message wording of the rejection.
+	it("a rejected context keeps the toggles working, and Try again recovers", async () => {
+		vi.mocked(getPromoContext)
+			.mockRejectedValueOnce(new Error("down"))
+			.mockResolvedValueOnce(context([meeting("m1", "2026-12-01", "A")]));
+		const { user } = renderEditor();
+		expect(
+			(await screen.findAllByText("Couldn't load a meeting for the preview."))
+				.length,
+		).toBeGreaterThan(0);
+		expect(screen.getAllByRole("checkbox", { hidden: true })).toHaveLength(9);
+		await user.click(screen.getByLabelText("Intro in Email"));
+		await user.click(
+			screen.getAllByRole("button", { name: "Try again", hidden: true })[0],
+		);
+		await waitFor(() => expect(whatsapp()).not.toBeNull());
+		expect(
+			screen.queryByText("Couldn't load a meeting for the preview."),
+		).toBeNull();
+		expect(getPromoContext).toHaveBeenCalledTimes(2);
+		await user.click(
+			screen.getByRole("button", { name: /save promo template/i }),
+		);
+		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
+		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
+			data: { template: typeof DEFAULT_PROMO_TEMPLATE };
+		};
+		expect(sent.data.template.channels.email.intro).toBe(false);
+	});
+
+	// protects=unchecking Intro in WhatsApp in the preview removes it there and Save sends channels.whatsapp.intro false;
+	// fails_when=the toggle does not reach the draft Save sends;
+	// no_claim=the other eight toggles.
+	it("a toggle in the preview is what Save sends", async () => {
+		vi.mocked(getPromoContext).mockResolvedValue(
+			context([meeting("m1", "2026-12-01", "A")]),
+		);
+		const { user } = renderEditor();
+		await waitFor(() => expect(whatsapp()).not.toBeNull());
+		expect(within(whatsapp()).getByText("Where: Library")).toBeTruthy();
+		await user.click(screen.getByLabelText("Intro in WhatsApp"));
+		expect(within(whatsapp()).queryByText("Where: Library")).toBeNull();
+		await user.click(
+			screen.getByRole("button", { name: /save promo template/i }),
+		);
+		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
+		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
+			data: { template: typeof DEFAULT_PROMO_TEMPLATE };
+		};
+		expect(sent.data.template.channels.whatsapp.intro).toBe(false);
+		expect(sent.data.template.channels.flyer.intro).toBe(false);
+		expect(sent.data.template.channels.email.intro).toBe(true);
+	});
+
+	// protects=the preview column's sticky and two-column classes come from the component source;
+	// fails_when=the aside loses lg:sticky or the grid loses its lg column split, so it no longer follows the fields below lg;
+	// no_claim=real layout in a browser (the 375px check in the PR).
+	it("the preview aside is sticky from lg and stacks below it, per the source", () => {
+		const src = readFileSync(
+			"src/components/club/promo-template-editor.tsx",
+			"utf8",
+		);
+		const grid = src.match(/className="(grid[^"]*lg:grid-cols[^"]*)"/)?.[1];
+		const aside = src.match(/<aside\s+className="([^"]*)"/)?.[1];
+		expect(grid).toContain("lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]");
+		expect(aside).toContain("lg:sticky");
+		expect(aside).toContain("lg:top-20");
+		// One shrinkable column below lg: a bare grid track would size to the
+		// widest child (the flyer thumbnail) and push the aside past a phone.
+		expect(grid?.split(" ")).toContain("grid-cols-1");
+		renderEditor();
+		expect(document.querySelector("aside")).not.toBeNull();
 	});
 });

@@ -46,6 +46,48 @@ function useInlinedLogo(logoUrl: string | null) {
 	return state;
 }
 
+/** The square at thumbnail size: the real 1080px layout scaled down in a clipped
+ *  box. Shared by the export's on-screen copy and the template editor's live
+ *  preview, which mounts nothing else from this file. */
+export function FlyerSquareThumb({
+	content,
+	clubName,
+	logoSrc,
+	width,
+	cancelled = false,
+}: {
+	content: FlyerContent;
+	clubName: string;
+	logoSrc: string | null;
+	width: number;
+	cancelled?: boolean;
+}) {
+	const scale = width / FLYER_SQUARE_PX;
+	return (
+		<div
+			aria-hidden
+			className="overflow-hidden rounded-md border"
+			style={{ width, height: width }}
+		>
+			<div
+				style={{
+					width: FLYER_SQUARE_PX,
+					height: FLYER_SQUARE_PX,
+					transform: `scale(${scale})`,
+					transformOrigin: "top left",
+				}}
+			>
+				<MeetingFlyerSquare
+					content={content}
+					clubName={clubName}
+					logoSrc={logoSrc}
+					cancelled={cancelled}
+				/>
+			</div>
+		</div>
+	);
+}
+
 export function FlyerSquareExport({
 	content,
 	clubName,
@@ -67,7 +109,6 @@ export function FlyerSquareExport({
 	const exportRef = useRef<HTMLDivElement>(null);
 	const logo = useInlinedLogo(logoUrl);
 	const [busy, setBusy] = useState(false);
-	const scale = previewWidth / FLYER_SQUARE_PX;
 	// The club HAS a logo but it is not inlined yet (or failed): the export
 	// would be missing it, so it waits.
 	const logoPending = Boolean(logoUrl) && !logo.src;
@@ -96,27 +137,13 @@ export function FlyerSquareExport({
 
 	return (
 		<div className="space-y-3">
-			<div
-				aria-hidden
-				className="overflow-hidden rounded-md border"
-				style={{ width: previewWidth, height: previewWidth }}
-			>
-				<div
-					style={{
-						width: FLYER_SQUARE_PX,
-						height: FLYER_SQUARE_PX,
-						transform: `scale(${scale})`,
-						transformOrigin: "top left",
-					}}
-				>
-					<MeetingFlyerSquare
-						content={content}
-						clubName={clubName}
-						logoSrc={logo.src ?? logoUrl}
-						cancelled={cancelled}
-					/>
-				</div>
-			</div>
+			<FlyerSquareThumb
+				content={content}
+				clubName={clubName}
+				logoSrc={logo.src ?? logoUrl}
+				width={previewWidth}
+				cancelled={cancelled}
+			/>
 			<div
 				ref={exportRef}
 				aria-hidden
