@@ -38,12 +38,12 @@ import {
 	PROMO_LIMITS,
 	type PromoClub,
 	type PromoTemplate,
-	promoDate,
 	promoMailtoHref,
 	promoValues,
 	templateWarnings,
 } from "#/lib/promo-template";
 import { getPromoContext, type PromoContext } from "#/server/promo";
+import { PromoMeetingPicker } from "./promo-meeting-picker";
 
 async function copyText(text: string, what: string) {
 	try {
@@ -167,22 +167,13 @@ export function PromoteSheet({
 					) : (
 						<>
 							{ctx.meetings.length > 1 ? (
-								<div className="space-y-1">
-									<Label htmlFor="promo-meeting">Meeting</Label>
-									<select
-										id="promo-meeting"
-										className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs md:text-sm dark:bg-input/30"
-										value={meeting.id}
-										onChange={(e) => setSelected(e.target.value)}
-									>
-										{ctx.meetings.map((m) => (
-											<option key={m.id} value={m.id}>
-												{promoDate(m.scheduledAt, ctx.club.timezone)}
-												{m.theme ? ` — ${m.theme}` : ""}
-											</option>
-										))}
-									</select>
-								</div>
+								<PromoMeetingPicker
+									id="promo-meeting"
+									meetings={ctx.meetings}
+									timezone={ctx.club.timezone}
+									value={meeting.id}
+									onChange={setSelected}
+								/>
 							) : null}
 							<PromoDrafts
 								// Keyed so a one-time edit never survives a change of meeting.

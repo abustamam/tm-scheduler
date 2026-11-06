@@ -14,9 +14,11 @@ import {
 	DEFAULT_PROMO_TEMPLATE,
 	type FlyerMeeting,
 	type PromoTemplate,
+	promoDate,
 } from "#/lib/promo-template";
+import { getPromoContext } from "#/server/promo";
 import { renderUnderMemoryRouter } from "#/test/router-harness";
-import { PromoDrafts, plainTextToHtml } from "./promote-sheet";
+import { PromoDrafts, PromoteSheet, plainTextToHtml } from "./promote-sheet";
 
 const CLUB = {
 	name: "Downtown Speakers",
@@ -213,5 +215,50 @@ describe("plainTextToHtml", () => {
 		expect(plainTextToHtml(`a <b title="x">'\nc\n\nd`)).toBe(
 			"<p>a &lt;b title=&quot;x&quot;&gt;&#39;<br>c</p>\n<p>d</p>",
 		);
+	});
+});
+
+describe("the sheet's meeting picker (#1537)", () => {
+	const ctx = (meetings: FlyerMeeting[]) => ({
+		club: { ...CLUB, id: "c1" },
+		template: DEFAULT_PROMO_TEMPLATE,
+		logoUrl: null,
+		meetings,
+		selectedId: meetings[0]?.id ?? null,
+	});
+
+	// protects=the sheet's picker lists promoDate and the theme, and appears only with more than one meeting;
+	// fails_when=the extraction changed the option text or shows the picker for a single meeting;
+	// no_claim=what the preview picker does (the editor suite).
+	it("lists date and theme, and only with more than one meeting", async () => {
+		const second: FlyerMeeting = {
+			...MEETING,
+			id: "m2",
+			urlKey: "2026-10-08",
+			scheduledAt: "2026-10-09T00:30:00Z",
+			theme: null,
+		};
+		vi.mocked(getPromoContext).mockResolvedValue(
+			ctx([MEETING, second]) as never,
+		);
+		await renderUnderMemoryRouter(
+			<PromoteSheet open onOpenChange={() => {}} clubId="c1" />,
+		);
+		const select = (await screen.findByLabelText(
+			"Meeting",
+		)) as HTMLSelectElement;
+		expect(select.options[0].textContent).toBe(
+			`${promoDate(MEETING.scheduledAt, CLUB.timezone)} — Beginnings`,
+		);
+		expect(select.options[1].textContent).toBe(
+			promoDate(second.scheduledAt, CLUB.timezone),
+		);
+		cleanup();
+		vi.mocked(getPromoContext).mockResolvedValue(ctx([MEETING]) as never);
+		await renderUnderMemoryRouter(
+			<PromoteSheet open onOpenChange={() => {}} clubId="c1" />,
+		);
+		await screen.findByLabelText("WhatsApp message");
+		expect(screen.queryByLabelText("Meeting")).toBeNull();
 	});
 });

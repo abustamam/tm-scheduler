@@ -11,11 +11,8 @@ import { Button } from "#/components/ui/button";
 import {
 	DEFAULT_PROMO_TEMPLATE,
 	examplePromoMeeting,
-	PROMO_CHANNELS,
+	type FlyerMeeting,
 	PROMO_LIMITS,
-	PROMO_PARTS,
-	type PromoChannel,
-	type PromoPart,
 	type PromoTemplate,
 	promoTemplateSchema,
 	promoValues,
@@ -29,23 +26,13 @@ import {
 	resetPromoTemplate,
 	updatePromoTemplate,
 } from "#/server/promo";
+import { PromoMeetingPicker } from "./promo-meeting-picker";
+import { PromoPreview } from "./promo-preview";
 import { TemplateField } from "./template-field";
 
 const PromoteSheet = lazy(() =>
 	import("./promote-sheet").then((m) => ({ default: m.PromoteSheet })),
 );
-
-const CHANNEL_LABEL: Record<PromoChannel, string> = {
-	whatsapp: "WhatsApp",
-	email: "Email",
-	flyer: "Flyer",
-};
-
-const PART_LABEL: Record<PromoPart, string> = {
-	intro: "Intro",
-	whyJoin: "Why join",
-	callToAction: "Call to action",
-};
 
 /** The bullets as the textarea holds them: one per line, blanks dropped. */
 export function bulletsFromText(text: string): string[] {
@@ -109,19 +96,27 @@ export function PromoTemplateEditor({
 	const [saving, setSaving] = useState(false);
 	const [promoteOpen, setPromoteOpen] = useState(false);
 	const [context, setContext] = useState<PromoContext | null>(null);
+	const [status, setStatus] = useState<"loading" | "error" | "ready">(
+		"loading",
+	);
+	// Bumped by "Try again": the context effect re-runs on it.
+	const [attempt, setAttempt] = useState(0);
+	// The meeting the officer picked in the preview; null until they pick one.
+	const [pickedId, setPickedId] = useState<string | null>(null);
 
-	// The menu's value column: the selected meeting, else the example one.
-	const selectedMeeting = context
-		? context.meetings.find((m) => m.id === context.selectedId)
-		: undefined;
-	const values = context
-		? promoValues(
-				context.club,
-				selectedMeeting ??
-					examplePromoMeeting(new Date(), context.club.timezone),
-				window.location.origin,
-			)
+	// The meeting the menu's values and the preview read: the picked one, else
+	// the server's selection, else the first, else an example one.
+	const meetings = context?.meetings ?? [];
+	const previewMeeting: FlyerMeeting | null = context
+		? (meetings.find((m) => m.id === (pickedId ?? context.selectedId)) ??
+			meetings[0] ??
+			examplePromoMeeting(new Date(), context.club.timezone))
 		: null;
+	const origin = typeof window === "undefined" ? "" : window.location.origin;
+	const values =
+		context && previewMeeting
+			? promoValues(context.club, previewMeeting, origin)
+			: null;
 
 	const draft = draftFrom(fields, channels);
 	const changed = !templatesEqual(
@@ -132,19 +127,25 @@ export function PromoTemplateEditor({
 	const setField = (k: keyof EditorFields) => (v: string) =>
 		setFields((prev) => ({ ...prev, [k]: v }));
 
-	// The club's context, once per mount: the menu's value column reads it, and
-	// the preview (next issue) will too. A failure leaves the fields editable.
+	// The club's context, once per mount (and per "Try again"): the menu's value
+	// column and the preview read it. A failure leaves the fields editable.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` only re-triggers the load
 	useEffect(() => {
 		let cancelled = false;
+		setStatus("loading");
 		getPromoContext({ data: { clubId } })
 			.then((ctx) => {
-				if (!cancelled) setContext(ctx);
+				if (cancelled) return;
+				setContext(ctx);
+				setStatus("ready");
 			})
-			.catch(() => {});
+			.catch(() => {
+				if (!cancelled) setStatus("error");
+			});
 		return () => {
 			cancelled = true;
 		};
-	}, [clubId]);
+	}, [clubId, attempt]);
 
 	function load(t: PromoTemplate) {
 		setFields(editorFields(t));
@@ -228,115 +229,105 @@ export function PromoTemplateEditor({
 				</p>
 			) : null}
 
-			<form onSubmit={onSave} className="space-y-4">
-				<TemplateField
-					id="promo-headline"
-					label="Headline"
-					multiline={false}
-					value={fields.headline}
-					onChange={setField("headline")}
-					limit={PROMO_LIMITS.headline}
-					defaultValue={defaults.headline}
-					values={values}
-				/>
-				<TemplateField
-					id="promo-intro"
-					label="Intro"
-					rows={7}
-					value={fields.intro}
-					onChange={setField("intro")}
-					limit={PROMO_LIMITS.intro}
-					defaultValue={defaults.intro}
-					values={values}
-				/>
-				<TemplateField
-					id="promo-why"
-					label="Why join (one per line)"
-					rows={5}
-					value={fields.bullets}
-					onChange={setField("bullets")}
-					bullets={{ perLine: PROMO_LIMITS.bullet, max: PROMO_LIMITS.bullets }}
-					defaultValue={defaults.bullets}
-					values={values}
-				/>
-				<TemplateField
-					id="promo-cta"
-					label="Call to action"
-					multiline={false}
-					value={fields.cta}
-					onChange={setField("cta")}
-					limit={PROMO_LIMITS.callToAction}
-					defaultValue={defaults.cta}
-					values={values}
-				/>
+			<form
+				onSubmit={onSave}
+				className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]"
+			>
+				<div className="space-y-4">
+					<TemplateField
+						id="promo-headline"
+						label="Headline"
+						multiline={false}
+						value={fields.headline}
+						onChange={setField("headline")}
+						limit={PROMO_LIMITS.headline}
+						defaultValue={defaults.headline}
+						values={values}
+					/>
+					<TemplateField
+						id="promo-intro"
+						label="Intro"
+						rows={7}
+						value={fields.intro}
+						onChange={setField("intro")}
+						limit={PROMO_LIMITS.intro}
+						defaultValue={defaults.intro}
+						values={values}
+					/>
+					<TemplateField
+						id="promo-why"
+						label="Why join (one per line)"
+						rows={5}
+						value={fields.bullets}
+						onChange={setField("bullets")}
+						bullets={{
+							perLine: PROMO_LIMITS.bullet,
+							max: PROMO_LIMITS.bullets,
+						}}
+						defaultValue={defaults.bullets}
+						values={values}
+					/>
+					<TemplateField
+						id="promo-cta"
+						label="Call to action"
+						multiline={false}
+						value={fields.cta}
+						onChange={setField("cta")}
+						limit={PROMO_LIMITS.callToAction}
+						defaultValue={defaults.cta}
+						values={values}
+					/>
 
-				<fieldset className="space-y-2">
-					<legend className="text-sm font-semibold">
-						What each version includes
-					</legend>
-					<table className="text-sm">
-						<thead>
-							<tr>
-								<th />
-								{PROMO_CHANNELS.map((c) => (
-									<th key={c} className="px-3 font-semibold">
-										{CHANNEL_LABEL[c]}
-									</th>
-								))}
-							</tr>
-						</thead>
-						<tbody>
-							{PROMO_PARTS.map((part) => (
-								<tr key={part}>
-									<td className="pr-3">{PART_LABEL[part]}</td>
-									{PROMO_CHANNELS.map((c) => (
-										<td key={c} className="px-3 text-center">
-											<input
-												type="checkbox"
-												aria-label={`${PART_LABEL[part]} in ${CHANNEL_LABEL[c]}`}
-												checked={channels[c][part]}
-												onChange={(e) =>
-													setChannels((prev) => ({
-														...prev,
-														[c]: { ...prev[c], [part]: e.target.checked },
-													}))
-												}
-											/>
-										</td>
-									))}
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</fieldset>
-
-				<div className="flex gap-2">
-					<Button type="submit" disabled={saving} className="flex-1">
-						{saving ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							"Save promo template"
-						)}
-					</Button>
-					{changed ? (
+					<div className="flex flex-wrap gap-2">
+						<Button type="submit" disabled={saving} className="min-w-48 flex-1">
+							{saving ? (
+								<Loader2 className="size-4 animate-spin" />
+							) : (
+								"Save promo template"
+							)}
+						</Button>
+						{changed ? (
+							<Button
+								type="button"
+								variant="ghost"
+								onClick={() => load(baseline)}
+								disabled={saving}
+							>
+								Discard changes
+							</Button>
+						) : null}
 						<Button
 							type="button"
-							variant="ghost"
-							onClick={() => load(baseline)}
+							variant="outline"
+							onClick={onReset}
 							disabled={saving}
 						>
-							Discard changes
+							Reset to default (follows future updates)
 						</Button>
-					) : null}
-					<Button
-						type="button"
-						variant="outline"
-						onClick={onReset}
-						disabled={saving}
-					>
-						Reset to default (follows future updates)
-					</Button>
+					</div>
 				</div>
+				<aside className="space-y-3 self-start lg:sticky lg:top-20">
+					{meetings.length > 1 && context ? (
+						<PromoMeetingPicker
+							id="promo-preview-meeting"
+							meetings={meetings}
+							timezone={context.club.timezone}
+							value={previewMeeting?.id ?? ""}
+							onChange={setPickedId}
+						/>
+					) : null}
+					<PromoPreview
+						template={draft}
+						status={status}
+						club={context?.club ?? null}
+						meeting={previewMeeting}
+						isExample={meetings.length === 0}
+						origin={origin}
+						logoUrl={context?.logoUrl ?? null}
+						onChannelsChange={setChannels}
+						onRetry={() => setAttempt((n) => n + 1)}
+					/>
+				</aside>
 			</form>
 
 			{promoteOpen ? (
