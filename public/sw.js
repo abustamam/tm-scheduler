@@ -494,6 +494,48 @@ async function evict(cache, request, url, isNav) {
 // which is also why eviction clears the whole meeting rather than one URL.
 async function networkFirst(event, request, url, cacheName) {
 	const cache = await caches.open(cacheName);
+	const cached = await findCached(cache, request);
+	// Nothing on this device to fall back to: wait for the network, as ever.
+	if (!cached) return fetchAndStore(event, cache, request, url);
+
+	// A copy exists, so a hung network must not hold the page hostage. Race the
+	// fetch against a timer; the fetch is NOT cancelled when the timer wins — it
+	// finishes under `waitUntil`, so a late 200 still refreshes the cache and
+	// primes the siblings, and a late 404/410 still evicts (`isGoneResponse`).
+	const network = fetchAndStore(event, cache, request, url);
+	let timer;
+	const timedOut = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(cached), NAV_NETWORK_TIMEOUT_MS);
+	});
+	try {
+		const winner = await Promise.race([network, timedOut]);
+		if (winner === cached) {
+			// Rejections are swallowed here only: the caller already has its answer.
+			event.waitUntil(network.catch(() => {}));
+		}
+		return winner;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+// How long a navigation waits on the network when a cached copy exists. A
+// trade-off: too short and a slow-but-working connection serves last week's
+// lineup; too long and a venue's half-dead wifi hangs the page the officer needs
+// on the night, until `fetch` finally rejects. Only a cached page is ever raced.
+const NAV_NETWORK_TIMEOUT_MS = 4000;
+
+// Exact URL first, then ignoring the query: Print's `?layout=` varies while its
+// SSR data is identical.
+async function findCached(cache, request) {
+	const exact = await cache.match(request);
+	if (exact) return exact;
+	return cache.match(request, { ignoreSearch: true });
+}
+
+// The network leg of `networkFirst`: re-cache a 200 (and prime its siblings),
+// evict on a takedown, and on a failed fetch fall back to whatever is cached.
+async function fetchAndStore(event, cache, request, url) {
 	try {
 		const response = await fetch(request);
 		if (response && response.ok) {
@@ -516,10 +558,8 @@ async function networkFirst(event, request, url, cacheName) {
 		}
 		return response;
 	} catch (err) {
-		const exact = await cache.match(request);
-		if (exact) return exact;
-		const ignoringSearch = await cache.match(request, { ignoreSearch: true });
-		if (ignoringSearch) return ignoringSearch;
+		const fallback = await findCached(cache, request);
+		if (fallback) return fallback;
 		throw err;
 	}
 }

@@ -30,7 +30,11 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Captured before any test fakes timers: the fake fetch's macrotask delay must
+// stay real so only the WORKER's own timer is under a test's control.
+const realSetTimeout = globalThis.setTimeout;
 
 const SW_SOURCE = readFileSync(resolve(process.cwd(), "public/sw.js"), "utf8");
 
@@ -175,6 +179,8 @@ interface Harness {
 	/** Window URLs the worker controls at activation (#362) — set before calling
 	 *  `activate()`, which is when the priming pass reads them. */
 	openClients: string[];
+	/** Make the NEXT fetch hang until the returned function is called (#timeout). */
+	holdNextFetch(): () => void;
 	dispatchFetch(req: FakeRequest): Promise<FakeResponse | undefined>;
 	activate(): Promise<void>;
 	cacheFor(name: string): FakeCache;
@@ -196,6 +202,7 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 		/** Window URLs this worker controls at activation (#362). */
 		openClients: [] as string[],
 		lastInit: [] as { url: string; cache?: string }[],
+		held: [] as Promise<void>[],
 	};
 
 	const cachesApi = {
@@ -249,7 +256,9 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 		// exactly what a browser would do. With a microtask the whole chain drained
 		// before any assertion ran, and removing `event.waitUntil(network)` from
 		// sw.js left every test green.
-		await new Promise((r) => setTimeout(r, 0));
+		const held = state.held.shift();
+		if (held) await held;
+		else await new Promise((r) => realSetTimeout(r, 0));
 		const queued = nextFetch.shift();
 		if (queued === undefined) {
 			// Do NOT throw: `networkFirst` catches any throw as "offline", so an
@@ -291,6 +300,11 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 		},
 		set openClients(urls: string[]) {
 			state.openClients = urls;
+		},
+		holdNextFetch() {
+			let release = () => {};
+			state.held.push(new Promise<void>((r) => (release = r)));
+			return release;
 		},
 		cacheFor(name) {
 			const cache = cacheStore.get(name);
@@ -1358,5 +1372,77 @@ describe("priming a document also primes its build assets (#362)", () => {
 		// `toBeLessThanOrEqual(MAX_PRIMED_ASSETS)` would pass for every value of
 		// MAX_PRIMED_ASSETS, including one that reintroduces the unbounded loop.
 		expect(sw.cacheFor("gavelup-assets-v3").entries.size).toBe(60);
+	});
+});
+
+/**
+ * A navigation with a cached copy does not wait out a hung network: after
+ * NAV_NETWORK_TIMEOUT_MS it serves the copy, and the fetch finishes under
+ * `waitUntil`. Fake timers drive only the worker's timer; the held fetch is
+ * released by hand, so nothing here depends on wall-clock time.
+ */
+describe("networkFirst timeout when a cached copy exists", () => {
+	const KEY = `${ORIGIN}${MEETING}`;
+	let sw: Harness;
+
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		sw = loadServiceWorker();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("serves the cached copy when the timer wins, and still caches the late 200", async () => {
+		sw.seed("gavelup-nav-v5", { [KEY]: "OLD" });
+		const release = sw.holdNextFetch();
+		sw.nextFetch.push(response(200, "NEW"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		await vi.advanceTimersByTimeAsync(4000);
+		release();
+		const served = await pending;
+		expect(served?.body).toBe("OLD");
+		expect(sw.cacheFor("gavelup-nav-v5").entries.get(KEY)).toBe("NEW");
+	});
+
+	it("a late 404 still evicts the meeting after the cached copy was served", async () => {
+		sw.seed("gavelup-nav-v5", { [KEY]: "OLD" });
+		const release = sw.holdNextFetch();
+		sw.nextFetch.push(response(404, "gone"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		await vi.advanceTimersByTimeAsync(4000);
+		release();
+		const served = await pending;
+		expect(served?.body).toBe("OLD");
+		expect(sw.cacheFor("gavelup-nav-v5").entries.has(KEY)).toBe(false);
+	});
+
+	it("with nothing cached, waits for a slow network however long it takes", async () => {
+		const release = sw.holdNextFetch();
+		sw.nextFetch.push(response(200, "FRESH"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		await vi.advanceTimersByTimeAsync(60_000);
+		release();
+		expect((await pending)?.body).toBe("FRESH");
+	});
+
+	it("with nothing cached, a rejected fetch still rejects", async () => {
+		const release = sw.holdNextFetch();
+		sw.nextFetch.push(new Error("offline"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		const assertion = expect(pending).rejects.toThrow("offline");
+		await vi.advanceTimersByTimeAsync(5000);
+		release();
+		await assertion;
+	});
+
+	it("when the network wins, serves the fresh response, not the cached copy", async () => {
+		sw.seed("gavelup-nav-v5", { [KEY]: "OLD" });
+		sw.nextFetch.push(response(200, "NEW"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		expect((await pending)?.body).toBe("NEW");
+		expect(sw.cacheFor("gavelup-nav-v5").entries.get(KEY)).toBe("NEW");
+		// The timer was cleared, so nothing is left to fire.
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
