@@ -150,6 +150,10 @@ const WITHHELD = [
 	"src/components/agenda/flyer-square-export.tsx",
 	"src/lib/promo-template.ts",
 	"src/components/club/promote-sheet.tsx",
+	// The template editor's field and its variable menu (#1536) render meeting
+	// values in the menu's value column.
+	"src/components/club/template-field.tsx",
+	"src/components/club/variable-menu.tsx",
 ] as const;
 
 /** The surface the link IS for. Also the vacuity floor for the sweep above. */
@@ -250,14 +254,15 @@ describe("the join link is on NO in-room artifact (#731)", () => {
 		});
 	}
 
-	it("still sweeps all eighteen modules", () => {
+	it("still sweeps all twenty modules", () => {
 		// The cheapest way to "fix" a failure above is to delete the offending
 		// entry from WITHHELD, which silences the guard without changing what
 		// ships. A count floor makes that a visible edit rather than a quiet one:
 		// three routes, three renderers, three deck builders, the
 		// next-meeting slide's data module and body (#932), and the five
-		// marketing-blast modules (#931).
-		expect(WITHHELD).toHaveLength(18);
+		// marketing-blast modules (#931), and the template field and its variable
+		// menu (#1536).
+		expect(WITHHELD).toHaveLength(20);
 	});
 });
 
