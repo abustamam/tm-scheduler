@@ -158,6 +158,7 @@ export async function applyAgendaPlan(
 				plan: fresh,
 				blocking,
 				defaultMeetingMinutes,
+				defaultJoinUrl,
 			} = await plan(tx, input.club, entries);
 
 			// Before the hash — see the module header. A blocking item is a
@@ -222,6 +223,8 @@ export async function applyAgendaPlan(
 							// uses.
 							lengthMinutes: defaultMeetingMinutes,
 							location: line.location,
+							// Copy-at-insert from the club default too (#1534).
+							joinUrl: defaultJoinUrl,
 							// ONE insert carrying the meta (AC7). An insert-then-patch
 							// would log a `meeting_create` AND a `meeting_edit` for one
 							// user action, and write the row twice.

@@ -3,10 +3,11 @@
 // and types, and because a handler body is unreachable from a test.
 //
 // Nothing here sends anything: the app drafts, a human sends. These readers
-// build the SLIM meeting shape a blast is drawn from (`PromoMeeting`), which
-// carries whether the meeting is online as a boolean and never the video-call
-// link itself (#731/#754) — the column is only ever read here inside an
-// `is not null`, so its value cannot reach a payload.
+// build the SLIM meeting shape a blast is drawn from (`PromoMeeting`). The
+// video-call link (#731/#754) reaches it ONLY through `PROMO_ADMIN_COLUMNS`,
+// which the admin-gated Promote reader uses (#1534); the public flyer reader
+// selects `PROMO_COLUMNS`, where the column is read only inside an `is not
+// null`, so its value cannot reach that payload.
 
 import { and, asc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "#/db";
@@ -103,6 +104,10 @@ const PROMO_COLUMNS = {
 	promoNote: meetings.promoNote,
 };
 
+/** The Promote sheet's columns: the blast's, plus the link for `{joinLink}`
+ *  (#1534). Used ONLY behind `requireClubAdminView`. */
+const PROMO_ADMIN_COLUMNS = { ...PROMO_COLUMNS, joinLink: meetings.joinUrl };
+
 type PromoRow = {
 	id: string;
 	clubId: string;
@@ -112,6 +117,8 @@ type PromoRow = {
 	theme: string | null;
 	wordOfTheDay: string | null;
 	promoNote: string | null;
+	/** Present only on a row read with `PROMO_ADMIN_COLUMNS`. */
+	joinLink?: string | null;
 };
 
 async function toFlyerMeeting(
@@ -132,6 +139,7 @@ async function toFlyerMeeting(
 		wordOfTheDay: row.wordOfTheDay,
 		meetingNumber,
 		promoNote: row.promoNote,
+		...(row.joinLink ? { joinLink: row.joinLink } : {}),
 	};
 }
 
@@ -178,7 +186,7 @@ export async function loadPromoContext(
 	const [summary, upcomingRows, logoMeta] = await Promise.all([
 		loadNextMeetingSummary(clubId, now),
 		db
-			.select(PROMO_COLUMNS)
+			.select(PROMO_ADMIN_COLUMNS)
 			.from(meetings)
 			.where(
 				and(
@@ -195,7 +203,7 @@ export async function loadPromoContext(
 	const rows: PromoRow[] = [...upcomingRows];
 	if (meetingId && !rows.some((r) => r.id === meetingId)) {
 		const [requested] = await db
-			.select(PROMO_COLUMNS)
+			.select(PROMO_ADMIN_COLUMNS)
 			.from(meetings)
 			.where(and(eq(meetings.id, meetingId), eq(meetings.clubId, clubId)))
 			.limit(1);

@@ -36,22 +36,27 @@ export type DbOrTx =
  * of "untouched": `findPristineEmptyMeetingIds` compares a meeting against
  * exactly these values, so an officer's per-meeting override (a venue, a
  * length, a join link, a typed meeting number) is never mistaken for a default.
- * `joinUrl` and `meetingNumber` are never written at insert (the number is
- * derived for display until a human types one, or the meeting completes).
+ * `joinUrl` is the club's default link (#1534), copied at insert like the
+ * location; `meetingNumber` is never written at insert (the number is derived
+ * for display until a human types one, or the meeting completes).
  */
 export function newMeetingDefaults(
 	rule: { location: string | null },
-	club: { defaultMeetingMinutes: number; defaultLocation: string | null },
+	club: {
+		defaultMeetingMinutes: number;
+		defaultLocation: string | null;
+		defaultJoinUrl: string | null;
+	},
 ): {
 	lengthMinutes: number;
 	location: string | null;
-	joinUrl: null;
+	joinUrl: string | null;
 	meetingNumber: null;
 } {
 	return {
 		lengthMinutes: club.defaultMeetingMinutes,
 		location: effectiveLocation(rule.location, club.defaultLocation),
-		joinUrl: null,
+		joinUrl: club.defaultJoinUrl,
 		meetingNumber: null,
 	};
 }
@@ -185,6 +190,7 @@ export async function ensureScheduleToppedUp(
 					scheduledAt,
 					lengthMinutes: defaults.lengthMinutes,
 					location: defaults.location,
+					joinUrl: defaults.joinUrl,
 					timezone: club.timezone,
 				},
 				defs,

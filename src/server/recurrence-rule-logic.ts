@@ -209,6 +209,7 @@ export async function classifyMeetings(
 			id: clubs.id,
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
 			defaultLocation: clubs.defaultLocation,
+			defaultJoinUrl: clubs.defaultJoinUrl,
 		})
 		.from(clubs)
 		.where(inArray(clubs.id, clubIds));
@@ -228,7 +229,13 @@ export async function classifyMeetings(
 			{ location: ruleByClub.get(m.clubId)?.location ?? null },
 			club,
 		);
-		return m.lengthMinutes !== d.lengthMinutes || m.location !== d.location;
+		return (
+			m.lengthMinutes !== d.lengthMinutes ||
+			m.location !== d.location ||
+			// The link is a per-meeting override only when it differs from what the
+			// top-up copies in (#1534): the club default is not "touched".
+			m.joinUrl !== d.joinUrl
+		);
 	};
 
 	for (const m of rows) {
@@ -244,7 +251,6 @@ export async function classifyMeetings(
 			claimedSet.has(m.id) ||
 			declinedSet.has(m.id) ||
 			guestTouched.has(m.id) ||
-			m.joinUrl !== null ||
 			m.meetingNumber !== null ||
 			// A templated meeting is not an empty shell, whatever its content
 			// fields say. Until #622 that meant "somebody deliberately reshaped

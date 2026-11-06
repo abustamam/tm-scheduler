@@ -40,6 +40,12 @@ export interface NewMeeting {
 	lengthMinutes: number;
 	location: string | null;
 	/**
+	 * The meeting's video-call link, already normalized (#1534). Callers pass the
+	 * club default (`clubs.default_join_url`, copy-at-insert) in the SAME insert,
+	 * not a second UPDATE. Omitted writes null.
+	 */
+	joinUrl?: string | null;
+	/**
 	 * The club's timezone, when the caller already holds it; otherwise
 	 * `insertMeetingWithSlots` reads it, to derive `slot_date` (#1521).
 	 */
@@ -119,6 +125,7 @@ export async function insertMeetingWithSlots(
 			slotDate,
 			lengthMinutes: m.lengthMinutes,
 			location: m.location,
+			joinUrl: m.joinUrl ?? null,
 			// Named EXPLICITLY rather than left to the column defaults, so a
 			// caller that supplies no meta writes the same blank row it always
 			// did. `notes` has no `meta` counterpart on purpose — #808 excluded

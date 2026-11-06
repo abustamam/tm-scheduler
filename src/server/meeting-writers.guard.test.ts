@@ -577,6 +577,11 @@ const MEETING_WRITERS: Record<string, Entry> = {
 			},
 		},
 	},
+	"src/server/clubs-logic.ts#applyDefaultJoinUrlToUpcoming": {
+		class: "exempt",
+		reason:
+			"A bulk fill of a null `join_url` on upcoming meetings from the club default (#1534). It refuses a cancelled meeting by predicate in the UPDATE's WHERE and accepts a completed one, the same policy `updateMeetingUnlessCancelled` applies to an edited link; it never overwrites an existing link, because the null is re-checked at write time.",
+	},
 
 	// -- member removal, merge, recurrence
 	"src/server/members-logic.ts#applyMemberRemove": {

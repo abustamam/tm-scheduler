@@ -407,6 +407,12 @@ export const clubs = pgTable(
 		// Where the club usually meets (#1086). Prefills the meeting forms and backs
 		// up a standing schedule with no location. NOT public: not on the public profile.
 		defaultLocation: text("default_location"),
+		// The video-call link a NEWLY created meeting starts with (#1534), copied onto
+		// `meetings.join_url` at insert like `default_location` is onto location. Never
+		// read at display time: every "is this meeting online" and "who may see the
+		// link" reader reads the meeting's own column. NOT public, and normalized
+		// through `normalizePresentationUrl` on every write.
+		defaultJoinUrl: text("default_join_url"),
 		// Default international dialing code (e.g. "+1") applied to member/guest phone
 		// numbers that lack one, so the tap-to-nudge WhatsApp link (#37) is a valid
 		// full E.164 number. Nullable — unset means numbers without a country code

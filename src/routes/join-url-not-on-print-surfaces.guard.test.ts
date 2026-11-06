@@ -657,11 +657,13 @@ describe("the next meeting's line-up ships names and nothing else (#932)", () =>
 
 /**
  * The marketing flyer (#931): the same two questions, asked of the one public
- * blast surface. Its server fn builds a slim shape with `online: boolean` and
- * no link at all, but the route loader narrows it again through
- * `FLYER_MEETING_FIELDS` — so the fixture below is WIDENED past what the server
- * returns, the way a careless change to that builder would ship it, and the
- * loader must still drop it.
+ * blast surface. Since #1534 the ADMIN-gated Promote reader may put the link on
+ * its meeting as `joinLink` (for the opt-in `{joinLink}` placeholder), and the
+ * public reader shares the builder that does it. So the route loader's
+ * narrowing through `FLYER_MEETING_FIELDS` is now load-bearing, not
+ * belt-and-braces: the fixture below is WIDENED with the link under BOTH the
+ * column's name and `joinLink`, the way a careless change to that builder
+ * would ship it, and the loader must still drop it.
  */
 describe("the flyer ships no join link and nothing unlisted (#931)", () => {
 	const flyerFixture = () => ({
@@ -685,6 +687,7 @@ describe("the flyer ships no join link and nothing unlisted (#931)", () => {
 			meetingNumber: 56,
 			promoNote: "Open house!",
 			joinUrl: SECRET,
+			joinLink: SECRET,
 			notes: "Ask Dana whether the projector bulb was replaced",
 			someFutureColumn: FUTURE_COLUMN_VALUE,
 		},
@@ -722,6 +725,9 @@ describe("the flyer ships no join link and nothing unlisted (#931)", () => {
 		expect(keys.length).toBeGreaterThan(0);
 		expect(keys.filter((k) => !allowed.has(k))).toEqual([]);
 		expect(FLYER_MEETING_FIELDS.join(" ")).not.toMatch(JOIN_URL);
+		// `joinLink` is not a spelling `JOIN_URL` catches (#1534).
+		expect(FLYER_MEETING_FIELDS.join(" ")).not.toMatch(/join/i);
+		expect(keys).not.toContain("joinLink");
 	});
 
 	it("/flyer still ships what the poster is drawn from (vacuity floor)", async () => {

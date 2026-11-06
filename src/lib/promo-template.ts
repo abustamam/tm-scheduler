@@ -22,14 +22,16 @@
 // opens in their own app (#899's rule, `nudge.ts`), so a blast needs no mailing
 // list, consent store or unsubscribe flow.
 //
-// ## The video-call link is never in a blast
+// ## The video-call link is opt-in, and never on the flyer
 //
-// The value map below has no field for it, by construction: `PromoMeeting`
-// carries only `online: boolean`, and `{online}` renders a sentence pointing at
-// the public meeting page — which is where the link lives (#731/#754), one
-// click from the RSVP and agenda pages a blast links to. The
-// #731 source guard sweeps this file raw, so it must not
-// even NAME the field, comments included.
+// `{online}` renders a sentence pointing at the public meeting page, which is
+// where the link lives (#731/#754). A template may ALSO place `{joinLink}`
+// (#1534): the seeded default does not, so no club sends the link until an
+// officer adds it. It is filled for the WhatsApp and email drafts only, which
+// are built in the admin-gated Promote sheet and sent by a human. The flyer
+// builder blanks it, so its line drops, and the public `/flyer` payload never
+// carries it (`FLYER_MEETING_FIELDS`). The #731 source guard sweeps this file
+// raw, so it must not name the column, comments included.
 
 import { z } from "zod";
 import type { meetingStatusEnum } from "#/db/schema";
@@ -101,6 +103,13 @@ export const PROMO_VARIABLES = [
 		key: "clubLink",
 		label: "Club link",
 		description: "Your club's public page",
+		group: "links",
+	},
+	{
+		key: "joinLink",
+		label: "Video call link",
+		description:
+			"The meeting's video-call link. It goes to everyone the blast reaches, and is never printed on the flyer.",
 		group: "links",
 	},
 	{
@@ -419,16 +428,23 @@ export interface PromoClub {
 }
 
 /**
- * The meeting, as a blast needs it — and nothing else. `online` is a boolean
- * on purpose: the link itself stays on the meeting page.
+ * The meeting, as a blast needs it — and nothing else. `online` is a boolean;
+ * the link itself rides only in `joinLink`, and only where `loadPromoContext`
+ * puts it.
  */
 export interface PromoMeeting {
 	/** The canonical public URL key (`resolveMeetingUrlKey`). */
 	urlKey: string;
 	scheduledAt: Date | string;
 	location: string | null;
-	/** Whether the meeting has a video-call link — never the link. */
+	/** Whether the meeting has a video-call link. */
 	online: boolean;
+	/**
+	 * The link itself, for `{joinLink}` (#1534). Set ONLY by the admin-gated
+	 * Promote sheet reader; absent on the public flyer's meeting, and not in
+	 * `FLYER_MEETING_FIELDS`, so it cannot ride that payload either.
+	 */
+	joinLink?: string | null;
 	theme: string | null;
 	wordOfTheDay: string | null;
 	/** Stored or derived (#358); null when the club has never numbered one. */
@@ -496,6 +512,7 @@ export function promoValues(
 		time: promoTime(meeting.scheduledAt, tz),
 		location: meeting.location?.trim() ?? "",
 		online: meeting.online ? ONLINE_TEXT : "",
+		joinLink: meeting.joinLink?.trim() ?? "",
 		theme: meeting.theme?.trim() ?? "",
 		wordOfTheDay: meeting.wordOfTheDay?.trim() ?? "",
 		meetingNumber:
@@ -793,8 +810,11 @@ export interface FlyerContent {
  *  and markers. No footer: the flyer carries a QR code instead. */
 export function buildFlyerBlocks(
 	template: PromoTemplate,
-	values: PromoValues,
+	promoValuesIn: PromoValues,
 ): PromoBlock[] {
+	// The flyer is public and printed: `{joinLink}` is always empty here, so a
+	// line holding it drops (#1534), whatever the caller's values carry.
+	const values: PromoValues = { ...promoValuesIn, joinLink: "" };
 	return [
 		{ kind: "headline", lines: renderPromoLines(template.headline, values) },
 		...partBlocks(template, template.channels.flyer, values, {
@@ -991,6 +1011,8 @@ export function examplePromoMeeting(now: Date, timeZone: string): FlyerMeeting {
 		scheduledAt: zonedWallTimeToUtc(`${date}T19:00`, timeZone).toISOString(),
 		location: "Community Hall, Room 2",
 		online: true,
+		// An obviously-made-up room, so the editor preview shows the line filled.
+		joinLink: "https://meet.example.com/your-club",
 		theme: "Gratitude",
 		wordOfTheDay: "Serendipity",
 		meetingNumber: 412,

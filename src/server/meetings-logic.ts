@@ -347,7 +347,12 @@ export async function applyCreateMeeting(input: MeetingCreateInput) {
 				location: input.location?.trim() || null,
 				// Server-authoritative (#731): the client runs the same function for
 				// a fast error message, but THIS is the value that is stored.
-				joinUrl: normalizePresentationUrl(input.joinUrl),
+				// Omitted: the club default (#1534). An explicit value, blank
+				// included, is the caller's choice, and blank stays null.
+				joinUrl:
+					input.joinUrl === undefined
+						? club.defaultJoinUrl
+						: normalizePresentationUrl(input.joinUrl),
 				theme: input.theme?.trim() || null,
 				wordOfTheDay: input.wordOfTheDay?.trim() || null,
 				notes: input.notes?.trim() || null,

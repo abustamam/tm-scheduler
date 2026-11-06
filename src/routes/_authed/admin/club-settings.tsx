@@ -9,6 +9,7 @@ import {
 	type ChangeEvent,
 	lazy,
 	Suspense,
+	useEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -49,6 +50,7 @@ import {
 } from "#/lib/image-dimensions";
 import { MEETING_LIMITS } from "#/lib/meeting-limits";
 import { navPageTitle } from "#/lib/page-title";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import {
 	formatTableTopicsClock,
 	MAX_TABLE_TOPICS_SECONDS,
@@ -449,6 +451,67 @@ function DemoResetCard({ clubId }: { clubId: string }) {
 	);
 }
 
+const JOIN_URL_HINT_ERROR =
+	"That doesn't look like a link. Paste the full meeting URL, e.g. https://zoom.us/j/1234567890.";
+
+/**
+ * "Apply to N upcoming meetings without a link" (#1534). Shown only while a
+ * default is saved and some upcoming meeting lacks a link. N comes from the
+ * server, and the write re-checks the null. The server fns are imported inside
+ * the handlers, like the promo template below: this page's component tests
+ * stub server modules by hand and would otherwise load `#/db` under jsdom.
+ */
+function ApplyDefaultJoinUrl({
+	clubId,
+	defaultJoinUrl,
+}: {
+	clubId: string;
+	defaultJoinUrl: string | null;
+}) {
+	const [count, setCount] = useState(0);
+	const [busy, setBusy] = useState(false);
+	useEffect(() => {
+		if (!defaultJoinUrl) {
+			setCount(0);
+			return;
+		}
+		let live = true;
+		import("#/server/club-default-join-url")
+			.then((m) => m.countMeetingsWithoutJoinUrl({ data: clubId }))
+			.then((n) => {
+				if (live) setCount(n);
+			})
+			.catch(() => {
+				if (live) setCount(0);
+			});
+		return () => {
+			live = false;
+		};
+	}, [clubId, defaultJoinUrl]);
+	if (!defaultJoinUrl || count === 0) return null;
+	async function apply() {
+		setBusy(true);
+		try {
+			const m = await import("#/server/club-default-join-url");
+			const { updated } = await m.applyDefaultJoinUrl({ data: { clubId } });
+			toast.success(
+				`Added the link to ${updated} upcoming meeting${updated === 1 ? "" : "s"}.`,
+			);
+			setCount(await m.countMeetingsWithoutJoinUrl({ data: clubId }));
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Something went wrong.");
+		} finally {
+			setBusy(false);
+		}
+	}
+	return (
+		<Button type="button" variant="outline" onClick={apply} disabled={busy}>
+			{busy ? <Loader2 className="size-4 animate-spin" /> : null}
+			Apply to {count} upcoming meeting{count === 1 ? "" : "s"} without a link
+		</Button>
+	);
+}
+
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
 	const {
@@ -514,6 +577,13 @@ function ClubSettings() {
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const form = new FormData(e.currentTarget);
+		const defaultJoinUrl = String(form.get("defaultJoinUrl") ?? "").trim();
+		// Refuse a typo rather than store null: the server normalizes "tbd" to
+		// nothing, and the link would look saved and be gone (#1534).
+		if (defaultJoinUrl && normalizePresentationUrl(defaultJoinUrl) === null) {
+			toast.error(JOIN_URL_HINT_ERROR);
+			return;
+		}
 		setSubmitting(true);
 		try {
 			await updateClubProfile({
@@ -523,6 +593,7 @@ function ClubSettings() {
 					mission: String(form.get("mission") ?? ""),
 					meetingSchedule: String(form.get("meetingSchedule") ?? ""),
 					defaultLocation: String(form.get("defaultLocation") ?? ""),
+					defaultJoinUrl,
 					defaultCountryCode: String(form.get("defaultCountryCode") ?? ""),
 				},
 			});
@@ -725,6 +796,25 @@ function ClubSettings() {
 						Prefilled on the new-meeting forms, and used for meetings created
 						automatically when the schedule has no location of its own.
 					</p>
+				</div>
+				<div className="space-y-2">
+					<Label htmlFor="defaultJoinUrl">Default video call link</Label>
+					<Input
+						id="defaultJoinUrl"
+						name="defaultJoinUrl"
+						maxLength={MEETING_LIMITS.joinUrl}
+						defaultValue={profile?.defaultJoinUrl ?? ""}
+						placeholder="e.g. https://zoom.us/j/1234567890"
+					/>
+					<p className="text-xs text-muted-foreground">
+						New meetings start with this link, including the ones the schedule
+						creates. You can still change or clear it on one meeting. It is not
+						shown on the public club page.
+					</p>
+					<ApplyDefaultJoinUrl
+						clubId={adminClub.clubId}
+						defaultJoinUrl={profile?.defaultJoinUrl ?? null}
+					/>
 				</div>
 				<div className="space-y-2">
 					<Label htmlFor="mission">Mission</Label>

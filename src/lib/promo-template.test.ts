@@ -237,6 +237,54 @@ describe("the video-call link is in no output", () => {
 	});
 });
 
+describe("{joinLink} (#1534)", () => {
+	const optIn: PromoTemplate = {
+		...DEFAULT_PROMO_TEMPLATE,
+		intro: `${DEFAULT_PROMO_TEMPLATE.intro}\nJoin: {joinLink}`,
+		channels: {
+			whatsapp: { intro: true, whyJoin: true, callToAction: true },
+			email: { intro: true, whyJoin: true, callToAction: true },
+			flyer: { intro: true, whyJoin: true, callToAction: true },
+		},
+	};
+	const withLink = promoValues(CLUB, { ...MEETING, joinLink: ROOM }, ORIGIN);
+
+	it("the seeded default does not place it", () => {
+		const text = JSON.stringify(DEFAULT_PROMO_TEMPLATE);
+		expect(text).not.toContain("joinLink");
+		expect(buildWhatsAppBlast(DEFAULT_PROMO_TEMPLATE, withLink)).not.toContain(
+			ROOM,
+		);
+	});
+
+	it("a template that places it gets the link in WhatsApp and email", () => {
+		expect(buildWhatsAppBlast(optIn, withLink)).toContain(`Join: ${ROOM}`);
+		expect(buildEmailBlast(optIn, withLink).text).toContain(`Join: ${ROOM}`);
+	});
+
+	it("a meeting with no link drops the line", () => {
+		const none = promoValues(CLUB, { ...MEETING, joinLink: null }, ORIGIN);
+		expect(buildWhatsAppBlast(optIn, none)).not.toContain("Join:");
+		expect(templateWarnings(optIn)).toEqual([]);
+	});
+
+	it("the flyer never prints it, even when handed values that carry it", () => {
+		const flyer = JSON.stringify(buildFlyerContent(optIn, withLink));
+		expect(flyer).not.toContain(ROOM);
+		expect(flyer).not.toContain("Join:");
+	});
+
+	it("the flyer projection drops it", () => {
+		const projected = projectFlyerMeeting({
+			...MEETING,
+			joinLink: ROOM,
+			id: "m1",
+			status: "scheduled",
+		} as PublicFlyerMeeting);
+		expect(JSON.stringify(projected)).not.toContain(ROOM);
+	});
+});
+
 describe("buildWhatsAppBlast", () => {
 	const msg = buildWhatsAppBlast(DEFAULT_PROMO_TEMPLATE, values());
 
@@ -513,12 +561,12 @@ const TEMPLATE_FIXTURES = [
 ];
 
 describe("PROMO_VARIABLES", () => {
-	it("derives the 13 placeholders in table order, groups contiguous in menu order", () => {
+	it("derives the 14 placeholders in table order, groups contiguous in menu order", () => {
 		// protects=PROMO_PLACEHOLDERS is exactly the variable keys, in order;
 		// fails_when=a key is added to one list and not the other, or reordered;
 		// no_claim=that every caller's switch over keys handles the new key.
 		expect(PROMO_PLACEHOLDERS).toEqual(PROMO_VARIABLES.map((v) => v.key));
-		expect(PROMO_PLACEHOLDERS).toHaveLength(13);
+		expect(PROMO_PLACEHOLDERS).toHaveLength(14);
 		const groupOrder = PROMO_VARIABLE_GROUPS.map((g) => g.id);
 		const seen = PROMO_VARIABLES.map((v) => v.group).filter(
 			(g, i, all) => all.indexOf(g) === i,

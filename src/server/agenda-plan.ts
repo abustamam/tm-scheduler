@@ -180,6 +180,12 @@ export interface AgendaPlanResult {
 	 * should not fail every outstanding confirm link as stale.
 	 */
 	defaultMeetingMinutes: number;
+	/**
+	 * The club's default video-call link (#1534), copied onto a meeting this plan
+	 * CREATES. Outside the hash for the same reason as the length: a club changing
+	 * its default must not stale an outstanding confirm link.
+	 */
+	defaultJoinUrl: string | null;
 }
 
 export interface AgendaPlanClub {
@@ -236,6 +242,7 @@ export async function plan(
 		.select({
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
 			defaultLocation: clubs.defaultLocation,
+			defaultJoinUrl: clubs.defaultJoinUrl,
 			// `enabled` is deliberately NOT read. A DISABLED rule still supplies a
 			// time and a weekday — see below — so selecting it would be a column
 			// nothing branches on.
@@ -407,6 +414,7 @@ export async function plan(
 		blocking,
 		meetingNumbers,
 		defaultMeetingMinutes: clubRow.defaultMeetingMinutes,
+		defaultJoinUrl: clubRow.defaultJoinUrl,
 	};
 }
 

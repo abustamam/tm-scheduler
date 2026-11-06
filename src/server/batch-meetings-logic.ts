@@ -113,6 +113,7 @@ export async function applyBatchCreateMeetings(
 					scheduledAt,
 					lengthMinutes: club.defaultMeetingMinutes,
 					location,
+					joinUrl: club.defaultJoinUrl,
 				},
 				defs,
 			);
