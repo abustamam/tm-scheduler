@@ -181,6 +181,9 @@ interface Harness {
 	openClients: string[];
 	/** Make the NEXT fetch hang until the returned function is called (#timeout). */
 	holdNextFetch(): () => void;
+	/** The last `respondWith` value alone, before any `waitUntil` work: what
+	 *  the page actually waits on. */
+	lastResponse(): Promise<FakeResponse> | undefined;
 	dispatchFetch(req: FakeRequest): Promise<FakeResponse | undefined>;
 	activate(): Promise<void>;
 	cacheFor(name: string): FakeCache;
@@ -203,6 +206,7 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 		openClients: [] as string[],
 		lastInit: [] as { url: string; cache?: string }[],
 		held: [] as Promise<void>[],
+		lastResponded: undefined as Promise<FakeResponse> | undefined,
 	};
 
 	const cachesApi = {
@@ -301,6 +305,9 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 		set openClients(urls: string[]) {
 			state.openClients = urls;
 		},
+		lastResponse() {
+			return state.lastResponded;
+		},
 		holdNextFetch() {
 			let release = () => {};
 			state.held.push(new Promise<void>((r) => (release = r)));
@@ -327,6 +334,7 @@ function loadServiceWorker(source: string = SW_SOURCE): Harness {
 					request: req,
 					respondWith: (value: Promise<FakeResponse>) => {
 						responded = value;
+						state.lastResponded = value;
 					},
 					waitUntil: (value: Promise<unknown>) => {
 						waits.push(value);
@@ -1399,10 +1407,36 @@ describe("networkFirst timeout when a cached copy exists", () => {
 		sw.nextFetch.push(response(200, "NEW"));
 		const pending = sw.dispatchFetch(request(MEETING));
 		await vi.advanceTimersByTimeAsync(4000);
+		// The page's answer arrives while the fetch is STILL held: the cached copy
+		// must not wait on the network. Awaiting `pending` alone cannot show this,
+		// since it also awaits the background work.
+		expect((await sw.lastResponse())?.body).toBe("OLD");
+		expect(sw.cacheFor("gavelup-nav-v5").entries.get(KEY)).toBe("OLD");
 		release();
 		const served = await pending;
 		expect(served?.body).toBe("OLD");
 		expect(sw.cacheFor("gavelup-nav-v5").entries.get(KEY)).toBe("NEW");
+	});
+
+	it("a cache read that rejects is a miss: the healthy network still answers", async () => {
+		const cache = sw.seed("gavelup-nav-v5", { [KEY]: "OLD" });
+		cache.match = async () => {
+			throw new Error("storage error");
+		};
+		sw.nextFetch.push(response(200, "NEW"));
+		const served = await sw.dispatchFetch(request(MEETING));
+		expect(served?.body).toBe("NEW");
+		expect(sw.fetchInits[0]?.url).toBe(KEY);
+	});
+
+	it("a cache read that never settles does not block a healthy network", async () => {
+		const cache = sw.seed("gavelup-nav-v5", { [KEY]: "OLD" });
+		cache.match = () => new Promise(() => {});
+		sw.nextFetch.push(response(200, "NEW"));
+		const pending = sw.dispatchFetch(request(MEETING));
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await sw.lastResponse())?.body).toBe("NEW");
+		await pending;
 	});
 
 	it("a late 404 still evicts the meeting after the cached copy was served", async () => {

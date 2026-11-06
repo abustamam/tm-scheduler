@@ -494,15 +494,30 @@ async function evict(cache, request, url, isNav) {
 // which is also why eviction clears the whole meeting rather than one URL.
 async function networkFirst(event, request, url, cacheName) {
 	const cache = await caches.open(cacheName);
-	const cached = await findCached(cache, request);
-	// Nothing on this device to fall back to: wait for the network, as ever.
-	if (!cached) return fetchAndStore(event, cache, request, url);
+	// The network starts FIRST, before any cache read. Reading the cache first
+	// put the lookup in front of a healthy network: a `match` that rejected (a
+	// storage error) failed the navigation with zero fetches, and one that
+	// stalled never started the timer at all. Whichever settles first between
+	// the lookup and the network decides; a settled network needs no copy.
+	const network = fetchAndStore(event, cache, request, url);
+	const cached = await Promise.race([
+		findCached(cache, request),
+		network.then(
+			() => undefined,
+			() => undefined,
+		),
+	]);
+	// Nothing on this device to fall back to (or the network already answered):
+	// wait for the network, as ever.
+	if (!cached) return network;
 
 	// A copy exists, so a hung network must not hold the page hostage. Race the
 	// fetch against a timer; the fetch is NOT cancelled when the timer wins — it
 	// finishes under `waitUntil`, so a late 200 still refreshes the cache and
 	// primes the siblings, and a late 404/410 still evicts (`isGoneResponse`).
-	const network = fetchAndStore(event, cache, request, url);
+	// That late eviction is also the bound on #556's takedown window here: a slow
+	// server now gets the cached copy of an archived club's meeting for one load,
+	// where before only an unreachable one did; the 404 that follows removes it.
 	let timer;
 	const timedOut = new Promise((resolve) => {
 		timer = setTimeout(() => resolve(cached), NAV_NETWORK_TIMEOUT_MS);
@@ -526,11 +541,15 @@ async function networkFirst(event, request, url, cacheName) {
 const NAV_NETWORK_TIMEOUT_MS = 4000;
 
 // Exact URL first, then ignoring the query: Print's `?layout=` varies while its
-// SSR data is identical.
+// SSR data is identical. A failed read is a miss, never a failed navigation.
 async function findCached(cache, request) {
-	const exact = await cache.match(request);
-	if (exact) return exact;
-	return cache.match(request, { ignoreSearch: true });
+	try {
+		const exact = await cache.match(request);
+		if (exact) return exact;
+		return await cache.match(request, { ignoreSearch: true });
+	} catch {
+		return undefined;
+	}
 }
 
 // The network leg of `networkFirst`: re-cache a 200 (and prime its siblings),

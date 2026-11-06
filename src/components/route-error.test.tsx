@@ -443,7 +443,16 @@ describe("RouteError offline (network failure)", () => {
 
 describe("isNetworkFailure", () => {
 	it("is false with no navigator and a plain error (SSR)", () => {
-		expect(isNetworkFailure(new Error("x"), undefined)).toBe(false);
+		// Remove `navigator` itself so the DEFAULT argument's SSR branch runs.
+		// Passing `undefined` explicitly re-triggers the default, which in jsdom
+		// reads `navigator.onLine === true` and passes for the wrong reason.
+		vi.stubGlobal("navigator", undefined);
+		try {
+			expect(() => isNetworkFailure(new Error("x"))).not.toThrow();
+			expect(isNetworkFailure(new Error("x"))).toBe(false);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 	it("matches the three engine messages only on a TypeError", () => {
 		for (const m of [
