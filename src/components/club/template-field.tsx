@@ -10,7 +10,7 @@
 // textarea grow with its text, so the two never scroll against each other
 // (where it is unsupported the copy mirrors `scrollTop`).
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
@@ -32,11 +32,14 @@ import {
 	flattenNewlines,
 	isSuppressed,
 	menuStateFromInput,
+	type Suppression,
 	snapCaret,
 } from "./template-field-logic";
 import { VariableMenu } from "./variable-menu";
 
-/** A known variable behind the text. Nothing here may change the text's width. */
+/** A known variable behind the text. Nothing here may change the text's width.
+ *  `rounded-md`, not DESIGN.md's `full` chip radius: it sits inside running text
+ *  behind a textarea, where a pill-shaped end would clip the neighbouring glyphs. */
 export const PILL_CLASS = "rounded-md bg-primary/10";
 /** An unknown `{token}`: a typo flag, not a pill. */
 export const UNKNOWN_CLASS =
@@ -98,7 +101,7 @@ function Backdrop({
 			className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-2 text-base break-words whitespace-pre-wrap text-transparent md:text-sm"
 		>
 			{parts}
-			{"​"}
+			{"\u200b"}
 		</div>
 	);
 }
@@ -145,22 +148,22 @@ export function TemplateField({
 	const [focused, setFocused] = useState(false);
 	const [composing, setComposing] = useState(false);
 	const [manualOpen, setManualOpen] = useState(false);
-	const [sup, setSup] = useState<{ index: number; char: string } | null>(null);
+	const [suppression, setSuppression] = useState<Suppression | null>(null);
 	const [activeIdx, setActiveIdx] = useState(0);
 	const [announce, setAnnounce] = useState("");
 
 	// --- the menu -----------------------------------------------------------
-	const trig =
+	const trigger =
 		!focused || composing || caret === null
 			? null
 			: menuStateFromInput(value, caret);
 	const suppressed =
-		sup !== null &&
-		trig !== null &&
+		suppression !== null &&
+		trigger !== null &&
 		caret !== null &&
-		trig.triggerIndex === sup.index &&
-		isSuppressed(value, caret, sup);
-	const triggerMenu = trig && !suppressed ? trig : null;
+		trigger.triggerIndex === suppression.index &&
+		isSuppressed(value, caret, suppression);
+	const triggerMenu = trigger && !suppressed ? trigger : null;
 	const options = manualOpen
 		? [...PROMO_VARIABLES]
 		: triggerMenu
@@ -180,16 +183,50 @@ export function TemplateField({
 	}, [filterKey]);
 
 	useEffect(() => {
-		if (sup && !(caret !== null && isSuppressed(value, caret, sup)))
-			setSup(null);
-	}, [sup, caret, value]);
+		if (
+			suppression &&
+			!(caret !== null && isSuppressed(value, caret, suppression))
+		)
+			setSuppression(null);
+	}, [suppression, caret, value]);
 
+	// The opening announcement is cleared on close, so reopening changes the
+	// live region's text again and is read out. A just-set "Inserted X" stays.
+	const openingText = `${PROMO_VARIABLES.length} variables, use up and down then Enter`;
 	useEffect(() => {
-		if (open)
-			setAnnounce(
-				`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
-			);
-	}, [open]);
+		if (open) setAnnounce(openingText);
+		else setAnnounce((a) => (a === openingText ? "" : a));
+	}, [open, openingText]);
+
+	// Where a pick or Insert variable lands: the last known selection, or the
+	// end of the text when the field was never focused, clamped to the text.
+	function savedSelection(length: number) {
+		const sel = lastSel.current ?? { start: length, end: length };
+		return {
+			start: Math.min(sel.start, length),
+			end: Math.min(sel.end, length),
+		};
+	}
+
+	// A native scrollbar takes width from the textarea's text column; the
+	// backdrop (absolutely positioned) must lose the same width, or text and
+	// pills wrap on different lines. 0 with no scrollbar or an overlay one.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure on every value change
+	useLayoutEffect(() => {
+		const ta = taRef.current;
+		const backdrop = backdropRef.current;
+		if (!ta || !backdrop) return;
+		const measure = () => {
+			const cs = getComputedStyle(ta);
+			const borders =
+				(Number.parseFloat(cs.borderLeftWidth) || 0) +
+				(Number.parseFloat(cs.borderRightWidth) || 0);
+			backdrop.style.right = `${Math.max(0, ta.offsetWidth - ta.clientWidth - borders)}px`;
+		};
+		measure();
+		window.addEventListener("resize", measure);
+		return () => window.removeEventListener("resize", measure);
+	}, [value]);
 
 	function remember(ta: HTMLTextAreaElement) {
 		lastSel.current = { start: ta.selectionStart, end: ta.selectionEnd };
@@ -214,9 +251,7 @@ export function TemplateField({
 		let start: number;
 		let end: number;
 		if (manualOpen) {
-			const sel = lastSel.current ?? { start: value.length, end: value.length };
-			start = Math.min(sel.start, value.length);
-			end = Math.min(sel.end, value.length);
+			({ start, end } = savedSelection(value.length));
 		} else if (triggerMenu && caret !== null) {
 			start = triggerMenu.triggerIndex;
 			end = caret;
@@ -231,26 +266,22 @@ export function TemplateField({
 		if (!ta) return;
 		if (document.activeElement !== ta) {
 			ta.focus();
-			const sel = lastSel.current ?? {
-				start: ta.value.length,
-				end: ta.value.length,
-			};
-			ta.setSelectionRange(
-				Math.min(sel.start, ta.value.length),
-				Math.min(sel.end, ta.value.length),
-			);
+			const sel = savedSelection(ta.value.length);
+			ta.setSelectionRange(sel.start, sel.end);
 		}
 		remember(ta);
-		setSup(null);
+		setSuppression(null);
 		setManualOpen(true);
 	}
 
 	function closeMenu() {
 		if (manualOpen) setManualOpen(false);
-		else if (triggerMenu)
-			setSup({
+		// An `@` or `{` underneath a manually opened menu would reopen it at once.
+		if (triggerMenu && caret !== null)
+			setSuppression({
 				index: triggerMenu.triggerIndex,
 				char: value[triggerMenu.triggerIndex],
+				caret,
 			});
 	}
 
@@ -306,8 +337,8 @@ export function TemplateField({
 		if (!raw) return;
 		e.preventDefault();
 		const ta = e.currentTarget;
-		let seg = toEditorText(raw);
-		if (!multiline) seg = flattenNewlines(seg);
+		let segment = toEditorText(raw);
+		if (!multiline) segment = flattenNewlines(segment);
 		let start = ta.selectionStart;
 		let end = ta.selectionEnd;
 		if (start === end) {
@@ -315,7 +346,7 @@ export function TemplateField({
 			const snapped = snapCaret(ta.value, start);
 			if (snapped !== null) start = end = snapped;
 		}
-		applyEdit(ta, start, end, seg);
+		applyEdit(ta, start, end, segment);
 	}
 
 	function fixTypo(name: string, to: string) {

@@ -15,10 +15,8 @@ import {
 	PROMO_LIMITS,
 	PROMO_PARTS,
 	type PromoChannel,
-	type PromoMeeting,
 	type PromoPart,
 	type PromoTemplate,
-	type PromoValues,
 	promoTemplateSchema,
 	promoValues,
 	templatesEqual,
@@ -27,6 +25,7 @@ import {
 } from "#/lib/promo-template";
 import {
 	getPromoContext,
+	type PromoContext,
 	resetPromoTemplate,
 	updatePromoTemplate,
 } from "#/server/promo";
@@ -109,7 +108,20 @@ export function PromoTemplateEditor({
 	const [baseline, setBaseline] = useState(template);
 	const [saving, setSaving] = useState(false);
 	const [promoteOpen, setPromoteOpen] = useState(false);
-	const [values, setValues] = useState<PromoValues | null>(null);
+	const [context, setContext] = useState<PromoContext | null>(null);
+
+	// The menu's value column: the selected meeting, else the example one.
+	const selectedMeeting = context
+		? context.meetings.find((m) => m.id === context.selectedId)
+		: undefined;
+	const values = context
+		? promoValues(
+				context.club,
+				selectedMeeting ??
+					examplePromoMeeting(new Date(), context.club.timezone),
+				window.location.origin,
+			)
+		: null;
 
 	const draft = draftFrom(fields, channels);
 	const changed = !templatesEqual(
@@ -126,12 +138,7 @@ export function PromoTemplateEditor({
 		let cancelled = false;
 		getPromoContext({ data: { clubId } })
 			.then((ctx) => {
-				if (cancelled) return;
-				const meeting: PromoMeeting =
-					ctx.meetings.find((m) => m.id === ctx.selectedId) ??
-					ctx.meetings[0] ??
-					examplePromoMeeting(new Date(), ctx.club.timezone);
-				setValues(promoValues(ctx.club, meeting, window.location.origin));
+				if (!cancelled) setContext(ctx);
 			})
 			.catch(() => {});
 		return () => {
@@ -315,7 +322,7 @@ export function PromoTemplateEditor({
 						<Button
 							type="button"
 							variant="ghost"
-							onClick={() => load(template)}
+							onClick={() => load(baseline)}
 							disabled={saving}
 						>
 							Discard changes

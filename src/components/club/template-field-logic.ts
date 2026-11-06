@@ -46,8 +46,10 @@ const WORD_CHAR = /[A-Za-z0-9_.]/;
 /**
  * The menu a caret position asks for, or null. Scans back from the caret for
  * the nearest `@` or `{` with no `}` or newline in between. `@` counts only at
- * a word boundary (so an email address never opens it) and closes at the first
- * whitespace; `{` counts anywhere and may span spaces (`{Word of`).
+ * a word boundary (so an email address never opens it); an `@` whose filter
+ * STARTS with whitespace is prose ("Meet @ 7pm") and never opens, otherwise the
+ * filter may hold spaces (`@Word of`) and matching decides. `{` counts anywhere
+ * and may span spaces (`{Word of`).
  */
 export function menuStateFromInput(
 	text: string,
@@ -61,7 +63,7 @@ export function menuStateFromInput(
 		if (ch === "@") {
 			if (i > 0 && WORD_CHAR.test(text[i - 1])) return null;
 			const filter = text.slice(i + 1, caret);
-			if (/\s/.test(filter)) return null;
+			if (/^\s/.test(filter)) return null;
 			return { triggerIndex: i, filter };
 		}
 	}
@@ -84,19 +86,27 @@ export function filterVariables(filter: string): PromoVariable[] {
 	);
 }
 
+/** An Escape dismissal: the trigger it closed, and where the caret was then. */
+export interface Suppression {
+	index: number;
+	char: string;
+	caret: number;
+}
+
 /**
  * Whether an Escape-suppression still holds. It lifts when the caret moves to
- * or before the trigger, a space, newline or `}` is typed in the span, or the
- * character at the trigger is no longer the one that was suppressed.
+ * or before the trigger, the character at the trigger is no longer the one that
+ * was suppressed, or the text typed AFTER the dismissal holds a space, newline
+ * or `}` (a space already in the span, as in `{Word of`, does not lift it).
  */
 export function isSuppressed(
 	text: string,
 	caret: number,
-	sup: { index: number; char: string },
+	suppression: Suppression,
 ): boolean {
-	if (text[sup.index] !== sup.char) return false;
-	if (caret <= sup.index) return false;
-	return !/[\s}]/.test(text.slice(sup.index + 1, caret));
+	if (text[suppression.index] !== suppression.char) return false;
+	if (caret <= suppression.index) return false;
+	return !/[\s}]/.test(text.slice(suppression.caret, caret));
 }
 
 export interface CaretEdit {

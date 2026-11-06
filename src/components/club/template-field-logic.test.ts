@@ -53,12 +53,24 @@ describe("menuStateFromInput", () => {
 		expect(menuStateFromInput("{da\nte", 6)).toBeNull();
 	});
 
-	// protects=@ closes at whitespace; fails_when="@ foo" keeps filtering; no_claim={.
-	it("closes an @ filter at whitespace", () => {
-		expect(menuStateFromInput("@da te", 6)).toBeNull();
+	// protects=an @ filter may hold spaces (`@Word of` still lists Word of the Day) but an @ followed
+	// at once by whitespace is prose; fails_when=`@Word of` closes at the space, or "Meet @ 7pm" /
+	// "@ the" open the menu; no_claim=which variables match (filterVariables tests).
+	it("keeps spaces inside an @ filter, but an @ followed by whitespace is prose", () => {
+		expect(menuStateFromInput("@Word of", 8)).toEqual({
+			triggerIndex: 0,
+			filter: "Word of",
+		});
+		expect(filterVariables("Word of").map((v) => v.key)).toEqual([
+			"wordOfTheDay",
+		]);
+		expect(menuStateFromInput("@ the", 5)).toBeNull();
+		expect(menuStateFromInput("Meet @ 7pm", 10)).toBeNull();
+		expect(menuStateFromInput("Meet @ ", 7)).toBeNull();
 	});
 
-	// protects=the filter is the text up to the CARET, not the end; fails_when=text after the caret leaks in.
+	// protects=the filter is the text up to the CARET, not the end; fails_when=text after the caret leaks in;
+	// no_claim=a caret inside an already closed token (the } cut-off test).
 	it("takes the filter up to the caret only", () => {
 		expect(menuStateFromInput("{dat more", 4)).toEqual({
 			triggerIndex: 0,
@@ -110,7 +122,8 @@ describe("caretRule", () => {
 		});
 	});
 
-	// protects=Delete at the start removes it whole.
+	// protects=Delete at the start removes it whole; fails_when=Delete removes one character or the token
+	// before the caret; no_claim=Backspace (its own test) or a caret mid-token (snapCaret).
 	it("Delete at the start deletes the whole token", () => {
 		expect(caretRule(text, 2, 2, "Delete")).toEqual({
 			text: "a  b",
@@ -160,19 +173,28 @@ describe("snapCaret", () => {
 });
 
 describe("isSuppressed and flattenNewlines", () => {
-	const sup = { index: 0, char: "{" };
+	// Dismissed with the caret at 3 in "{da".
+	const sup = { index: 0, char: "{", caret: 3 };
 
-	// protects=Escape holds while typing more of the same span, lifts on space, }, caret <= trigger
-	// or a changed trigger char; fails_when=any lift is missing.
+	// protects=Escape holds while typing more of the same span, lifts on a space or } typed AFTER the
+	// dismissal, on caret <= trigger or a changed trigger char, and NOT on a space already in the span;
+	// fails_when=any lift is missing, or `{Word of` + Escape lifts at once (the old whole-span test);
+	// no_claim=the DOM reopening (template-field.test.tsx).
 	it("holds inside the span and lifts on each documented exit", () => {
 		expect(isSuppressed("{da", 3, sup)).toBe(true);
+		expect(isSuppressed("{dat", 4, sup)).toBe(true);
 		expect(isSuppressed("{da ", 4, sup)).toBe(false);
 		expect(isSuppressed("{da}", 4, sup)).toBe(false);
 		expect(isSuppressed("{da", 0, sup)).toBe(false);
 		expect(isSuppressed("(da", 3, sup)).toBe(false);
+		const spaced = { index: 0, char: "{", caret: 8 };
+		expect(isSuppressed("{Word of", 8, spaced)).toBe(true);
+		expect(isSuppressed("{Word ofthe", 11, spaced)).toBe(true);
+		expect(isSuppressed("{Word of the", 12, spaced)).toBe(false);
 	});
 
-	// protects=a single-line paste has no line breaks.
+	// protects=a single-line paste has no line breaks; fails_when=a CRLF or LF survives, or CRLF turns into two
+	// spaces; no_claim=where the paste lands in the field.
 	it("turns newlines into spaces", () => {
 		expect(flattenNewlines("a\r\nb\nc")).toBe("a b c");
 	});

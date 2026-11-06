@@ -119,7 +119,7 @@ export function VariableMenu({
 									<li
 										role="presentation"
 										aria-hidden
-										className="px-2 pt-1.5 pb-0.5 text-xs font-semibold text-muted-foreground"
+										className="px-2 pt-2 pb-1 text-xs font-semibold text-muted-foreground"
 									>
 										{group.label}
 									</li>

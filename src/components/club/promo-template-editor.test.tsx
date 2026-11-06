@@ -112,14 +112,13 @@ describe("PromoTemplateEditor", () => {
 	});
 });
 
-// protects=the editor's save/discard/context wiring around the new fields;
-// fails_when=a pill saves as its friendly name, Discard shows on a clean load
-// or does not restore, or a failed context fetch breaks editing;
-// no_claim=the menu's own behaviour (template-field.test.tsx) or real layout.
 describe("PromoTemplateEditor wiring (#1536)", () => {
 	const discard = () =>
 		screen.queryByRole("button", { name: "Discard changes" });
 
+	// protects=no false dirty state on load, including a stored {DATE} left as typed and flagged;
+	// fails_when=Discard shows on a clean load or a stored {DATE} is silently read as the variable;
+	// no_claim=a dirty state after an edit (the next tests).
 	it("shows no Discard on a clean load, and none for a stored {DATE} or {Date}", () => {
 		renderEditor();
 		expect(discard()).toBeNull();
@@ -133,6 +132,9 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		expect(screen.getByText(/Did you mean Date\?/)).toBeTruthy();
 	});
 
+	// protects=Discard restores every field and the toggle from the saved template with no server call;
+	// fails_when=a field or toggle keeps the edit, or Discard calls the server;
+	// no_claim=what Discard restores after a Save (the stale-prop test).
 	it("Discard appears after a toggle, restores every field and the toggle without a server call", async () => {
 		const { user } = renderEditor();
 		const headline = screen.getByLabelText("Headline") as HTMLTextAreaElement;
@@ -148,12 +150,17 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		expect(updatePromoTemplate).not.toHaveBeenCalled();
 	});
 
+	// protects=a toggle alone makes the draft differ from the baseline; fails_when=only text edits count;
+	// no_claim=the toggle's effect on what Save sends.
 	it("a single toggle alone opens Discard", async () => {
 		const { user } = renderEditor();
 		await user.click(screen.getByLabelText("Why join in WhatsApp"));
 		expect(discard()).not.toBeNull();
 	});
 
+	// protects=Save sends the {camelCase} key form of a picked pill (trimmed) and Discard is gone after;
+	// fails_when=the friendly label is stored, the headline is not normalised, or Discard stays;
+	// no_claim=the server's own validation.
 	it("Save stores the key form of a picked pill, and Discard is gone right after", async () => {
 		const { user } = renderEditor();
 		const headline = screen.getByLabelText("Headline");
@@ -173,6 +180,10 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		await waitFor(() => expect(discard()).toBeNull());
 	});
 
+	// protects=the context is read once per mount with the club id and its values reach the menu (the
+	// example meeting when selectedId is null); a rejected call leaves editing intact;
+	// fails_when=the fetch repeats or is skipped, the Club name value is missing, or a rejection blocks typing;
+	// no_claim=that a real meeting is preferred (the server's selectedId).
 	it("reads the club context once and shows the meeting's values; a rejected call leaves editing intact", async () => {
 		vi.mocked(getPromoContext).mockResolvedValue({
 			club: { id: CLUB, name: "Acme TM", slug: "acme", timezone: "UTC" },
@@ -198,6 +209,55 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		const headline = screen.getByLabelText("Headline") as HTMLTextAreaElement;
 		await second.user.type(headline, "!");
 		expect(headline.value.endsWith("!")).toBe(true);
+	});
+});
+
+describe("editor wiring, round two (#1536)", () => {
+	// protects=after a rejected getPromoContext the menu's value column is empty: no value and no "not set";
+	// fails_when=a rejection prints "not set" for every row or a stale value;
+	// no_claim=the success path (the context test above).
+	it("a rejected getPromoContext leaves the menu's value column empty", async () => {
+		const { user } = renderEditor();
+		await waitFor(() => expect(getPromoContext).toHaveBeenCalledTimes(1));
+		await user.click(
+			screen.getAllByRole("button", { name: "Insert variable" })[0],
+		);
+		const options = await screen.findAllByRole("option");
+		for (const o of options) {
+			expect(o.textContent).not.toContain("not set");
+			// An icon and the label block only: no value cell.
+			expect(o.children).toHaveLength(2);
+		}
+	});
+
+	// protects=Discard restores the SAVED template after a Save, not the stale `template` prop;
+	// fails_when=Discard loads the prop, which the parent has not refreshed yet;
+	// no_claim=the parent's router.invalidate refresh.
+	it("Discard after a Save restores the saved headline while the prop is unchanged", async () => {
+		const { user } = renderEditor();
+		const headline = screen.getByLabelText("Headline") as HTMLTextAreaElement;
+		await user.clear(headline);
+		await user.type(headline, "Saved headline");
+		await user.click(
+			screen.getByRole("button", { name: /save promo template/i }),
+		);
+		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
+		await waitFor(() =>
+			expect(
+				screen.queryByRole("button", { name: "Discard changes" }),
+			).toBeNull(),
+		);
+		await user.type(headline, " edited");
+		await user.click(screen.getByRole("button", { name: "Discard changes" }));
+		expect(headline.value).toBe("Saved headline");
+	});
+
+	// protects=Reset to default calls resetPromoTemplate exactly once; fails_when=it is called twice or never;
+	// no_claim=what the server stores (null) or the toast.
+	it("Reset to default calls resetPromoTemplate once", async () => {
+		const { user } = renderEditor();
+		await user.click(screen.getByRole("button", { name: /reset to default/i }));
+		await waitFor(() => expect(resetPromoTemplate).toHaveBeenCalledTimes(1));
 	});
 });
 

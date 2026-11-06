@@ -6,8 +6,17 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROMO_VARIABLES, type PromoValues } from "#/lib/promo-template";
-import { TemplateField, UNKNOWN_CLASS } from "./template-field";
+import {
+	PROMO_VARIABLE_GROUPS,
+	PROMO_VARIABLES,
+	type PromoValues,
+	toStoredText,
+} from "#/lib/promo-template";
+import {
+	FIELD_BUTTON_CLASS,
+	TemplateField,
+	UNKNOWN_CLASS,
+} from "./template-field";
 import { OPTION_ROW_HEIGHT } from "./variable-menu";
 
 afterEach(cleanup);
@@ -51,8 +60,9 @@ function setup(props: React.ComponentProps<typeof Harness> = {}) {
 const listbox = () => screen.queryByRole("listbox");
 
 describe("opening the menu", () => {
-	// protects=@ at a boundary lists every variable in 4 groups; fails_when=a variable or group is missing;
-	// no_claim=popover placement.
+	// protects=@ at a boundary lists every variable, in as many groups as the library has;
+	// fails_when=a variable or group is missing from the list;
+	// no_claim=popover placement or real layout.
 	it("@ at the start lists every variable in its groups", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
@@ -60,10 +70,13 @@ describe("opening the menu", () => {
 		expect(within(lb).getAllByRole("option")).toHaveLength(
 			PROMO_VARIABLES.length,
 		);
-		expect(within(lb).getAllByRole("group")).toHaveLength(4);
+		expect(within(lb).getAllByRole("group")).toHaveLength(
+			PROMO_VARIABLE_GROUPS.length,
+		);
 	});
 
-	// protects=an email's @ stays literal; fails_when=@ after a letter opens it.
+	// protects=an email's @ stays literal; fails_when=@ after a letter, digit, _ or . opens the menu;
+	// no_claim=other characters before @ (the logic test says any non-word char opens).
 	it("@ directly after a letter, digit, _ or . does not open it", async () => {
 		const { user, ta } = setup();
 		for (const c of ["a", "7", "_", "."]) {
@@ -73,7 +86,8 @@ describe("opening the menu", () => {
 		}
 	});
 
-	// protects={ opens anywhere and filters by key prefix and label word; fails_when=either path breaks;
+	// protects={ opens anywhere and filters by key prefix and label word, and a miss closes it;
+	// fails_when=either match path breaks or a no-match filter keeps the menu open;
 	// no_claim=the full filter grammar (unit tests).
 	it("{wo and {day find Word of the Day; a miss closes the menu", async () => {
 		const { user, ta } = setup();
@@ -88,7 +102,8 @@ describe("opening the menu", () => {
 		expect(listbox()).toBeNull();
 	});
 
-	// protects=Escape closes and the same span stays closed; fails_when=typing reopens;
+	// protects=Escape closes and the same span stays closed while typing continues;
+	// fails_when=the next character reopens the menu;
 	// no_claim=that a new trigger later reopens (unit-tested via isSuppressed).
 	it("Escape closes and typing more in the same span does not reopen", async () => {
 		const { user, ta } = setup();
@@ -99,11 +114,51 @@ describe("opening the menu", () => {
 		await user.keyboard("t");
 		expect(listbox()).toBeNull();
 	});
+
+	// protects=Escape closes `{Word of` (a span that already holds a space) and typing `the` keeps it
+	// closed; fails_when=the space in the span lifts the suppression at once and the menu stays open;
+	// no_claim=that a space typed after the dismissal lifts it (the isSuppressed unit test).
+	it("Escape closes a span that already holds a space, and typing keeps it closed", async () => {
+		const { user, ta } = setup();
+		await user.type(ta, "{{Word of");
+		expect(listbox()).not.toBeNull();
+		await user.keyboard("{Escape}");
+		expect(listbox()).toBeNull();
+		await user.keyboard("the");
+		expect(listbox()).toBeNull();
+	});
+
+	// protects=Escape on a menu opened with Insert variable closes it even when an @ trigger sits
+	// underneath; fails_when=the @ keeps the menu open after Escape;
+	// no_claim=Insert variable's pick position (the picking tests).
+	it("Escape after @ then Insert variable closes the menu", async () => {
+		const { user, ta } = setup();
+		await user.type(ta, "@");
+		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		expect(listbox()).not.toBeNull();
+		await user.keyboard("{Escape}");
+		expect(listbox()).toBeNull();
+		expect(document.activeElement).toBe(ta);
+	});
+
+	// protects=an @ filter keeps spaces so `@Word of` still lists Word of the Day, while "@ the" is prose;
+	// fails_when=the menu closes at the space inside the filter, or opens for an @ followed by a space;
+	// no_claim=the boundary rule (the other opening tests).
+	it("@Word of keeps the menu open on one option; '@ the' does not open it", async () => {
+		const { user, ta } = setup();
+		await user.type(ta, "@Word of");
+		expect(screen.getAllByRole("option")).toHaveLength(1);
+		await user.clear(ta);
+		await user.type(ta, "@ the");
+		expect(listbox()).toBeNull();
+	});
 });
 
 describe("picking", () => {
-	// protects=ArrowDown+Enter inserts the second option at the trigger, caret after, stored key form;
-	// fails_when=the trigger text stays, the caret is misplaced or the label is stored.
+	// protects=ArrowDown+Enter inserts the second option (Time: the first is active on open) at the trigger,
+	// caret after, and the draft the parent stores reads {time};
+	// fails_when=the trigger text stays, the caret is misplaced or the stored form is the label;
+	// no_claim=native undo of the edit (jsdom has no undo stack).
 	it("ArrowDown then Enter replaces the trigger and filter with the pill", async () => {
 		const spy = vi.fn();
 		const { user, ta } = setup({ spy });
@@ -112,9 +167,13 @@ describe("picking", () => {
 		expect(ta.value).toBe("Hi {Time}");
 		expect(ta.selectionStart).toBe(ta.value.length);
 		expect(listbox()).toBeNull();
+		expect(toStoredText(spy.mock.calls.at(-1)?.[0] as string)).toBe(
+			"Hi {time}",
+		);
 	});
 
-	// protects=Tab picks like Enter; fails_when=Tab moves focus.
+	// protects=Tab picks like Enter; fails_when=Tab moves focus instead of inserting;
+	// no_claim=Shift+Tab.
 	it("Tab inserts the first match", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "{{da");
@@ -123,7 +182,8 @@ describe("picking", () => {
 		expect(document.activeElement).toBe(ta);
 	});
 
-	// protects=ArrowUp wraps to the last option; fails_when=it stops at the top.
+	// protects=ArrowUp wraps to the last option; fails_when=it stops at the top;
+	// no_claim=ArrowDown wrapping past the last option.
 	it("ArrowUp from the first option wraps to the last", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
@@ -134,7 +194,8 @@ describe("picking", () => {
 		).toBe(true);
 	});
 
-	// protects=a mouse pick inserts and keeps focus in the textarea; fails_when=focus moves to the row.
+	// protects=a mouse pick inserts and keeps focus in the textarea; fails_when=focus moves to the row;
+	// no_claim=a real pointer (user-event dispatches the events, not hit-testing).
 	it("clicking an option inserts it with focus still in the textarea", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
@@ -144,7 +205,8 @@ describe("picking", () => {
 	});
 
 	// protects=Insert variable opens the same listbox, focus in the textarea, pick at the last caret;
-	// fails_when=it inserts at the end or steals focus.
+	// fails_when=it inserts at the end or steals focus;
+	// no_claim=the phone keyboard staying up.
 	it("Insert variable inserts at the last caret position", async () => {
 		const { user, ta } = setup({ initial: "ab cd" });
 		await user.click(ta);
@@ -157,7 +219,8 @@ describe("picking", () => {
 		expect(ta.value).toBe("ab{Date} cd");
 	});
 
-	// protects=a never-focused field gets the variable at its end; fails_when=it is lost or put at the start.
+	// protects=a never-focused field gets the variable at its end; fails_when=it is lost or put at the start;
+	// no_claim=a replaced selection (the last-caret test covers a collapsed caret only).
 	it("Insert variable on a never-focused field appends", async () => {
 		const { user, ta } = setup({ initial: "Hello " });
 		await user.click(screen.getByRole("button", { name: "Insert variable" }));
@@ -168,7 +231,8 @@ describe("picking", () => {
 
 describe("accessibility", () => {
 	// protects=the combobox attributes exist only while open, and no explicit role;
-	// fails_when=they linger when closed or the textarea gets role=combobox.
+	// fails_when=they linger when closed or the textarea gets role=combobox;
+	// no_claim=how a screen reader voices them.
 	it("sets aria-autocomplete, -controls and -activedescendant only while open", async () => {
 		const { user, ta } = setup();
 		const attrs = () =>
@@ -189,7 +253,8 @@ describe("accessibility", () => {
 		expect(attrs()).toEqual([null, null, null]);
 	});
 
-	// protects=a polite announcement on open; fails_when=the live region stays empty.
+	// protects=a polite announcement on open and on pick; fails_when=the live region stays empty;
+	// no_claim=that a screen reader speaks it.
 	it("announces the count on open and the pick after", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
@@ -215,7 +280,8 @@ describe("accessibility", () => {
 	});
 
 	// protects=the value column: value, "not set", and nothing while unknown;
-	// fails_when=an empty value shows blank or null values print "not set".
+	// fails_when=an empty value shows blank or null values print "not set";
+	// no_claim=truncation of a long value.
 	it("shows values, 'not set', or nothing", async () => {
 		const first = setup({ values: VALUES });
 		await first.user.type(first.ta, "@");
@@ -234,8 +300,57 @@ describe("accessibility", () => {
 	});
 });
 
+describe("controls and announcements", () => {
+	// protects=the Insert variable button carries the 44px-below-md class, read from the component's
+	// constant; fails_when=the class is dropped from the button; no_claim=real rendered height (QA pass).
+	it("Insert variable carries FIELD_BUTTON_CLASS", () => {
+		setup();
+		const button = screen.getByRole("button", { name: "Insert variable" });
+		for (const c of FIELD_BUTTON_CLASS.split(" "))
+			expect(button.classList.contains(c)).toBe(true);
+		expect(FIELD_BUTTON_CLASS.split(" ")[0]).toBe("h-11");
+	});
+
+	// protects=a reopened menu is announced again: the opening text is cleared on close;
+	// fails_when=open, Escape, reopen leaves the same live-region text and so says nothing;
+	// no_claim=that a screen reader speaks it, or that an "Inserted X" survives (the announce test).
+	it("empties the opening announcement while the menu is closed", async () => {
+		const { user, ta } = setup();
+		const live = () =>
+			document.querySelector("[aria-live=polite]")?.textContent;
+		await user.type(ta, "@");
+		expect(live()).toBe(
+			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+		);
+		await user.keyboard("{Escape}");
+		expect(live()).toBe("");
+		await user.clear(ta);
+		await user.type(ta, "@");
+		expect(live()).toBe(
+			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+		);
+	});
+
+	// protects=the backdrop's width compensation runs on mount, on a value change and on resize without
+	// throwing, and leaves 0px where nothing measures a scrollbar; fails_when=the effect throws or leaves
+	// a non-numeric right; no_claim=any real scrollbar width: jsdom measures nothing (QA pass).
+	it("the scrollbar compensation effect runs and settles at 0px in jsdom", async () => {
+		const { user, ta } = setup({ multiline: true, rows: 2 });
+		const backdrop = () =>
+			document.querySelector<HTMLElement>(
+				"[data-slot=template-field-backdrop]",
+			);
+		expect(backdrop()?.style.right).toBe("0px");
+		await user.type(ta, "some text");
+		window.dispatchEvent(new Event("resize"));
+		expect(backdrop()?.style.right).toBe("0px");
+	});
+});
+
 describe("pills and Enter", () => {
-	// protects=Backspace/Delete/Arrow rules reach the DOM; fails_when=the key deletes one char.
+	// protects=Backspace and ArrowLeft rules reach the DOM, and a typo is plain text;
+	// fails_when=the key deletes one char, or an unknown token is atomic;
+	// no_claim=Delete/ArrowRight in the DOM (logic tests) or a click snapping the caret.
 	it("Backspace after a pill removes it whole; ArrowLeft jumps; a typo is plain text", async () => {
 		const { user, ta } = setup({ initial: "x{Date}" });
 		await user.click(ta);
@@ -253,7 +368,8 @@ describe("pills and Enter", () => {
 		expect(typo.ta.value).toBe("{Datee");
 	});
 
-	// protects=single-line fields swallow Enter, multi-line accept it; fails_when=either flips.
+	// protects=single-line fields swallow Enter, multi-line accept it; fails_when=either flips;
+	// no_claim=Enter while the menu is open (it picks, see the picking tests).
 	it("Enter is swallowed when single-line and kept when multi-line", async () => {
 		const single = setup({ multiline: false, initial: "ab" });
 		await single.user.type(single.ta, "{Enter}c");
@@ -267,13 +383,14 @@ describe("pills and Enter", () => {
 
 describe("counter, typos and defaults", () => {
 	// protects=the counter counts the STORED length ({Word of the Day} = 14 not 17);
-	// fails_when=it counts the friendly text.
+	// fails_when=it counts the friendly text; no_claim=the over-limit styling.
 	it("counts the stored form", () => {
 		setup({ initial: "{Word of the Day}" });
 		expect(screen.getByText("14 / 160")).toBeTruthy();
 	});
 
-	// protects=bullets count lines and the longest line; fails_when=blank lines are counted.
+	// protects=bullets count lines and the longest line; fails_when=blank lines are counted;
+	// no_claim=the over-limit styling or the max-lines refusal at Save.
 	it("shows bullet count and longest line", () => {
 		setup({
 			label: "Headline",
@@ -304,7 +421,8 @@ describe("counter, typos and defaults", () => {
 		expect(screen.queryByText(/Not a variable/)).toBeNull();
 	});
 
-	// protects=no-suggestion typos say "exactly as typed" with no Fix; fails_when=a Fix is offered.
+	// protects=no-suggestion typos say "exactly as typed" with no Fix; fails_when=a Fix is offered;
+	// no_claim=the suggestion thresholds (#1535's suggestPlaceholder).
 	it("{foo} has no Fix", () => {
 		setup({ initial: "{foo}" });
 		expect(
@@ -313,8 +431,9 @@ describe("counter, typos and defaults", () => {
 		expect(screen.queryByRole("button", { name: "Fix" })).toBeNull();
 	});
 
-	// protects=Use default only when changed, restores without a server call;
-	// fails_when=it shows on an unchanged field or does not restore.
+	// protects=Use default only when changed, restores the default;
+	// fails_when=it shows on an unchanged field or does not restore;
+	// no_claim=the absence of a server call (this component has none to call).
 	it("Use default appears after an edit and restores the default", async () => {
 		const { user, ta } = setup({ initial: "Default {Date}" });
 		expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
@@ -325,8 +444,25 @@ describe("counter, typos and defaults", () => {
 	});
 });
 
+describe("a stored {DATE}", () => {
+	// protects=a stored {DATE} loads left as typed, painted as unknown, with a suggestion and a Fix;
+	// fails_when=it is silently read as the Date variable (painted as a pill, no help);
+	// no_claim=the editor's Discard state (promo-template-editor.test.tsx).
+	it("is left as typed, underlined, with Did you mean Date? and Fix", () => {
+		const { ta } = setup({ initial: "Join {DATE}" });
+		expect(ta.value).toBe("Join {DATE}");
+		const span = document.querySelector(
+			"[data-slot=template-field-backdrop] span",
+		);
+		expect(span?.className).toBe(UNKNOWN_CLASS);
+		expect(screen.getByText(/Did you mean Date\?/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Fix" })).toBeTruthy();
+	});
+});
+
 describe("paste", () => {
-	// protects=a pasted stored key reads as its friendly pill immediately; fails_when=the raw key lands.
+	// protects=a pasted stored key reads as its friendly pill immediately; fails_when=the raw key lands;
+	// no_claim=paste of rich text or files.
 	it("converts a pasted {wordOfTheDay}", async () => {
 		const { user, ta } = setup();
 		await user.click(ta);
@@ -334,7 +470,8 @@ describe("paste", () => {
 		expect(ta.value).toBe("{Word of the Day}");
 	});
 
-	// protects=single-line fields flatten pasted newlines; fails_when=a newline lands.
+	// protects=single-line fields flatten pasted newlines; fails_when=a newline lands;
+	// no_claim=typed Enter (the Enter test).
 	it("turns a newline pasted into a single-line field into a space", async () => {
 		const { user, ta } = setup({ multiline: false });
 		await user.click(ta);
@@ -342,7 +479,8 @@ describe("paste", () => {
 		expect(ta.value).toBe("a b");
 	});
 
-	// protects=a paste landing inside a pill leaves a valid pill; fails_when=the pill is split.
+	// protects=a paste landing inside a pill leaves a valid pill; fails_when=the pill is split;
+	// no_claim=which edge the paste lands on (either is accepted).
 	it("a paste at a caret inside a pill does not split it", async () => {
 		const { user, ta } = setup({ initial: "{Date}" });
 		await user.click(ta);
