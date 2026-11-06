@@ -88,7 +88,7 @@ describe.skipIf(!hasTestDb)("marketing blasts (#931)", () => {
 	});
 
 	describe("the Promote sheet's context", () => {
-		it("opens on the next meeting, says it is online, and never carries the link", async () => {
+		it("opens on the next meeting, says it is online, and carries the link only as joinLink (#1534)", async () => {
 			await testDb
 				.update(meetings)
 				.set({ joinUrl: ROOM, theme: "Beginnings", promoNote: "Open house!" })
@@ -99,10 +99,18 @@ describe.skipIf(!hasTestDb)("marketing blasts (#931)", () => {
 			expect(m?.online).toBe(true);
 			expect(m?.theme).toBe("Beginnings");
 			expect(m?.promoNote).toBe("Open house!");
+			// The admin-gated reader fills `{joinLink}`; the value rides under that
+			// one key and no column-shaped one.
+			expect(m?.joinLink).toBe(ROOM);
 			const json = JSON.stringify(ctx);
-			expect(json).not.toContain(ROOM);
+			expect(json.split(ROOM)).toHaveLength(2);
 			expect(json).not.toMatch(/join[_-]?url/i);
 			expect(ctx.template).toEqual(DEFAULT_PROMO_TEMPLATE);
+		});
+
+		it("a meeting with no link has no joinLink", async () => {
+			const ctx = await loadPromoContext(seed.clubId, new Date());
+			expect(ctx.meetings[0]?.joinLink ?? null).toBeNull();
 		});
 
 		it("a meeting with no link reads as not online", async () => {

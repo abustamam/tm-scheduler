@@ -523,7 +523,7 @@ describe.skipIf(!hasTestDb)("update_meeting_schedule (#1514)", () => {
 		expect(p.plan.recreated).toHaveLength(0);
 		expect(p.plan.staying).toHaveLength(before.length);
 		for (const m of p.plan.staying) {
-			expect(m.note).toContain("default length or venue");
+			expect(m.note).toContain("default length, venue or video-call link");
 			expect(m.note).toContain("stays at its old time");
 			expect(m.note).not.toContain("Someone has touched");
 		}

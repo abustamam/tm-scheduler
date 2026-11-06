@@ -195,3 +195,8 @@ export const JOIN_URL_FIELD = z.string().superRefine((raw, ctx) => {
 		message: `Keep the video call link under ${MEETING_LIMITS.joinUrl} characters.`,
 	});
 });
+
+/** What a non-blank video-call link that is not a link is told (#731, #1534):
+ *  one copy for the club default's field and its server schema. */
+export const JOIN_URL_NOT_A_LINK_MESSAGE =
+	"That doesn't look like a link. Paste the full meeting URL, e.g. https://zoom.us/j/1234567890.";

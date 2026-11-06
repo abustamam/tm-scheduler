@@ -81,10 +81,10 @@ function patternChanged(
 /**
  * Why a meeting is NOT safe to reconcile.
  * - `touched`: someone changed or answered something on this meeting.
- * - `defaults_differ`: nothing but its length or location differs from the
+ * - `defaults_differ`: nothing but its length, location or video-call link differs from the
  *   club's CURRENT defaults. Meetings copy those values when they are created,
  *   so this is also what a meeting looks like after the club changed its default
- *   length or venue; there is no record of which of the two happened.
+ *   length, venue or video-call link; there is no record of which of the two happened.
  */
 export type KeptReason = "touched" | "defaults_differ";
 
@@ -209,6 +209,7 @@ export async function classifyMeetings(
 			id: clubs.id,
 			defaultMeetingMinutes: clubs.defaultMeetingMinutes,
 			defaultLocation: clubs.defaultLocation,
+			defaultJoinUrl: clubs.defaultJoinUrl,
 		})
 		.from(clubs)
 		.where(inArray(clubs.id, clubIds));
@@ -228,7 +229,14 @@ export async function classifyMeetings(
 			{ location: ruleByClub.get(m.clubId)?.location ?? null },
 			club,
 		);
-		return m.lengthMinutes !== d.lengthMinutes || m.location !== d.location;
+		return (
+			m.lengthMinutes !== d.lengthMinutes ||
+			m.location !== d.location ||
+			// The link is a per-meeting override only when it is set to something
+			// other than the club default (#1534). A null link predates the default
+			// (or the admin cleared it) and is untouched, like the default itself.
+			(m.joinUrl !== null && m.joinUrl !== d.joinUrl)
+		);
 	};
 
 	for (const m of rows) {
@@ -244,7 +252,6 @@ export async function classifyMeetings(
 			claimedSet.has(m.id) ||
 			declinedSet.has(m.id) ||
 			guestTouched.has(m.id) ||
-			m.joinUrl !== null ||
 			m.meetingNumber !== null ||
 			// A templated meeting is not an empty shell, whatever its content
 			// fields say. Until #622 that meant "somebody deliberately reshaped

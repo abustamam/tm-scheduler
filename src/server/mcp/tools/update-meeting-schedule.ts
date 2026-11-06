@@ -91,7 +91,7 @@ export const SWITCHED_OFF_MESSAGE =
 export const TOUCHED_NOTE =
 	"Someone has touched this meeting, so it keeps its old time. Move it on its own in the app.";
 export const DEFAULTS_DIFFER_NOTE =
-	"This meeting's length or venue differs from the club's current default length or venue. The club's default was probably changed after the meeting was created, so it stays at its old time. Move it on its own in the app.";
+	"This meeting's length, venue or video-call link differs from the club's current default length, venue or video-call link. The club's default was probably changed after the meeting was created, so it stays at its old time. Move it on its own in the app.";
 const STALE_PLAN_MESSAGE =
 	"The club's schedule or its meetings changed since that preview. Show the user the fresh plan and ask again.";
 

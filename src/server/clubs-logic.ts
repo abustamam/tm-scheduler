@@ -1,10 +1,10 @@
 // Club identifier resolution. Lives away from the createServerFn wrapper
 // (`clubs.ts`, client-imported) so its `db` import is never bundled into the
 // client. See the header of `members-logic.ts`.
-import { and, eq, or, type SQL, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, roleDefinitions } from "#/db/schema";
+import { clubs, meetings, roleDefinitions } from "#/db/schema";
 import { AGENDA_LAYOUTS, type AgendaLayout } from "#/lib/agenda-layouts";
 import { GE_LOCKED_MESSAGE } from "#/lib/club-agendas-copy";
 import { isClubArchived } from "#/lib/club-archive";
@@ -15,8 +15,13 @@ import {
 	INVALID_TIMEZONE_MESSAGE,
 	isSupportedClubTimezone,
 } from "#/lib/club-timezone";
-import { MEETING_FIELDS } from "#/lib/meeting-limits";
+import {
+	JOIN_URL_FIELD,
+	JOIN_URL_NOT_A_LINK_MESSAGE,
+	MEETING_FIELDS,
+} from "#/lib/meeting-limits";
 import { DEFAULT_COUNTRY_CODE } from "#/lib/phone";
+import { normalizePresentationUrl } from "#/lib/presentation-url";
 import { duringNotesFor, ROLE_TEMPLATE } from "#/lib/role-template";
 import { refuseTableTopicsSeconds } from "#/lib/table-topics-limits";
 import { isReadableClub } from "./club-readable-logic";
@@ -152,6 +157,8 @@ export type ClubProfile = {
 	mission: string | null;
 	meetingSchedule: string | null;
 	defaultLocation: string | null;
+	/** The video-call link new meetings start with (#1534). Any active member may read it, like `defaultLocation`. */
+	defaultJoinUrl: string | null;
 	defaultCountryCode: string | null;
 };
 
@@ -166,6 +173,7 @@ export async function getClubProfile(
 			mission: clubs.mission,
 			meetingSchedule: clubs.meetingSchedule,
 			defaultLocation: clubs.defaultLocation,
+			defaultJoinUrl: clubs.defaultJoinUrl,
 			defaultCountryCode: clubs.defaultCountryCode,
 		})
 		.from(clubs)
@@ -242,6 +250,24 @@ const countryCode = z
 	.nullable()
 	.optional();
 
+/**
+ * The club's default video-call link (#1534), validated and normalized HERE so
+ * the stored value is the one `normalizePresentationUrl` returns, like the
+ * meeting column. Blank clears it. A non-blank value that is not a link is
+ * REFUSED rather than stored as null, so a typo never looks saved.
+ */
+const defaultJoinUrl = JOIN_URL_FIELD.transform((raw, ctx) => {
+	if (!raw.trim()) return null;
+	const normalized = normalizePresentationUrl(raw);
+	if (normalized === null) {
+		ctx.addIssue({ code: "custom", message: JOIN_URL_NOT_A_LINK_MESSAGE });
+		return z.NEVER;
+	}
+	return normalized;
+})
+	.nullable()
+	.optional();
+
 export const clubProfileSchema = z.object({
 	clubId: z.string().uuid(),
 	district: emptyToNull,
@@ -251,6 +277,7 @@ export const clubProfileSchema = z.object({
 		.transform((s) => (s.length === 0 ? null : s))
 		.nullable()
 		.optional(),
+	defaultJoinUrl,
 	defaultCountryCode: countryCode,
 });
 export type ClubProfileInput = z.infer<typeof clubProfileSchema>;
@@ -268,6 +295,11 @@ export async function applyClubProfileUpdate(input: ClubProfileInput) {
 			// existed saves without it); only an explicit empty or null clears it.
 			...(input.defaultLocation !== undefined && {
 				defaultLocation: input.defaultLocation,
+			}),
+			// Same omitted-leaves-alone rule (#1534): an open tab from before this
+			// field existed must not wipe the link on its next save.
+			...(input.defaultJoinUrl !== undefined && {
+				defaultJoinUrl: input.defaultJoinUrl,
 			}),
 			defaultCountryCode: input.defaultCountryCode ?? null,
 		})
@@ -310,6 +342,63 @@ export async function applyClubScheduleSettingsUpdate(
 		.returning({ id: clubs.id });
 	if (!updated) throw new Error("Club not found.");
 	return { ok: true as const };
+}
+
+/** The upcoming meetings "Apply to upcoming meetings" would write: future, not
+ *  cancelled, and with no link of their own. ONE predicate for the count and the
+ *  write, so the button cannot promise a number the click does not write. */
+function upcomingWithoutLink(clubId: string, now: Date) {
+	return and(
+		eq(meetings.clubId, clubId),
+		gte(meetings.scheduledAt, now),
+		ne(meetings.status, "cancelled"),
+		isNull(meetings.joinUrl),
+	);
+}
+
+/** How many upcoming meetings have no link (#1534): N on the club-settings
+ *  button, from the server. */
+export async function countUpcomingMeetingsWithoutJoinUrl(
+	clubId: string,
+	now: Date = new Date(),
+	conn: DbOrTx = db,
+): Promise<number> {
+	const [row] = await conn
+		.select({ n: sql<number>`count(*)::int` })
+		.from(meetings)
+		.where(upcomingWithoutLink(clubId, now));
+	return row?.n ?? 0;
+}
+
+/**
+ * Write the club's default link onto its upcoming meetings that have none
+ * (#1534). The null is re-checked IN the UPDATE, so a link an officer typed
+ * since the count was read is never overwritten. Reads the stored default
+ * rather than trusting a client value. A club with no default writes nothing.
+ */
+export async function applyDefaultJoinUrlToUpcoming(
+	clubId: string,
+	now: Date = new Date(),
+	conn: DbOrTx = db,
+): Promise<{ updated: number }> {
+	// Read the default and write it in ONE transaction, with the club row locked
+	// `FOR UPDATE`, so a default changed between the two cannot leave the stale
+	// value on the meetings. The null/status/future predicate stays in the UPDATE.
+	return conn.transaction(async (tx) => {
+		const [club] = await tx
+			.select({ defaultJoinUrl: clubs.defaultJoinUrl })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("update");
+		if (!club) throw new Error("Club not found.");
+		if (!club.defaultJoinUrl) return { updated: 0 };
+		const rows = await tx
+			.update(meetings)
+			.set({ joinUrl: club.defaultJoinUrl })
+			.where(upcomingWithoutLink(clubId, now))
+			.returning({ id: meetings.id });
+		return { updated: rows.length };
+	});
 }
 
 // ---------------------------------------------------------------------------
