@@ -5,25 +5,31 @@
 // (`updatePromoTemplate` → `requireClubRole(…, ["admin"])`).
 
 import { Loader2, Megaphone } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
-import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
-import { Textarea } from "#/components/ui/textarea";
 import {
 	DEFAULT_PROMO_TEMPLATE,
+	examplePromoMeeting,
 	PROMO_CHANNELS,
 	PROMO_LIMITS,
 	PROMO_PARTS,
-	PROMO_PLACEHOLDERS,
 	type PromoChannel,
 	type PromoPart,
 	type PromoTemplate,
 	promoTemplateSchema,
-	templateWarnings,
+	promoValues,
+	templatesEqual,
+	toEditorText,
+	toStoredText,
 } from "#/lib/promo-template";
-import { resetPromoTemplate, updatePromoTemplate } from "#/server/promo";
+import {
+	getPromoContext,
+	type PromoContext,
+	resetPromoTemplate,
+	updatePromoTemplate,
+} from "#/server/promo";
+import { TemplateField } from "./template-field";
 
 const PromoteSheet = lazy(() =>
 	import("./promote-sheet").then((m) => ({ default: m.PromoteSheet })),
@@ -49,6 +55,37 @@ export function bulletsFromText(text: string): string[] {
 		.filter(Boolean);
 }
 
+/** The four text fields in EDITOR form (friendly labels), as the fields hold them. */
+interface EditorFields {
+	headline: string;
+	intro: string;
+	bullets: string;
+	cta: string;
+}
+
+function editorFields(t: PromoTemplate): EditorFields {
+	return {
+		headline: toEditorText(t.headline),
+		intro: toEditorText(t.intro),
+		bullets: toEditorText(t.whyJoin.join("\n")),
+		cta: toEditorText(t.callToAction),
+	};
+}
+
+/** The template the fields currently say, in STORED form. */
+function draftFrom(
+	f: EditorFields,
+	channels: PromoTemplate["channels"],
+): PromoTemplate {
+	return {
+		headline: toStoredText(f.headline),
+		intro: toStoredText(f.intro),
+		whyJoin: bulletsFromText(toStoredText(f.bullets)),
+		callToAction: toStoredText(f.cta),
+		channels,
+	};
+}
+
 export function PromoTemplateEditor({
 	clubId,
 	template,
@@ -62,29 +99,57 @@ export function PromoTemplateEditor({
 	storedInvalid?: boolean;
 	onSaved: () => void | Promise<void>;
 }) {
-	const [headline, setHeadline] = useState(template.headline);
-	const [intro, setIntro] = useState(template.intro);
-	const [bullets, setBullets] = useState(template.whyJoin.join("\n"));
-	const [cta, setCta] = useState(template.callToAction);
+	const [fields, setFields] = useState(() => editorFields(template));
 	const [channels, setChannels] = useState(template.channels);
+	// The stored template the fields were last loaded from: what "Discard
+	// changes" restores and what "changed?" compares against. Compared through
+	// the same editor round trip as the draft, so a stored `{Date}` (read as the
+	// variable) does not open dirty.
+	const [baseline, setBaseline] = useState(template);
 	const [saving, setSaving] = useState(false);
 	const [promoteOpen, setPromoteOpen] = useState(false);
+	const [context, setContext] = useState<PromoContext | null>(null);
 
-	const draft: PromoTemplate = {
-		headline,
-		intro,
-		whyJoin: bulletsFromText(bullets),
-		callToAction: cta,
-		channels,
-	};
-	const warnings = templateWarnings(draft);
+	// The menu's value column: the selected meeting, else the example one.
+	const selectedMeeting = context
+		? context.meetings.find((m) => m.id === context.selectedId)
+		: undefined;
+	const values = context
+		? promoValues(
+				context.club,
+				selectedMeeting ??
+					examplePromoMeeting(new Date(), context.club.timezone),
+				window.location.origin,
+			)
+		: null;
+
+	const draft = draftFrom(fields, channels);
+	const changed = !templatesEqual(
+		draft,
+		draftFrom(editorFields(baseline), baseline.channels),
+	);
+	const defaults = editorFields(DEFAULT_PROMO_TEMPLATE);
+	const setField = (k: keyof EditorFields) => (v: string) =>
+		setFields((prev) => ({ ...prev, [k]: v }));
+
+	// The club's context, once per mount: the menu's value column reads it, and
+	// the preview (next issue) will too. A failure leaves the fields editable.
+	useEffect(() => {
+		let cancelled = false;
+		getPromoContext({ data: { clubId } })
+			.then((ctx) => {
+				if (!cancelled) setContext(ctx);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [clubId]);
 
 	function load(t: PromoTemplate) {
-		setHeadline(t.headline);
-		setIntro(t.intro);
-		setBullets(t.whyJoin.join("\n"));
-		setCta(t.callToAction);
+		setFields(editorFields(t));
 		setChannels(t.channels);
+		setBaseline(t);
 	}
 
 	async function onSave(e: React.FormEvent<HTMLFormElement>) {
@@ -99,6 +164,9 @@ export function PromoTemplateEditor({
 		setSaving(true);
 		try {
 			await updatePromoTemplate({ data: { clubId, template: parsed.data } });
+			// The schema trims; loading the normalised snapshot is what makes
+			// "Discard changes" absent right after Save.
+			load(parsed.data);
 			toast.success("Promo template saved.");
 			await onSaved();
 		} catch (err) {
@@ -144,11 +212,8 @@ export function PromoTemplateEditor({
 			<p className="text-sm text-muted-foreground">
 				One template drafts a WhatsApp message, an email and a flyer for any
 				meeting. You copy or share them yourself; nothing is sent from GavelUp.
-				Placeholders:{" "}
-				{PROMO_PLACEHOLDERS.map((p) => (
-					<code key={p} className="mr-1 text-xs">{`{${p}}`}</code>
-				))}
-				— a line whose placeholder is empty is left out.
+				Type @ or {"{"} in any field to insert a variable, or use Insert
+				variable. A line whose variable is empty for a meeting is left out.
 			</p>
 
 			{storedInvalid ? (
@@ -164,46 +229,46 @@ export function PromoTemplateEditor({
 			) : null}
 
 			<form onSubmit={onSave} className="space-y-4">
-				<div className="space-y-2">
-					<Label htmlFor="promo-headline">Headline</Label>
-					<Input
-						id="promo-headline"
-						value={headline}
-						maxLength={PROMO_LIMITS.headline}
-						onChange={(e) => setHeadline(e.target.value)}
-					/>
-				</div>
-				<div className="space-y-2">
-					<Label htmlFor="promo-intro">Intro</Label>
-					<Textarea
-						id="promo-intro"
-						rows={7}
-						value={intro}
-						maxLength={PROMO_LIMITS.intro}
-						onChange={(e) => setIntro(e.target.value)}
-					/>
-				</div>
-				<div className="space-y-2">
-					<Label htmlFor="promo-why">Why join (one per line)</Label>
-					<Textarea
-						id="promo-why"
-						rows={5}
-						value={bullets}
-						onChange={(e) => setBullets(e.target.value)}
-					/>
-					<p className="text-xs text-muted-foreground">
-						Up to {PROMO_LIMITS.bullets}.
-					</p>
-				</div>
-				<div className="space-y-2">
-					<Label htmlFor="promo-cta">Call to action</Label>
-					<Input
-						id="promo-cta"
-						value={cta}
-						maxLength={PROMO_LIMITS.callToAction}
-						onChange={(e) => setCta(e.target.value)}
-					/>
-				</div>
+				<TemplateField
+					id="promo-headline"
+					label="Headline"
+					multiline={false}
+					value={fields.headline}
+					onChange={setField("headline")}
+					limit={PROMO_LIMITS.headline}
+					defaultValue={defaults.headline}
+					values={values}
+				/>
+				<TemplateField
+					id="promo-intro"
+					label="Intro"
+					rows={7}
+					value={fields.intro}
+					onChange={setField("intro")}
+					limit={PROMO_LIMITS.intro}
+					defaultValue={defaults.intro}
+					values={values}
+				/>
+				<TemplateField
+					id="promo-why"
+					label="Why join (one per line)"
+					rows={5}
+					value={fields.bullets}
+					onChange={setField("bullets")}
+					bullets={{ perLine: PROMO_LIMITS.bullet, max: PROMO_LIMITS.bullets }}
+					defaultValue={defaults.bullets}
+					values={values}
+				/>
+				<TemplateField
+					id="promo-cta"
+					label="Call to action"
+					multiline={false}
+					value={fields.cta}
+					onChange={setField("cta")}
+					limit={PROMO_LIMITS.callToAction}
+					defaultValue={defaults.cta}
+					values={values}
+				/>
 
 				<fieldset className="space-y-2">
 					<legend className="text-sm font-semibold">
@@ -245,16 +310,6 @@ export function PromoTemplateEditor({
 					</table>
 				</fieldset>
 
-				{warnings.length > 0 ? (
-					<p
-						role="alert"
-						className="rounded-md border border-warning/50 bg-warning-soft p-2 text-sm"
-					>
-						Not a placeholder: {warnings.map((w) => `{${w}}`).join(", ")}. It
-						will show exactly as typed.
-					</p>
-				) : null}
-
 				<div className="flex gap-2">
 					<Button type="submit" disabled={saving} className="flex-1">
 						{saving ? (
@@ -263,13 +318,23 @@ export function PromoTemplateEditor({
 							"Save promo template"
 						)}
 					</Button>
+					{changed ? (
+						<Button
+							type="button"
+							variant="ghost"
+							onClick={() => load(baseline)}
+							disabled={saving}
+						>
+							Discard changes
+						</Button>
+					) : null}
 					<Button
 						type="button"
 						variant="outline"
 						onClick={onReset}
 						disabled={saving}
 					>
-						Reset to default
+						Reset to default (follows future updates)
 					</Button>
 				</div>
 			</form>
