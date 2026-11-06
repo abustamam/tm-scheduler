@@ -20,7 +20,7 @@ import {
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToReadableStream, renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RouteError } from "./route-error";
+import { isNetworkFailure, RouteError } from "./route-error";
 
 // Both strings would be on screen under TanStack's default error component
 // (its "Show Error" panel is open by default outside production). Neither may
@@ -350,5 +350,122 @@ describe("router wiring (#878)", () => {
 		expect(src).toMatch(
 			/^import \{ RouteError \} from "\.\/components\/route-error";$/m,
 		);
+	});
+});
+
+describe("RouteError offline (network failure)", () => {
+	const reload = vi.fn();
+	let onLine: PropertyDescriptor | undefined;
+	const originalLocation = window.location;
+
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		reload.mockReset();
+		onLine = Object.getOwnPropertyDescriptor(
+			Object.getPrototypeOf(navigator),
+			"onLine",
+		);
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: { ...originalLocation, reload },
+		});
+	});
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		Object.defineProperty(window, "location", {
+			configurable: true,
+			value: originalLocation,
+		});
+		if (onLine)
+			Object.defineProperty(Object.getPrototypeOf(navigator), "onLine", onLine);
+	});
+
+	function setOnLine(v: boolean) {
+		Object.defineProperty(navigator, "onLine", {
+			configurable: true,
+			get: () => v,
+		});
+	}
+
+	function failingRouter(err: Error) {
+		const rootRoute = createRootRoute({ component: () => <Outlet /> });
+		const boom = createRoute({
+			getParentRoute: () => rootRoute,
+			path: "/club/$clubId/boom",
+			loader: () => {
+				throw err;
+			},
+			component: () => <p>never</p>,
+		});
+		return createRouter({
+			routeTree: rootRoute.addChildren([boom]),
+			history: createMemoryHistory({ initialEntries: ["/club/thr/boom"] }),
+			defaultErrorComponent: RouteError,
+		});
+	}
+
+	it.each([
+		"Failed to fetch",
+		"Load failed",
+		"NetworkError when attempting to fetch resource.",
+	])("shows the offline screen and a full reload for TypeError %s", async (msg) => {
+		setOnLine(true);
+		render(<RouterProvider router={failingRouter(new TypeError(msg))} />);
+		expect(await screen.findByText("You're offline")).toBeTruthy();
+		expect(screen.queryByText("Something went wrong")).toBeNull();
+		expect(screen.getByRole("link", { name: "Back to club" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Go home" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows the offline screen when navigator.onLine is false, whatever the error", async () => {
+		setOnLine(false);
+		render(<RouterProvider router={failingRouter(new Error("boom"))} />);
+		expect(await screen.findByText("You're offline")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+		expect(reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the old copy and invalidate for a non-network error", async () => {
+		setOnLine(true);
+		render(
+			<RouterProvider router={failingRouter(new Error("Failed to fetch"))} />,
+		);
+		expect(await screen.findByText("Something went wrong")).toBeTruthy();
+		expect(screen.queryByText("You're offline")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(reload).not.toHaveBeenCalled();
+	});
+});
+
+describe("isNetworkFailure", () => {
+	it("is false with no navigator and a plain error (SSR)", () => {
+		// Remove `navigator` itself so the DEFAULT argument's SSR branch runs.
+		// Passing `undefined` explicitly re-triggers the default, which in jsdom
+		// reads `navigator.onLine === true` and passes for the wrong reason.
+		vi.stubGlobal("navigator", undefined);
+		try {
+			expect(() => isNetworkFailure(new Error("x"))).not.toThrow();
+			expect(isNetworkFailure(new Error("x"))).toBe(false);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+	it("matches the three engine messages only on a TypeError", () => {
+		for (const m of [
+			"Failed to fetch",
+			"Load failed",
+			"NetworkError when attempting to fetch resource.",
+		]) {
+			expect(isNetworkFailure(new TypeError(m), true)).toBe(true);
+			expect(isNetworkFailure(new Error(m), true)).toBe(false);
+		}
+		expect(isNetworkFailure(new TypeError("x is undefined"), true)).toBe(false);
+	});
+	it("is true when offline", () => {
+		expect(isNetworkFailure(null, false)).toBe(true);
 	});
 });
