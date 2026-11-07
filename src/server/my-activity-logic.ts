@@ -53,6 +53,8 @@ export interface SpeechLogRow {
 	minMinutes: number | null;
 	maxMinutes: number | null;
 	presentationUrl: string | null;
+	/** The speaker's written introduction (member-only text; the log is members-only). */
+	introduction: string | null;
 	/** Held evaluators of this speech, member or guest, ordered by name. */
 	evaluators: SpeechLogEvaluator[];
 	/** True when at least one evaluator slot points at this speech, held or not. */
@@ -129,6 +131,7 @@ export async function loadSpeechLog(
 			minMinutes: speeches.minMinutes,
 			maxMinutes: speeches.maxMinutes,
 			presentationUrl: speeches.presentationUrl,
+			introduction: speeches.introduction,
 			status: roleSlots.status,
 		})
 		.from(roleSlots)

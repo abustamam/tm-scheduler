@@ -15,7 +15,9 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "#/components/ui/sheet";
+import { Textarea } from "#/components/ui/textarea";
 import { showWriteError } from "#/components/write-error-toast";
+import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import { speechWindowInputError } from "#/lib/speech-window";
 import { updateSpeakerDetails } from "#/server/slots";
 import { editSpeechFromLog } from "#/server/speeches";
@@ -35,6 +37,10 @@ type SpeechSlot = {
 	minMinutes: number | null;
 	maxMinutes: number | null;
 	presentationUrl: string | null;
+	/** The stored introduction. MEMBERS-ONLY text, so `undefined` means the
+	 *  viewer may not read it: the field is then not drawn and not sent, and the
+	 *  server keeps what is stored. `null` is "readable, and there is none". */
+	introduction?: string | null;
 };
 
 export function EditSpeechSheet({
@@ -100,6 +106,13 @@ export function EditSpeechSheet({
 			const value = String(form.get(name) ?? "").trim();
 			return value || (writer === "speech-log" ? "" : undefined);
 		};
+		// Shown (so prefilled) means the value is the person's to clear: sent as
+		// "" when emptied. Not shown means unsent, and the server keeps the stored
+		// text (a blank key would be read as "no introduction" and wipe it).
+		const introduction =
+			slot.introduction === undefined
+				? undefined
+				: String(form.get("introduction") ?? "").trim();
 		setBusy(true);
 		try {
 			const save =
@@ -114,6 +127,7 @@ export function EditSpeechSheet({
 						projectName: freeText("projectName"),
 						projectLevel: freeText("projectLevel"),
 						projectId,
+						introduction,
 						minMinutes,
 						maxMinutes,
 						presentationUrl:
@@ -162,6 +176,18 @@ export function EditSpeechSheet({
 								projectLevel: slot.projectLevel,
 							}}
 						/>
+						{slot.introduction !== undefined ? (
+							<div className="space-y-2">
+								<Label htmlFor="introduction">Introduction</Label>
+								<Textarea
+									id="introduction"
+									name="introduction"
+									defaultValue={slot.introduction ?? ""}
+									maxLength={SPEAKER_LIMITS.introduction}
+									rows={4}
+								/>
+							</div>
+						) : null}
 						<div className="grid grid-cols-2 gap-3">
 							<div className="space-y-2">
 								<Label htmlFor="minMinutes">Min minutes</Label>

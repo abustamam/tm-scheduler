@@ -21,6 +21,7 @@ export type SpeechLogEditRow = {
 	minMinutes: number | null;
 	maxMinutes: number | null;
 	presentationUrl: string | null;
+	introduction: string | null;
 };
 
 /**
@@ -68,6 +69,7 @@ export function SpeechLogEditButton({
 								minMinutes: row.minMinutes,
 								maxMinutes: row.maxMinutes,
 								presentationUrl: row.presentationUrl,
+								introduction: row.introduction,
 							}
 						: null
 				}
