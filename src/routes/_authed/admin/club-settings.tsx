@@ -266,12 +266,20 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 				getPromoTemplate({ data: context.adminClub.clubId }),
 			)
 			.catch(() => null);
+		// The guest invite drafts (#1547): same shape, same reason. A failed read
+		// hides the "Guest invites" section only.
+		const guestInviteTemplates = await import("#/server/guest-invite-template")
+			.then(({ getGuestInviteTemplates }) =>
+				getGuestInviteTemplates({ data: context.adminClub.clubId }),
+			)
+			.catch(() => null);
 		return {
 			profile,
 			agenda,
 			logoMeta,
 			timezone,
 			promoTemplate,
+			guestInviteTemplates,
 			charter,
 			areaNotice,
 		};
@@ -408,6 +416,12 @@ const PromoTemplateEditor = lazy(() =>
 	})),
 );
 
+const GuestInviteTemplateEditor = lazy(() =>
+	import("#/components/club/guest-invite-template-editor").then((m) => ({
+		default: m.GuestInviteTemplateEditor,
+	})),
+);
+
 /**
  * The demo club's reset card (#1200). Rendered only when the loader's club row
  * has `isDemo`, which is DISPLAY only: `resetDemoClubFromClub` refuses a club that
@@ -518,6 +532,7 @@ function ClubSettings() {
 		logoMeta,
 		timezone,
 		promoTemplate,
+		guestInviteTemplates,
 		charter,
 		areaNotice,
 	} = Route.useLoaderData();
@@ -1190,6 +1205,17 @@ function ClubSettings() {
 						clubId={adminClub.clubId}
 						template={promoTemplate.template}
 						storedInvalid={promoTemplate.storedInvalid}
+						onSaved={() => router.invalidate()}
+					/>
+				</Suspense>
+			) : null}
+
+			{guestInviteTemplates ? (
+				<Suspense fallback={null}>
+					<GuestInviteTemplateEditor
+						clubId={adminClub.clubId}
+						templates={guestInviteTemplates}
+						timezone={timezone.timezone}
 						onSaved={() => router.invalidate()}
 					/>
 				</Suspense>

@@ -36,12 +36,17 @@ import {
 	CONVERT_REACTIVATED_MESSAGE,
 	type ConvertNotice,
 } from "#/lib/guest-convert";
+import type { GuestInviteTemplates } from "#/lib/guest-invite-template";
 import type { BroughtCount } from "#/lib/guest-profile";
 import { ROSTER_CONFLICT_COPY } from "#/lib/roster-conflict-copy";
+import { getGuestInviteTemplates } from "#/server/guest-invite-template";
 import {
 	convertGuestToMember,
 	deleteGuest,
+	getGuestInviteContext,
+	getGuestPipeline,
 	getLinkCandidates,
+	getOtherAdminClubs,
 	linkGuestToMember,
 	type NextMeetingSummary,
 	type PipelineGuestRow,
@@ -58,6 +63,7 @@ vi.mock("#/server/guest-pipeline", () => ({
 	deleteGuest: vi.fn(),
 	getGuestInviteContext: vi.fn(),
 	getGuestPipeline: vi.fn(),
+	getOtherAdminClubs: vi.fn(),
 	getLinkCandidates: vi.fn(),
 	linkGuestToMember: vi.fn(),
 	recordGuestInvite: vi.fn(),
@@ -65,6 +71,9 @@ vi.mock("#/server/guest-pipeline", () => ({
 	undoGuestConversion: vi.fn(),
 	unlinkGuestFromMember: vi.fn(),
 	updateGuest: vi.fn(),
+}));
+vi.mock("#/server/guest-invite-template", () => ({
+	getGuestInviteTemplates: vi.fn(),
 }));
 vi.mock("#/server/clubs", () => ({
 	getClubByIdentifier: vi.fn(),
@@ -110,6 +119,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		conversionUndoable: false,
 		firstVisitAt: null,
 		inviteVisitCount: 0,
+		lastVisitAt: null,
 		lastVisitWasLatestMeeting: false,
 		visitCount: 0,
 		heldSlotCount: 0,
@@ -136,9 +146,12 @@ const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
 
 async function renderRoute(
 	guests: PipelineGuestRow[],
-	inviteContext: NextMeetingSummary = NO_NEXT_MEETING,
+	inviteContext: NextMeetingSummary & {
+		joinLink?: string | null;
+	} = NO_NEXT_MEETING,
 	readOnly = false,
 	profiles = NO_PROFILES,
+	guestInviteTemplates: GuestInviteTemplates = {},
 ) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		guests,
@@ -147,6 +160,7 @@ async function renderRoute(
 		clubName: "Downtown Club",
 		clubSlug: "downtown",
 		inviteContext,
+		guestInviteTemplates,
 		readOnly,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
@@ -761,6 +775,93 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 			);
 			cleanup();
 		}
+	});
+
+	// protects=acceptance 2 on the page: a saved template reaches the draft for
+	// that kind only, with the guest's own values; and {joinLink} fills from the
+	// invite context; fails_when=the template is ignored, applied to another
+	// kind, or filled with the wrong guest/visit value;
+	// no_claim=the editor, or the server (guest-invite-template.integration.test.ts).
+	it("a saved template reaches the invite draft, for its kind only", async () => {
+		const templates: GuestInviteTemplates = {
+			lapsed: {
+				body: "Hi {guestName}, miss you at {club}! Last here {lastVisit}. Join: {joinLink}",
+				subject: "Back to {club}?",
+			},
+		};
+		const withLink = { ...withNext, joinLink: "https://meet.example.com/room" };
+		const lapsed = {
+			inviteVisitCount: 2,
+			lastVisitWasLatestMeeting: false,
+			lastVisitAt: new Date("2026-09-25T20:00:00Z"),
+		};
+		await renderRoute(
+			[guestRow(lapsed)],
+			withLink,
+			false,
+			NO_PROFILES,
+			templates,
+		);
+		const email = await within(inviteGroup()).findByRole("link", {
+			name: /email/i,
+		});
+		const href = decodeURIComponent(email.getAttribute("href") ?? "");
+		expect(href).toContain(
+			"Hi Ada, miss you at Downtown Club! Last here Sep 25. Join: https://meet.example.com/room",
+		);
+		expect(href).toContain("subject=Back to Downtown Club?");
+		cleanup();
+
+		// Another kind keeps the built-in text.
+		await renderRoute(
+			[guestRow({ inviteVisitCount: 1, lastVisitWasLatestMeeting: true })],
+			withLink,
+			false,
+			NO_PROFILES,
+			templates,
+		);
+		const other = await within(inviteGroup()).findByRole("link", {
+			name: /email/i,
+		});
+		const otherHref = decodeURIComponent(other.getAttribute("href") ?? "");
+		expect(otherHref).toContain("for the first time");
+		expect(otherHref).not.toContain("miss you");
+	});
+
+	// protects=acceptance 8's page half: a failed template load does not error the
+	// loader and the guests still draft with defaults; fails_when=the rejection
+	// propagates or the loader returns undefined templates;
+	// no_claim=the server read (integration test); the loader runs with mocked reads.
+	it("a failed template load falls back to defaults in the loader", async () => {
+		const club = {
+			clubId: "22222222-2222-4222-8222-222222222222",
+			name: "Downtown Club",
+			clubRole: "admin",
+		};
+		const context = {
+			clubs: [club],
+			activeClubId: club.clubId,
+			officerPositions: [],
+			impersonating: null,
+		};
+		vi.mocked(getGuestPipeline).mockResolvedValue([]);
+		vi.mocked(getGuestInviteContext).mockResolvedValue({
+			...NO_NEXT_MEETING,
+			joinLink: null,
+		});
+		vi.mocked(getOtherAdminClubs).mockResolvedValue([]);
+		const { getClubByIdentifier } = await import("#/server/clubs");
+		vi.mocked(getClubByIdentifier).mockResolvedValue(null);
+		const load = Route.options.loader as unknown as (a: {
+			context: unknown;
+		}) => Promise<{ guestInviteTemplates: GuestInviteTemplates }>;
+
+		vi.mocked(getGuestInviteTemplates).mockRejectedValue(new Error("boom"));
+		expect((await load({ context })).guestInviteTemplates).toEqual({});
+
+		const saved = { never: { body: "Hello {guestName}" } };
+		vi.mocked(getGuestInviteTemplates).mockResolvedValue(saved);
+		expect((await load({ context })).guestInviteTemplates).toEqual(saved);
 	});
 
 	it("shows the write-error toast when recording fails", async () => {

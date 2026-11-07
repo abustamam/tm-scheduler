@@ -1074,6 +1074,11 @@ export interface PipelineGuestRow {
 	 */
 	inviteVisitCount: number;
 	/**
+	 * Instant rule, see `inviteVisitCount`: the guest's latest visit, or null with
+	 * none. Read by the invite draft's `{lastVisit}` (#1547).
+	 */
+	lastVisitAt: Date | null;
+	/**
 	 * Instant rule, see `inviteVisitCount`: true when the guest's latest visit is
 	 * the club's most recent started, non-cancelled meeting. False with no visits.
 	 */
@@ -1498,6 +1503,7 @@ export async function loadGuestPipeline(
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
 			inviteVisitCount: Number(inv?.visitCount ?? 0),
+			lastVisitAt: lastInviteVisit,
 			lastVisitWasLatestMeeting:
 				lastInviteVisit !== null &&
 				recency.latestStartedAt !== null &&

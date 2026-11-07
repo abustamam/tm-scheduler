@@ -434,7 +434,11 @@ export function TemplateField({
 					data-slot="template-field"
 					className="relative rounded-md border border-input shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30"
 				>
-					<Backdrop value={value} variables={variables} innerRef={backdropRef} />
+					<Backdrop
+						value={value}
+						variables={variables}
+						innerRef={backdropRef}
+					/>
 					<Textarea
 						id={id}
 						ref={taRef}

@@ -15,6 +15,7 @@ import {
 } from "#/components/ui/dropdown-menu";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import type { InviteKind } from "#/lib/guest-invite";
+import type { GuestInviteValues } from "#/lib/guest-invite-template";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
 import type { OrientationTick } from "#/lib/orientation-roster";
@@ -113,6 +114,13 @@ type NudgeButtonsMeetingArm =
 			clubName: string;
 			meetingTime: string;
 			location?: string | null;
+			/** The club's own wording, already resolved by `customTemplateFor`
+			 *  (#1547); see `NudgeInput`. */
+			custom?: {
+				body: string | null;
+				subject: string | null;
+				values: GuestInviteValues;
+			};
 	  }
 	| ({
 			/** A member close to a Pathways level (#900): "want to get it on
@@ -246,6 +254,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 									clubName: props.clubName,
 									meetingTime: props.meetingTime,
 									location: props.location,
+									custom: props.custom,
 								}
 							: props.mode === "level"
 								? {

@@ -40,7 +40,10 @@ import { cn } from "#/lib/utils";
 /** Typed on the Promote key union: a new Promote placeholder without an icon fails
  *  typecheck. The guest invite's own keys follow; any other key falls back to
  *  `FALLBACK_ICON`. */
-export const VARIABLE_ICONS: Record<PromoPlaceholder | GuestOnlyKey, LucideIcon> = {
+export const VARIABLE_ICONS: Record<
+	PromoPlaceholder | GuestOnlyKey,
+	LucideIcon
+> = {
 	date: Calendar,
 	time: Clock,
 	location: MapPin,
@@ -64,7 +67,10 @@ export const VARIABLE_ICONS: Record<PromoPlaceholder | GuestOnlyKey, LucideIcon>
 const FALLBACK_ICON: LucideIcon = Braces;
 
 function iconFor(key: string): LucideIcon {
-	return (VARIABLE_ICONS as Record<string, LucideIcon | undefined>)[key] ?? FALLBACK_ICON;
+	return (
+		(VARIABLE_ICONS as Record<string, LucideIcon | undefined>)[key] ??
+		FALLBACK_ICON
+	);
 }
 
 /** An option row is 44px below `md`, 36px from `md` up. */
@@ -85,7 +91,10 @@ function groupsOf(
 	const out: { id: string; label: string }[] = [];
 	for (const v of options)
 		if (!out.some((g) => g.id === v.group))
-			out.push({ id: v.group, label: TEMPLATE_GROUP_LABELS[v.group] ?? v.group });
+			out.push({
+				id: v.group,
+				label: TEMPLATE_GROUP_LABELS[v.group] ?? v.group,
+			});
 	return out;
 }
 
