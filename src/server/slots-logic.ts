@@ -2551,10 +2551,34 @@ export async function writeSpeakerDetails(
 }
 
 /**
+ * After a clear unlinked `speechId` (#1533): delete it when a GUEST owns it
+ * (`guest_id` set, `person_id` null). `role_slots_speech_unique` allows one slot
+ * per speech, so after the caller's unlink nothing references it and no
+ * reference check is needed. Without this the cleared speech shows nowhere yet
+ * blocks `applyDeleteGuest`. A member's speech is kept. The owner condition is
+ * in the DELETE's WHERE, so it holds in the same statement.
+ */
+async function deleteOrphanedGuestSpeech(
+	conn: DbOrTx,
+	speechId: string,
+): Promise<void> {
+	await conn
+		.delete(speeches)
+		.where(
+			and(
+				eq(speeches.id, speechId),
+				isNotNull(speeches.guestId),
+				isNull(speeches.personId),
+			),
+		);
+}
+
+/**
  * Edit the speech attached to a speaker slot (the "Edit speech" flow):
  *  - real content + slot already has a speech → update that speech in place.
  *  - real content + no speech yet → create one owned by `personId` and link it.
- *  - blank/TBA input + slot has a speech → unlink it (the speech persists).
+ *  - blank/TBA input + slot has a speech → unlink it (the speech persists, unless
+ *    a guest owns it and no slot references it any more: then it is deleted, #1533).
  *  - blank/TBA input + no speech → no-op.
  * The owner is the current holder's Person, or the guest holding the slot.
  */
@@ -2568,7 +2592,10 @@ export async function editSlotSpeech(
 ): Promise<void> {
 	const { hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) {
-		if (args.currentSpeechId) await unlinkSlotSpeech(conn, args.slotId);
+		if (args.currentSpeechId) {
+			await unlinkSlotSpeech(conn, args.slotId);
+			await deleteOrphanedGuestSpeech(conn, args.currentSpeechId);
+		}
 		return;
 	}
 	await updateOrAttachSlotSpeech(conn, args);

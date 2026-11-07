@@ -537,7 +537,7 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			return (await guestSpeech())!;
 		}
 
-		it("creates a guest-owned speech, updates it in place and unlinks on blank", async () => {
+		it("creates a guest-owned speech, updates it in place and deletes it on blank (#1533)", async () => {
 			const { editSlotSpeech } = await import("./slots-logic");
 			const created = await createGuestOwned("Guest talk");
 			expect(created.guestId).toBe(guestId);
@@ -560,11 +560,9 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 				input: { speechTitle: "" },
 			});
 			expect(await speechIdOf(speakerSlotId)).toBeNull();
-			const [kept] = await testDb
-				.select()
-				.from(speeches)
-				.where(eq(speeches.id, created.id));
-			expect(kept?.guestId).toBe(guestId);
+			expect(
+				await testDb.select().from(speeches).where(eq(speeches.id, created.id)),
+			).toHaveLength(0);
 		});
 
 		it("never shows up in a member's speech log, milestones or Pathways", async () => {
