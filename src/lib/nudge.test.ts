@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPanelRoleMap } from "#/lib/attendance-panel";
 import { evaluatorFormBrief } from "#/lib/evaluator-form";
+import type { InviteKind } from "#/lib/guest-invite";
 import {
 	GRAMMARIAN_ROLE_KEY,
 	TIMER_ROLE_KEY,
@@ -812,6 +813,7 @@ describe("outstandingDutiesByMember", () => {
 describe("buildNudge invite mode (#899)", () => {
 	const invite = {
 		mode: "invite" as const,
+		inviteKind: "repeatRecent" as InviteKind,
 		name: "Ada Lovelace",
 		email: "ada@example.com",
 		phone: "+14155552671",
@@ -821,45 +823,62 @@ describe("buildNudge invite mode (#899)", () => {
 		location: "Room 4",
 		shareUrl: "https://gavelup.app/club/downtown/meeting/2026-10-09",
 	};
+	const AGENDA = "Agenda: https://gavelup.app/club/downtown/meeting/2026-10-09";
+	const drafts: Record<InviteKind, { message: string; subject: string }> = {
+		never: {
+			message: `Hi Ada, we'd love to have you visit Downtown Club! We meet on Thu, Oct 9 at 7:00 PM, at Room 4. ${AGENDA}`,
+			subject: "Join us at Downtown Club on Thu, Oct 9?",
+		},
+		firstRecent: {
+			message: `Hi Ada, thanks for visiting Downtown Club for the first time! We meet again on Thu, Oct 9 at 7:00 PM, at Room 4. We'd love to have you back. ${AGENDA}`,
+			subject: "Thanks for visiting Downtown Club",
+		},
+		repeatRecent: {
+			message: `Hi Ada, great to see you again at Downtown Club. Our next meeting is Thu, Oct 9 at 7:00 PM, at Room 4. Hope you can make it! ${AGENDA}`,
+			subject: "See you at Downtown Club on Thu, Oct 9?",
+		},
+		lapsed: {
+			message: `Hi Ada, it's been a little while. We'd love to see you back at Downtown Club! We meet next on Thu, Oct 9 at 7:00 PM, at Room 4. ${AGENDA}`,
+			subject: "We'd love to see you back at Downtown Club",
+		},
+	};
 
-	it("invites by first name to the meeting, with its agenda link", () => {
-		const r = buildNudge(invite);
-		expect(r.message).toBe(
-			"Hi Ada, it was great having you at Downtown Club. We meet again on Thu, Oct 9 at 7:00 PM, at Room 4. We'd love to see you there. Agenda: https://gavelup.app/club/downtown/meeting/2026-10-09",
-		);
-		expect(r.whatsappUrl).toContain(encodeURIComponent(invite.shareUrl));
-	});
+	for (const kind of Object.keys(drafts) as InviteKind[]) {
+		it(`words the ${kind} draft and subject exactly`, () => {
+			const r = buildNudge({ ...invite, inviteKind: kind });
+			expect(r.message).toBe(drafts[kind].message);
+			expect(r.whatsappUrl).toContain(encodeURIComponent(invite.shareUrl));
+			expect(r.mailtoUrl).toContain(
+				`subject=${encodeURIComponent(drafts[kind].subject)}`,
+			);
+		});
 
-	it("omits the location clause entirely when it is null or blank", () => {
-		for (const location of [null, "  "]) {
-			const r = buildNudge({ ...invite, location });
-			expect(r.message).toContain("on Thu, Oct 9 at 7:00 PM. We'd love");
-			expect(r.message).not.toContain(", at");
-		}
-	});
+		it(`omits the location clause when blank (${kind})`, () => {
+			for (const location of [null, "  "]) {
+				const r = buildNudge({ ...invite, inviteKind: kind, location });
+				expect(r.message).toContain("Thu, Oct 9 at 7:00 PM");
+				expect(r.message).not.toContain("7:00 PM,");
+				expect(r.message).not.toContain(", at");
+			}
+		});
 
-	it("never carries a join URL, whatever the input holds", () => {
-		// The mode has no field for one; an extra property smuggled onto the input
-		// object (as a caller spreading a meeting row would) must not reach the
-		// draft either (#731/#754).
-		const joinUrl = "https://zoom.us/j/99999999999?pwd=secret";
-		const r = buildNudge({
-			...invite,
-			...({ joinUrl, join_url: joinUrl } as object),
-		} as typeof invite);
-		for (const s of [r.message, r.mailtoUrl ?? "", r.whatsappUrl ?? ""]) {
-			expect(s).not.toContain(joinUrl);
-			expect(s).not.toContain(encodeURIComponent(joinUrl));
-			expect(s).not.toContain("?as=");
-		}
-	});
-
-	it("uses the invite subject", () => {
-		const r = buildNudge(invite);
-		expect(r.mailtoUrl).toContain(
-			`subject=${encodeURIComponent("See you at Downtown Club on Thu, Oct 9?")}`,
-		);
-	});
+		it(`never carries a join URL or ?as= link (${kind})`, () => {
+			// The mode has no field for one; an extra property smuggled onto the
+			// input (a caller spreading a meeting row) must not reach the draft
+			// either (#731/#754).
+			const joinUrl = "https://zoom.us/j/99999999999?pwd=secret";
+			const r = buildNudge({
+				...invite,
+				inviteKind: kind,
+				...({ joinUrl, join_url: joinUrl } as object),
+			} as typeof invite);
+			for (const s of [r.message, r.mailtoUrl ?? "", r.whatsappUrl ?? ""]) {
+				expect(s).not.toContain(joinUrl);
+				expect(s).not.toContain(encodeURIComponent(joinUrl));
+				expect(s).not.toContain("?as=");
+			}
+		});
+	}
 });
 
 describe("buildNudge level mode (#900)", () => {

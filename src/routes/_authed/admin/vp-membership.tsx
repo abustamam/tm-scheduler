@@ -58,7 +58,7 @@ import {
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
-import { isInvitableStage } from "#/lib/guest-invite";
+import { inviteKindFor, isInvitableStage } from "#/lib/guest-invite";
 import { type BroughtCount, guestKindCaption } from "#/lib/guest-profile";
 import { mailtoHref } from "#/lib/mailto";
 import { navPageTitle } from "#/lib/page-title";
@@ -606,6 +606,7 @@ function GuestInvite({
 			<span className="text-xs font-semibold">{label}</span>
 			<NudgeButtons
 				mode="invite"
+				inviteKind={inviteKindFor(guest)}
 				name={guest.name}
 				preferredName={guest.preferredName}
 				phone={phone}

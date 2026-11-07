@@ -18,3 +18,21 @@ export function isInvitableStage(stage: Stage): boolean {
 
 export const NOT_INVITABLE_MESSAGE =
 	"Only a guest in Prospects or Following up can be invited. Move them back to Prospect first.";
+
+/**
+ * Which invite draft a guest gets, by how recently they visited:
+ * - `never`: no visits at all (a Prospect can have none);
+ * - `firstRecent` / `repeatRecent`: their latest visit is the club's most
+ *   recent held meeting, on their first / a later visit;
+ * - `lapsed`: they have visited, but a later meeting has been held since.
+ */
+export type InviteKind = "never" | "firstRecent" | "repeatRecent" | "lapsed";
+
+export function inviteKindFor(guest: {
+	visitCount: number;
+	lastVisitWasLatestMeeting: boolean;
+}): InviteKind {
+	if (guest.visitCount <= 0) return "never";
+	if (!guest.lastVisitWasLatestMeeting) return "lapsed";
+	return guest.visitCount === 1 ? "firstRecent" : "repeatRecent";
+}

@@ -1138,6 +1138,83 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 		});
 	});
 
+	describe("derived last visit and recency", () => {
+		async function meetingAt(id: string): Promise<Date> {
+			const [m] = await testDb
+				.select({ scheduledAt: meetings.scheduledAt })
+				.from(meetings)
+				.where(eq(meetings.id, id));
+			return m!.scheduledAt;
+		}
+
+		it("derives lastVisitAt as the LATEST visited meeting, recent when it is the latest held one", async () => {
+			const older = await seedPastMeeting(seed.clubId, 30);
+			const newer = await seedPastMeeting(seed.clubId, 2);
+			const guestId = await seedGuest(seed.clubId, "Recent Repeat");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: older, guestId, status: "present" });
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: newer, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.lastVisitAt?.getTime()).toBe(
+				(await meetingAt(newer)).getTime(),
+			);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("is not recent once a later meeting has been held without them", async () => {
+			const visited = await seedPastMeeting(seed.clubId, 10);
+			await seedPastMeeting(seed.clubId, 3);
+			const guestId = await seedGuest(seed.clubId, "Lapsed Visitor");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: visited, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(1);
+			expect(row.lastVisitWasLatestMeeting).toBe(false);
+		});
+
+		it("a CANCELLED meeting after the visit does not make the guest lapsed", async () => {
+			const visited = await seedPastMeeting(seed.clubId, 10);
+			await seedPastMeeting(seed.clubId, 3, "cancelled");
+			const guestId = await seedGuest(seed.clubId, "Cancelled After");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: visited, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.lastVisitAt?.getTime()).toBe(
+				(await meetingAt(visited)).getTime(),
+			);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("a FUTURE meeting does not make the guest lapsed", async () => {
+			const visited = await seedPastMeeting(seed.clubId, 10);
+			await seedPastMeeting(seed.clubId, -7);
+			const guestId = await seedGuest(seed.clubId, "Future Only");
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId: visited, guestId, status: "present" });
+
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("a guest with no visits has a null lastVisitAt and is not recent", async () => {
+			await seedPastMeeting(seed.clubId, 3);
+			const guestId = await seedGuest(seed.clubId, "Never Came");
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(0);
+			expect(row.lastVisitAt).toBeNull();
+			expect(row.lastVisitWasLatestMeeting).toBe(false);
+		});
+	});
+
 	// #364: a typo'd guest was permanent — there was no update or delete path.
 	describe("edit + delete (#364)", () => {
 		it("updates a guest's name/email/phone, normalizing the phone to E.164 (#295)", async () => {

@@ -5,6 +5,7 @@
 
 import { GENERIC_EVALUATION_RESOURCE } from "#/lib/evaluation-resources";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
+import type { InviteKind } from "#/lib/guest-invite";
 import {
 	type LevelProgress,
 	plural,
@@ -99,6 +100,8 @@ export type NudgeInput =
 	// shareable artifact, #731/#754).
 	| (NudgeInputBase & {
 			mode: "invite";
+			/** Picks the wording; see `inviteKindFor`. */
+			inviteKind: InviteKind;
 			clubName: string;
 			/** Already formatted in the club's timezone. */
 			meetingTime: string;
@@ -272,7 +275,18 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
-		return `Hi ${who}, it was great having you at ${i.clubName}. We meet again on ${i.meetingDate} at ${i.meetingTime}${where}. We'd love to see you there. Agenda: ${i.shareUrl}`;
+		const when = `${i.meetingDate} at ${i.meetingTime}${where}`;
+		const club = i.clubName;
+		switch (i.inviteKind) {
+			case "never":
+				return `Hi ${who}, we'd love to have you visit ${club}! We meet on ${when}. Agenda: ${i.shareUrl}`;
+			case "firstRecent":
+				return `Hi ${who}, thanks for visiting ${club} for the first time! We meet again on ${when}. We'd love to have you back. Agenda: ${i.shareUrl}`;
+			case "repeatRecent":
+				return `Hi ${who}, great to see you again at ${club}. Our next meeting is ${when}. Hope you can make it! Agenda: ${i.shareUrl}`;
+			case "lapsed":
+				return `Hi ${who}, it's been a little while. We'd love to see you back at ${club}! We meet next on ${when}. Agenda: ${i.shareUrl}`;
+		}
 	}
 	// A SEPARATE mode rather than a reuse of `attendance`, because the two are sent
 	// at different moments and only one of them is still a question about the
@@ -603,7 +617,16 @@ function subjectFor(i: NudgeInput): string {
 		return `Your Toastmaster script — ${i.meetingDate}`;
 	}
 	if (i.mode === "invite") {
-		return `See you at ${i.clubName} on ${i.meetingDate}?`;
+		switch (i.inviteKind) {
+			case "never":
+				return `Join us at ${i.clubName} on ${i.meetingDate}?`;
+			case "firstRecent":
+				return `Thanks for visiting ${i.clubName}`;
+			case "repeatRecent":
+				return `See you at ${i.clubName} on ${i.meetingDate}?`;
+			case "lapsed":
+				return `We'd love to see you back at ${i.clubName}`;
+		}
 	}
 	if (i.mode === "level") {
 		return `${plural(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;

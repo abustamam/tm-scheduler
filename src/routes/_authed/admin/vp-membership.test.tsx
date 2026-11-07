@@ -109,6 +109,8 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		linkReversible: false,
 		conversionUndoable: false,
 		firstVisitAt: null,
+		lastVisitAt: null,
+		lastVisitWasLatestMeeting: false,
 		visitCount: 0,
 		heldSlotCount: 0,
 		lastInvite: null,
@@ -731,6 +733,34 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 		vi.mocked(recordGuestInvite).mockClear();
 		fireEvent.click(within(group).getByRole("link", { name: /whatsapp/i }));
 		expect(recordGuestInvite).toHaveBeenCalledTimes(1);
+	});
+
+	it("words the draft by the guest's visit recency", async () => {
+		const cases: Array<[Partial<PipelineGuestRow>, string]> = [
+			[{}, "we'd love to have you visit"],
+			[
+				{ visitCount: 1, lastVisitWasLatestMeeting: true },
+				"for the first time",
+			],
+			[
+				{ visitCount: 2, lastVisitWasLatestMeeting: true },
+				"great to see you again",
+			],
+			[
+				{ visitCount: 2, lastVisitWasLatestMeeting: false },
+				"it's been a little while",
+			],
+		];
+		for (const [over, phrase] of cases) {
+			await renderRoute([guestRow(over)], withNext);
+			const email = await within(inviteGroup()).findByRole("link", {
+				name: /email/i,
+			});
+			expect(decodeURIComponent(email.getAttribute("href") ?? "")).toContain(
+				phrase,
+			);
+			cleanup();
+		}
 	});
 
 	it("shows the write-error toast when recording fails", async () => {
