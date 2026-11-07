@@ -8,7 +8,14 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	guests,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	cleanup,
@@ -54,6 +61,7 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 	let seed: SeededClub;
 	let slotId: string;
 	let guestId: string;
+	let leakedSpeechId: string | null = null;
 
 	beforeEach(async () => {
 		request = { headers: new Headers() };
@@ -88,6 +96,9 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 
 	afterEach(async () => {
 		sessionUserId = null;
+		if (leakedSpeechId)
+			await testDb.delete(speeches).where(eq(speeches.id, leakedSpeechId));
+		leakedSpeechId = null;
 		await testDb.delete(speeches).where(eq(speeches.guestId, guestId));
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
@@ -146,5 +157,76 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 			}),
 		).rejects.toThrow(exact(MEETING_CANCELLED_MESSAGE));
 		expect((await slotRow())?.speechId).toBeNull();
+	});
+
+	describe("clearing the details (#1533)", () => {
+		const clear = () =>
+			updateSpeakerDetails({ data: { slotId, speakerDetails: {} } });
+		const speechRows = (id: string) =>
+			testDb.select().from(speeches).where(eq(speeches.id, id));
+		const deleteGuest = async () => {
+			const { applyDeleteGuest } = await import("./guest-pipeline-logic");
+			return applyDeleteGuest({
+				clubId: seed.clubId,
+				guestId,
+				actorMemberId: seed.adminMemberId,
+			});
+		};
+		const release = () =>
+			testDb
+				.update(roleSlots)
+				.set({ assignedGuestId: null, status: "open" })
+				.where(eq(roleSlots.id, slotId));
+
+		it("deletes the guest's now-unreferenced speech, so the guest can be deleted", async () => {
+			await updateSpeakerDetails({
+				data: { slotId, speakerDetails: { speechTitle: "Guest talk" } },
+			});
+			const speechId = (await slotRow())?.speechId as string;
+			await clear();
+			expect((await slotRow())?.speechId).toBeNull();
+			expect(await speechRows(speechId)).toHaveLength(0);
+			await release();
+			await deleteGuest();
+			expect(
+				await testDb.select().from(guests).where(eq(guests.id, guestId)),
+			).toHaveLength(0);
+		});
+
+		it("keeps a member's speech, unscheduled", async () => {
+			const [m] = await testDb
+				.select({ personId: members.personId })
+				.from(members)
+				.where(eq(members.id, seed.memberId));
+			await testDb
+				.update(roleSlots)
+				.set({ assignedGuestId: null, assignedMemberId: seed.memberId })
+				.where(eq(roleSlots.id, slotId));
+			await updateSpeakerDetails({
+				data: { slotId, speakerDetails: { speechTitle: "Member talk" } },
+			});
+			const speechId = (await slotRow())?.speechId as string;
+			leakedSpeechId = speechId;
+			await clear();
+			expect((await slotRow())?.speechId).toBeNull();
+			const rows = await speechRows(speechId);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.personId).toBe(m?.personId);
+		});
+
+		it("delete-guest still refuses a guest who owns a slot-less speech", async () => {
+			const [row] = await testDb
+				.insert(speeches)
+				.values({ guestId, personId: null, title: "Imported" })
+				.returning({ id: speeches.id });
+			await release();
+			const { GUEST_HAS_SPEECHES_MESSAGE } = await import(
+				"./guest-pipeline-logic"
+			);
+			await expect(deleteGuest()).rejects.toThrow(
+				exact(GUEST_HAS_SPEECHES_MESSAGE),
+			);
+			expect(await speechRows(row?.id as string)).toHaveLength(1);
+		});
 	});
 });

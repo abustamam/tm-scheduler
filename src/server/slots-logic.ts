@@ -1,7 +1,17 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq, gt, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import {
+	and,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	notExists,
+	or,
+	sql,
+} from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -2551,10 +2561,45 @@ export async function writeSpeakerDetails(
 }
 
 /**
+ * After a clear unlinked `speechId` (#1533): delete it when a GUEST owns it
+ * (`guest_id` set; the `speeches_single_owner` check constraint makes
+ * `person_id` null implied) and no slot references it. Without this the
+ * cleared speech shows nowhere yet blocks `applyDeleteGuest`. A member's speech
+ * is kept.
+ *
+ * `speechId` may be STALE: `updateSpeakerDetails` reads it before its
+ * transaction, so the speech can have moved to another slot since. The unlink
+ * only cleared THIS slot, and `role_slots.speech_id` is ON DELETE SET NULL, so
+ * deleting a speech another slot still holds would silently blank that slot.
+ * The NOT EXISTS reference check is therefore in the DELETE's WHERE, so the
+ * owner and reference conditions hold in the same statement.
+ */
+async function deleteOrphanedGuestSpeech(
+	conn: DbOrTx,
+	speechId: string,
+): Promise<void> {
+	await conn
+		.delete(speeches)
+		.where(
+			and(
+				eq(speeches.id, speechId),
+				isNotNull(speeches.guestId),
+				notExists(
+					conn
+						.select({ one: sql`1` })
+						.from(roleSlots)
+						.where(eq(roleSlots.speechId, speeches.id)),
+				),
+			),
+		);
+}
+
+/**
  * Edit the speech attached to a speaker slot (the "Edit speech" flow):
  *  - real content + slot already has a speech → update that speech in place.
  *  - real content + no speech yet → create one owned by `personId` and link it.
- *  - blank/TBA input + slot has a speech → unlink it (the speech persists).
+ *  - blank/TBA input + slot has a speech → unlink it (the speech persists, unless
+ *    a guest owns it and no slot references it any more: then it is deleted, #1533).
  *  - blank/TBA input + no speech → no-op.
  * The owner is the current holder's Person, or the guest holding the slot.
  */
@@ -2568,7 +2613,10 @@ export async function editSlotSpeech(
 ): Promise<void> {
 	const { hasContent } = normalizeSpeech(args.input);
 	if (!hasContent) {
-		if (args.currentSpeechId) await unlinkSlotSpeech(conn, args.slotId);
+		if (args.currentSpeechId) {
+			await unlinkSlotSpeech(conn, args.slotId);
+			await deleteOrphanedGuestSpeech(conn, args.currentSpeechId);
+		}
 		return;
 	}
 	await updateOrAttachSlotSpeech(conn, args);
