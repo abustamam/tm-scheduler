@@ -29,10 +29,10 @@ export const NOT_INVITABLE_MESSAGE =
 export type InviteKind = "never" | "firstRecent" | "repeatRecent" | "lapsed";
 
 export function inviteKindFor(guest: {
-	visitCount: number;
+	inviteVisitCount: number;
 	lastVisitWasLatestMeeting: boolean;
 }): InviteKind {
-	if (guest.visitCount <= 0) return "never";
+	if (guest.inviteVisitCount <= 0) return "never";
 	if (!guest.lastVisitWasLatestMeeting) return "lapsed";
-	return guest.visitCount === 1 ? "firstRecent" : "repeatRecent";
+	return guest.inviteVisitCount === 1 ? "firstRecent" : "repeatRecent";
 }

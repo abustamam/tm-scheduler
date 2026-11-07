@@ -1066,12 +1066,16 @@ export interface PipelineGuestRow {
 	conversionUndoable: boolean;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
 	firstVisitAt: Date | null;
-	/** Latest visited meeting date (derived); null if none. */
-	lastVisitAt: Date | null;
 	/**
-	 * True when the guest's latest visit is the club's most recent held meeting:
-	 * no non-cancelled meeting that has already happened is dated after it
-	 * (derived, never stored). False for a guest with no visits.
+	 * Visits counted on the INSTANT rule (a meeting counts only once it has
+	 * started), unlike `visitCount`, which counts today's meeting from club-local
+	 * midnight. Read only by the invite draft, whose target meeting is "next"
+	 * until it starts: tonight's role slot is not a visit yet.
+	 */
+	inviteVisitCount: number;
+	/**
+	 * Instant rule, see `inviteVisitCount`: true when the guest's latest visit is
+	 * the club's most recent started, non-cancelled meeting. False with no visits.
 	 */
 	lastVisitWasLatestMeeting: boolean;
 	/** Meetings visited (derived, never a stored counter). */
@@ -1154,16 +1158,33 @@ export interface PipelineGuestRow {
  * row, so the "holding a slot never sets attendance" rule (#218,
  * `minutes-logic.ts`) is untouched.
  */
-function happenedMeetingSql(clubId: string, timeZone: string) {
+/**
+ * "Has happened" for a meeting. Default: club-local DATE rule (today counts from
+ * midnight). With `startedBefore`: the INSTANT rule, `scheduledAt < startedBefore`,
+ * the one `loadNextMeetingSummary` uses, so the invite's recency never counts
+ * the meeting it is inviting to.
+ */
+function happenedMeetingSql(
+	clubId: string,
+	timeZone: string,
+	startedBefore?: Date,
+) {
 	return and(
 		eq(meetings.clubId, clubId),
 		ne(meetings.status, "cancelled"),
-		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
+		startedBefore
+			? lt(meetings.scheduledAt, startedBefore)
+			: sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
 	);
 }
 
-function guestVisits(conn: DbOrTx, clubId: string, timeZone: string) {
-	const happened = happenedMeetingSql(clubId, timeZone);
+function guestVisits(
+	conn: DbOrTx,
+	clubId: string,
+	timeZone: string,
+	startedBefore?: Date,
+) {
+	const happened = happenedMeetingSql(clubId, timeZone, startedBefore);
 	const attended = conn
 		.select({
 			guestId: meetingAttendance.guestId,
@@ -1207,23 +1228,33 @@ export interface GuestVisitSummary {
 	guestId: string | null;
 	visitCount: number;
 	firstVisitAt: Date | null;
-	lastVisitAt: Date | null;
 }
 
 /**
- * The club's most recent HELD meeting: the latest non-cancelled meeting that has
- * already happened (same club-local-date gate as {@link guestVisits}). Null for
- * a club with none. A guest whose last visit is this meeting is "recent".
+ * Per-guest visit count and last visit on the INSTANT rule, plus the club's most
+ * recent started meeting, for the invite draft's recency only (see
+ * `PipelineGuestRow.inviteVisitCount`). `now` is threaded in so tests can pin it.
  */
-async function loadLatestHeldMeetingAt(
-	clubId: string,
-	timeZone: string,
-): Promise<Date | null> {
-	const [row] = await db
-		.select({ at: max(meetings.scheduledAt) })
-		.from(meetings)
-		.where(happenedMeetingSql(clubId, timeZone));
-	return row?.at ? new Date(row.at) : null;
+async function loadInviteRecency(clubId: string, timeZone: string, now: Date) {
+	const visits = guestVisits(db, clubId, timeZone, now).as("invite_visits");
+	const [byGuest, [latest]] = await Promise.all([
+		db
+			.select({
+				guestId: visits.guestId,
+				visitCount: count(),
+				lastVisitAt: max(visits.scheduledAt),
+			})
+			.from(visits)
+			.groupBy(visits.guestId),
+		db
+			.select({ at: max(meetings.scheduledAt) })
+			.from(meetings)
+			.where(happenedMeetingSql(clubId, timeZone, now)),
+	]);
+	return {
+		byGuest: new Map(byGuest.map((v) => [v.guestId, v])),
+		latestStartedAt: latest?.at ? new Date(latest.at) : null,
+	};
 }
 
 /**
@@ -1244,7 +1275,6 @@ export async function loadGuestVisitSummaries(
 			guestId: visits.guestId,
 			visitCount: count(),
 			firstVisitAt: min(visits.scheduledAt),
-			lastVisitAt: max(visits.scheduledAt),
 		})
 		.from(visits)
 		.groupBy(visits.guestId);
@@ -1263,6 +1293,8 @@ export async function loadGuestPipeline(
 	 * that are not a viewer's board (the MCP reader, an export) pass none.
 	 */
 	otherAdminClubIds: string[] = [],
+	/** The instant the invite recency is judged at; tests pin it. */
+	now: Date = new Date(),
 ): Promise<PipelineGuestRow[]> {
 	// Both club-level facts in ONE query. They live on the same `clubs` row, and
 	// the timezone has to resolve before the visits subquery can be built, so a
@@ -1277,7 +1309,7 @@ export async function loadGuestPipeline(
 		linkRows,
 		conversionRows,
 		inviteRows,
-		latestHeldAt,
+		recency,
 	] = await Promise.all([
 		db
 			.select({
@@ -1384,7 +1416,7 @@ export async function loadGuestPipeline(
 				),
 			)
 			.orderBy(desc(guestInvites.invitedAt), desc(guestInvites.id)),
-		loadLatestHeldMeetingAt(clubId, tz),
+		loadInviteRecency(clubId, tz, now),
 	]);
 
 	// Which of the viewer's other admin clubs already hold each Person (#1127):
@@ -1442,7 +1474,10 @@ export async function loadGuestPipeline(
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
-		const lastVisitAt = v?.lastVisitAt ? new Date(v.lastVisitAt) : null;
+		const inv = recency.byGuest.get(r.id);
+		// A guest with an instant-rule visit implies a started meeting exists, so
+		// `latestStartedAt` is non-null whenever `inv` is.
+		const lastInviteVisit = inv?.lastVisitAt ? new Date(inv.lastVisitAt) : null;
 		return {
 			id: r.id,
 			name: r.name,
@@ -1462,10 +1497,11 @@ export async function loadGuestPipeline(
 			conversionUndoable: undoable.has(r.id),
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
-			lastVisitAt,
+			inviteVisitCount: Number(inv?.visitCount ?? 0),
 			lastVisitWasLatestMeeting:
-				lastVisitAt !== null &&
-				(latestHeldAt === null || lastVisitAt >= latestHeldAt),
+				lastInviteVisit !== null &&
+				recency.latestStartedAt !== null &&
+				lastInviteVisit >= recency.latestStartedAt,
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
 			lastInvite: invitesByGuest.get(r.id)?.last ?? null,
 			inviteCount: invitesByGuest.get(r.id)?.meetings.size ?? 0,

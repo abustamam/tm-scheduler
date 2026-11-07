@@ -231,6 +231,36 @@ export interface Nudge {
 	mailtoUrl?: string;
 }
 
+/** Each invite kind's body and subject together (see `inviteKindFor`). */
+const INVITE_DRAFTS: Record<
+	InviteKind,
+	{
+		message: (club: string, when: string, url: string, who: string) => string;
+		subject: (club: string, date: string) => string;
+	}
+> = {
+	never: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, we'd love to have you visit ${club}! We meet on ${when}. Agenda: ${url}`,
+		subject: (club, date) => `Join us at ${club} on ${date}?`,
+	},
+	firstRecent: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, thanks for visiting ${club} for the first time! We meet again on ${when}. We'd love to have you back. Agenda: ${url}`,
+		subject: (club) => `Thanks for visiting ${club}`,
+	},
+	repeatRecent: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, great to see you again at ${club}. Our next meeting is ${when}. Hope you can make it! Agenda: ${url}`,
+		subject: (club, date) => `See you at ${club} on ${date}?`,
+	},
+	lapsed: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, it's been a little while. We'd love to see you back at ${club}! We meet next on ${when}. Agenda: ${url}`,
+		subject: (club) => `We'd love to see you back at ${club}`,
+	},
+};
+
 function messageFor(i: NudgeInput): string {
 	// Greet by first/preferred name — "Hi Zabihullah Kogyani," reads like a mail
 	// merge, which undercuts a draft whose whole point is that a human wrote it.
@@ -276,17 +306,12 @@ function messageFor(i: NudgeInput): string {
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
 		const when = `${i.meetingDate} at ${i.meetingTime}${where}`;
-		const club = i.clubName;
-		switch (i.inviteKind) {
-			case "never":
-				return `Hi ${who}, we'd love to have you visit ${club}! We meet on ${when}. Agenda: ${i.shareUrl}`;
-			case "firstRecent":
-				return `Hi ${who}, thanks for visiting ${club} for the first time! We meet again on ${when}. We'd love to have you back. Agenda: ${i.shareUrl}`;
-			case "repeatRecent":
-				return `Hi ${who}, great to see you again at ${club}. Our next meeting is ${when}. Hope you can make it! Agenda: ${i.shareUrl}`;
-			case "lapsed":
-				return `Hi ${who}, it's been a little while. We'd love to see you back at ${club}! We meet next on ${when}. Agenda: ${i.shareUrl}`;
-		}
+		return INVITE_DRAFTS[i.inviteKind].message(
+			i.clubName,
+			when,
+			i.shareUrl,
+			who,
+		);
 	}
 	// A SEPARATE mode rather than a reuse of `attendance`, because the two are sent
 	// at different moments and only one of them is still a question about the
@@ -617,16 +642,7 @@ function subjectFor(i: NudgeInput): string {
 		return `Your Toastmaster script — ${i.meetingDate}`;
 	}
 	if (i.mode === "invite") {
-		switch (i.inviteKind) {
-			case "never":
-				return `Join us at ${i.clubName} on ${i.meetingDate}?`;
-			case "firstRecent":
-				return `Thanks for visiting ${i.clubName}`;
-			case "repeatRecent":
-				return `See you at ${i.clubName} on ${i.meetingDate}?`;
-			case "lapsed":
-				return `We'd love to see you back at ${i.clubName}`;
-		}
+		return INVITE_DRAFTS[i.inviteKind].subject(i.clubName, i.meetingDate);
 	}
 	if (i.mode === "level") {
 		return `${plural(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;

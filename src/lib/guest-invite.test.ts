@@ -18,25 +18,25 @@ describe("isInvitableStage (#899)", () => {
 describe("inviteKindFor", () => {
 	it("picks the draft by visits and recency", () => {
 		expect(
-			inviteKindFor({ visitCount: 0, lastVisitWasLatestMeeting: false }),
+			inviteKindFor({ inviteVisitCount: 0, lastVisitWasLatestMeeting: false }),
 		).toBe("never");
 		expect(
-			inviteKindFor({ visitCount: 1, lastVisitWasLatestMeeting: true }),
+			inviteKindFor({ inviteVisitCount: 1, lastVisitWasLatestMeeting: true }),
 		).toBe("firstRecent");
 		expect(
-			inviteKindFor({ visitCount: 3, lastVisitWasLatestMeeting: true }),
+			inviteKindFor({ inviteVisitCount: 3, lastVisitWasLatestMeeting: true }),
 		).toBe("repeatRecent");
 		expect(
-			inviteKindFor({ visitCount: 1, lastVisitWasLatestMeeting: false }),
+			inviteKindFor({ inviteVisitCount: 1, lastVisitWasLatestMeeting: false }),
 		).toBe("lapsed");
 		expect(
-			inviteKindFor({ visitCount: 3, lastVisitWasLatestMeeting: false }),
+			inviteKindFor({ inviteVisitCount: 3, lastVisitWasLatestMeeting: false }),
 		).toBe("lapsed");
 	});
 
 	it("treats zero visits as never even if the recency flag is set", () => {
 		expect(
-			inviteKindFor({ visitCount: 0, lastVisitWasLatestMeeting: true }),
+			inviteKindFor({ inviteVisitCount: 0, lastVisitWasLatestMeeting: true }),
 		).toBe("never");
 	});
 });

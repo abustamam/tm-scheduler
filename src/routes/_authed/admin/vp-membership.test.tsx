@@ -109,7 +109,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		linkReversible: false,
 		conversionUndoable: false,
 		firstVisitAt: null,
-		lastVisitAt: null,
+		inviteVisitCount: 0,
 		lastVisitWasLatestMeeting: false,
 		visitCount: 0,
 		heldSlotCount: 0,
@@ -739,15 +739,15 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 		const cases: Array<[Partial<PipelineGuestRow>, string]> = [
 			[{}, "we'd love to have you visit"],
 			[
-				{ visitCount: 1, lastVisitWasLatestMeeting: true },
+				{ inviteVisitCount: 1, lastVisitWasLatestMeeting: true },
 				"for the first time",
 			],
 			[
-				{ visitCount: 2, lastVisitWasLatestMeeting: true },
+				{ inviteVisitCount: 2, lastVisitWasLatestMeeting: true },
 				"great to see you again",
 			],
 			[
-				{ visitCount: 2, lastVisitWasLatestMeeting: false },
+				{ inviteVisitCount: 2, lastVisitWasLatestMeeting: false },
 				"it's been a little while",
 			],
 		];
