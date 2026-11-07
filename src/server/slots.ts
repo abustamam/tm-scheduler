@@ -14,6 +14,7 @@ import {
 	requireMemberInClub,
 	requireUser,
 } from "./guards";
+import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	applyAddRoleSlot,
@@ -325,26 +326,53 @@ const updateSpeakerDetailsSchema = z.object({
 	speakerDetails: speakerDetailsUpdateSchema,
 });
 
+/** The LOCKED re-read of the slot inside the transaction (`lock` takes a row
+ *  lock on the slot only). The handler's unlocked read is its own, above. */
+type SlotConn = Pick<typeof db, "select">;
+
+const SPEAKER_SLOT_COLUMNS = {
+	id: roleSlots.id,
+	isSpeakerRole: roleDefinitions.isSpeakerRole,
+	clubId: meetings.clubId,
+	meetingId: roleSlots.meetingId,
+	meetingStatus: meetings.status,
+	speechId: roleSlots.speechId,
+	assignedMemberId: roleSlots.assignedMemberId,
+	assignedGuestId: roleSlots.assignedGuestId,
+	personId: members.personId,
+};
+
+async function readSpeakerSlot(conn: SlotConn, slotId: string, lock: boolean) {
+	const query = conn
+		.select(SPEAKER_SLOT_COLUMNS)
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
+		.where(eq(roleSlots.id, slotId))
+		.limit(1);
+	const [slot] = lock
+		? await query.for("update", { of: roleSlots })
+		: await query;
+	return slot ?? null;
+}
+
 /** Edit a speaker slot's speech details. Blank title → "TBA". Any SIGNED-IN
  *  member of the club may (the sheet rule), and it is logged as a
  *  `meeting_edit` with the before and after title and project.
  *  AUTHED (#763, ADR-0026) — it rewrites somebody's speech, and until #763 did
- *  so with no session and no trace. */
+ *  so with no session and no trace.
+ *  The unlocked read below only feeds the session/club gate and early errors:
+ *  the owner and every slot-dependent check are redone from a locked re-read
+ *  inside the transaction (#1529), as `applySpeechLogEdit` does. */
 export const updateSpeakerDetails = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateSpeakerDetailsSchema.parse(input))
 	.handler(async ({ data }) => {
 		const [slot] = await db
-			.select({
-				id: roleSlots.id,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-				clubId: meetings.clubId,
-				meetingId: roleSlots.meetingId,
-				meetingStatus: meetings.status,
-				speechId: roleSlots.speechId,
-				assignedMemberId: roleSlots.assignedMemberId,
-				assignedGuestId: roleSlots.assignedGuestId,
-				personId: members.personId,
-			})
+			.select(SPEAKER_SLOT_COLUMNS)
 			.from(roleSlots)
 			.innerJoin(
 				roleDefinitions,
@@ -368,33 +396,43 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// deliberately: it is the call `public-readers-archive-gate`'s WRITE_GATES
 		// row pins in this file, and it outlives a change to that gate.
 		await assertClubNotArchived(slot.clubId);
-		// By write class (#1135): completed says locked, cancelled says cancelled.
-		// #1057. A cancelled meeting keeps every assignment until restored, and a
-		// blank input here UNLINKS the speech (`editSlotSpeech`), which a restore
-		// cannot bring back — on a page that is read-only, so the holder could not
-		// put it right either.
+		// Early errors only; nothing written depends on this read. The
+		// transaction below asks every one of them again, against the locked row.
 		assertMeetingAccepts(slot.meetingStatus, "plan");
 		if (!slot.isSpeakerRole) {
 			throw new Error("Only speaker roles have speech details.");
 		}
-		// A speech has exactly one owner (#1046): the member's Person, or the
-		// guest holding the slot (#1518). An empty slot has nobody to own it.
-		const owner = speechOwnerOf(slot);
-		if (!owner) {
+		if (!speechOwnerOf(slot)) {
 			throw new Error("Assign a member before adding speech details.");
 		}
 		await db.transaction(async (tx) => {
+			// The meeting lock FIRST, then the slot FOR UPDATE: a concurrent
+			// reassign, release, convert or cancel serializes against this save.
+			const meeting = await lockMeetingForSlotEdit(tx, slot.meetingId);
+			const locked = await readSpeakerSlot(tx, data.slotId, true);
+			if (!locked) throw new Error("Role not found.");
+			// #1057, by write class (#1135): the status of the LOCKED meeting row.
+			assertMeetingAccepts(meeting.status, "plan");
+			if (!locked.isSpeakerRole) {
+				throw new Error("Only speaker roles have speech details.");
+			}
+			// A speech has exactly one owner (#1046): the member's Person, or the
+			// guest holding the slot (#1518), as of this locked read.
+			const owner = speechOwnerOf(locked);
+			if (!owner) {
+				throw new Error("Assign a member before adding speech details.");
+			}
 			await writeSpeakerDetails(tx, {
-				clubId: slot.clubId,
+				clubId: locked.clubId,
 				actorMemberId,
-				meetingId: slot.meetingId,
+				meetingId: locked.meetingId,
 				slotId: data.slotId,
-				currentSpeechId: slot.speechId,
+				currentSpeechId: locked.speechId,
 				write: () =>
 					editSlotSpeech(tx, {
 						slotId: data.slotId,
 						...owner,
-						currentSpeechId: slot.speechId,
+						currentSpeechId: locked.speechId,
 						input: data.speakerDetails,
 					}),
 			});
