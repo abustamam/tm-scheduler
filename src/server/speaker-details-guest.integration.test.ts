@@ -8,7 +8,14 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { meetings, roleDefinitions, roleSlots, speeches } from "#/db/schema";
+import {
+	guests,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+	speeches,
+} from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	cleanup,
@@ -54,6 +61,7 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 	let seed: SeededClub;
 	let slotId: string;
 	let guestId: string;
+	let leakedSpeechId: string | null = null;
 
 	beforeEach(async () => {
 		request = { headers: new Headers() };
@@ -88,6 +96,9 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 
 	afterEach(async () => {
 		sessionUserId = null;
+		if (leakedSpeechId)
+			await testDb.delete(speeches).where(eq(speeches.id, leakedSpeechId));
+		leakedSpeechId = null;
 		await testDb.delete(speeches).where(eq(speeches.guestId, guestId));
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 	});
@@ -177,14 +188,12 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 			expect(await speechRows(speechId)).toHaveLength(0);
 			await release();
 			await deleteGuest();
-			const { guests } = await import("#/db/schema");
 			expect(
 				await testDb.select().from(guests).where(eq(guests.id, guestId)),
 			).toHaveLength(0);
 		});
 
 		it("keeps a member's speech, unscheduled", async () => {
-			const { members } = await import("#/db/schema");
 			const [m] = await testDb
 				.select({ personId: members.personId })
 				.from(members)
@@ -197,12 +206,12 @@ describe.skipIf(!hasTestDb)("updateSpeakerDetails for a guest (#1518)", () => {
 				data: { slotId, speakerDetails: { speechTitle: "Member talk" } },
 			});
 			const speechId = (await slotRow())?.speechId as string;
+			leakedSpeechId = speechId;
 			await clear();
 			expect((await slotRow())?.speechId).toBeNull();
 			const rows = await speechRows(speechId);
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.personId).toBe(m?.personId);
-			await testDb.delete(speeches).where(eq(speeches.id, speechId));
 		});
 
 		it("delete-guest still refuses a guest who owns a slot-less speech", async () => {

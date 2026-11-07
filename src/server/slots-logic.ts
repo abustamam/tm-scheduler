@@ -1,7 +1,17 @@
 // Speaker-slot management DB logic, split out from `slots.ts` (a createServerFn
 // module the guard test forbids from exporting db-touching functions).
 // Integration-testable by mocking `#/db`.
-import { and, eq, gt, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import {
+	and,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	notExists,
+	or,
+	sql,
+} from "drizzle-orm";
 import { db } from "#/db";
 import {
 	meetings,
@@ -2552,11 +2562,17 @@ export async function writeSpeakerDetails(
 
 /**
  * After a clear unlinked `speechId` (#1533): delete it when a GUEST owns it
- * (`guest_id` set, `person_id` null). `role_slots_speech_unique` allows one slot
- * per speech, so after the caller's unlink nothing references it and no
- * reference check is needed. Without this the cleared speech shows nowhere yet
- * blocks `applyDeleteGuest`. A member's speech is kept. The owner condition is
- * in the DELETE's WHERE, so it holds in the same statement.
+ * (`guest_id` set; the `speeches_single_owner` check constraint makes
+ * `person_id` null implied) and no slot references it. Without this the
+ * cleared speech shows nowhere yet blocks `applyDeleteGuest`. A member's speech
+ * is kept.
+ *
+ * `speechId` may be STALE: `updateSpeakerDetails` reads it before its
+ * transaction, so the speech can have moved to another slot since. The unlink
+ * only cleared THIS slot, and `role_slots.speech_id` is ON DELETE SET NULL, so
+ * deleting a speech another slot still holds would silently blank that slot.
+ * The NOT EXISTS reference check is therefore in the DELETE's WHERE, so the
+ * owner and reference conditions hold in the same statement.
  */
 async function deleteOrphanedGuestSpeech(
 	conn: DbOrTx,
@@ -2568,7 +2584,12 @@ async function deleteOrphanedGuestSpeech(
 			and(
 				eq(speeches.id, speechId),
 				isNotNull(speeches.guestId),
-				isNull(speeches.personId),
+				notExists(
+					conn
+						.select({ one: sql`1` })
+						.from(roleSlots)
+						.where(eq(roleSlots.speechId, speeches.id)),
+				),
 			),
 		);
 }

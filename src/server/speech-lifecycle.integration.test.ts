@@ -565,6 +565,43 @@ describe.skipIf(!hasTestDb)("speech pointer lifecycle (ADR-0009)", () => {
 			).toHaveLength(0);
 		});
 
+		it("a clear with a stale currentSpeechId keeps a guest speech another slot still holds (#1533)", async () => {
+			const { editSlotSpeech } = await import("./slots-logic");
+			const [def] = await testDb
+				.select({ id: roleSlots.roleDefinitionId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, speakerSlotId));
+			const [other] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: def!.id,
+					status: "claimed",
+					assignedGuestId: guestId,
+				})
+				.returning({ id: roleSlots.id });
+			const [speech] = await testDb
+				.insert(speeches)
+				.values({ guestId, personId: null, title: "Moved talk" })
+				.returning({ id: speeches.id });
+			await testDb
+				.update(roleSlots)
+				.set({ speechId: speech!.id })
+				.where(eq(roleSlots.id, other!.id));
+
+			// Slot A (speakerSlotId) holds no speech: the caller read a stale id.
+			await editSlotSpeech(testDb, {
+				slotId: speakerSlotId,
+				guestId,
+				currentSpeechId: speech!.id,
+				input: { speechTitle: "" },
+			});
+			expect(
+				await testDb.select().from(speeches).where(eq(speeches.id, speech!.id)),
+			).toHaveLength(1);
+			expect(await speechIdOf(other!.id)).toBe(speech!.id);
+		});
+
 		it("never shows up in a member's speech log, milestones or Pathways", async () => {
 			// A past, completed meeting so milestones could count it if it leaked.
 			await testDb
