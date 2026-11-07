@@ -171,10 +171,10 @@ export function GuestInviteTemplateEditor({
 				<Tabs value={kind} onValueChange={(v) => setKind(v as InviteKind)}>
 					<TabsList
 						aria-label="Guest invite drafts"
-						className="grid h-auto w-full grid-cols-2 md:grid-cols-4"
+						className="grid w-full grid-cols-2 group-data-[orientation=horizontal]/tabs:h-auto md:grid-cols-4"
 					>
 						{INVITE_KINDS.map((k) => (
-							<TabsTrigger key={k} value={k} className="min-h-11 md:min-h-9">
+							<TabsTrigger key={k} value={k} className="h-11 md:h-9">
 								{INVITE_KIND_LABELS[k]}
 							</TabsTrigger>
 						))}
