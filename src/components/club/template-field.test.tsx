@@ -6,6 +6,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GUEST_INVITE_VARIABLES } from "#/lib/guest-invite-template";
 import {
 	PROMO_VARIABLE_GROUPS,
 	PROMO_VARIABLES,
@@ -487,5 +488,22 @@ describe("paste", () => {
 		ta.setSelectionRange(3, 3);
 		await user.paste("x");
 		expect(ta.value).toMatch(/^(x\{Date\}|\{Date\}x)$/);
+	});
+});
+
+describe("the variables prop (#1547)", () => {
+	// protects=acceptance 9: @ offers exactly the ten guest variables, and the pill inserts the guest label;
+	// fails_when=the menu still lists Promote's fourteen, or a guest-only key has no row;
+	// no_claim=popover placement.
+	it("@ lists exactly the registry it is given", async () => {
+		const { user, ta } = setup({ variables: GUEST_INVITE_VARIABLES });
+		await user.type(ta, "@");
+		const lb = screen.getByRole("listbox");
+		expect(within(lb).getAllByRole("option")).toHaveLength(10);
+		expect(within(lb).getByText("Guest first name")).toBeTruthy();
+		expect(within(lb).queryByText("Theme")).toBeNull();
+		expect(within(lb).getAllByRole("group")).toHaveLength(4);
+		await user.click(within(lb).getByText("Last visit"));
+		expect(ta.value).toBe("{Last visit}");
 	});
 });

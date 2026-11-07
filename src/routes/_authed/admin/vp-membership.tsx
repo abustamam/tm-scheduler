@@ -59,11 +59,18 @@ import {
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
 import { inviteKindFor, isInvitableStage } from "#/lib/guest-invite";
+import {
+	customTemplateFor,
+	type GuestInviteTemplates,
+	guestInviteValues,
+} from "#/lib/guest-invite-template";
 import { type BroughtCount, guestKindCaption } from "#/lib/guest-profile";
 import { mailtoHref } from "#/lib/mailto";
 import { navPageTitle } from "#/lib/page-title";
+import { greetingName } from "#/lib/person-name";
 import { cn } from "#/lib/utils";
 import { getClubByIdentifier } from "#/server/clubs";
+import { getGuestInviteTemplates } from "#/server/guest-invite-template";
 import {
 	addGuestToClub,
 	convertGuestToMember,
@@ -101,23 +108,35 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 				clubName: "",
 				clubSlug: null,
 				inviteContext: NO_INVITE_CONTEXT,
+				guestInviteTemplates: NO_INVITE_TEMPLATES,
 				profiles: NO_PROFILES,
 				otherAdminClubs: NO_OTHER_CLUBS,
 				readOnly: false,
 			};
 		}
-		const [guests, resolved, inviteContext, profiles, otherAdminClubs] =
-			await Promise.all([
-				getGuestPipeline({ data: club.clubId }),
-				getClubByIdentifier({ data: club.clubId }),
-				getGuestInviteContext({ data: club.clubId }),
-				// Captions and counts are decoration on this page: a failed read
-				// degrades to none of them rather than taking the pipeline down.
-				getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
-				// The viewer's OTHER clubs (#1127): also decoration, and failing closed
-				// (no cross-club menu items) is the safe way for it to fail.
-				getOtherAdminClubs({ data: club.clubId }).catch(() => NO_OTHER_CLUBS),
-			]);
+		const [
+			guests,
+			resolved,
+			inviteContext,
+			guestInviteTemplates,
+			profiles,
+			otherAdminClubs,
+		] = await Promise.all([
+			getGuestPipeline({ data: club.clubId }),
+			getClubByIdentifier({ data: club.clubId }),
+			getGuestInviteContext({ data: club.clubId }),
+			// The club's own invite wording (#1547): a failed read drafts with the
+			// built-in text rather than taking the pipeline down.
+			getGuestInviteTemplates({ data: club.clubId }).catch(
+				() => NO_INVITE_TEMPLATES,
+			),
+			// Captions and counts are decoration on this page: a failed read
+			// degrades to none of them rather than taking the pipeline down.
+			getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
+			// The viewer's OTHER clubs (#1127): also decoration, and failing closed
+			// (no cross-club menu items) is the safe way for it to fail.
+			getOtherAdminClubs({ data: club.clubId }).catch(() => NO_OTHER_CLUBS),
+		]);
 		return {
 			guests,
 			profiles,
@@ -126,6 +145,7 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 			clubName: club.name,
 			clubSlug: resolved?.slug ?? null,
 			inviteContext,
+			guestInviteTemplates,
 			// A READ-ONLY impersonation passes the admin-view read that loads this
 			// page but not the admin write `recordGuestInvite` runs, so its invite
 			// links would open a draft and then fail to record (#899).
@@ -144,10 +164,17 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 	}),
 });
 
-const NO_INVITE_CONTEXT: NextMeetingSummary = {
+/** The next meeting, plus its video call link for a template that opts into
+ *  `{joinLink}` (#1547). Optional: a deploy that predates the field reads as none. */
+type InviteContext = NextMeetingSummary & { joinLink?: string | null };
+
+const NO_INVITE_CONTEXT: InviteContext = {
 	timezone: "UTC",
 	nextMeeting: null,
+	joinLink: null,
 };
+
+const NO_INVITE_TEMPLATES: GuestInviteTemplates = {};
 
 const NO_PROFILES: { rows: GuestProfileRow[]; brought: BroughtCount[] } = {
 	rows: [],
@@ -209,6 +236,7 @@ function VpMembership() {
 		clubName,
 		clubSlug,
 		inviteContext,
+		guestInviteTemplates,
 		readOnly,
 		otherAdminClubs,
 	} = Route.useLoaderData();
@@ -396,6 +424,8 @@ function VpMembership() {
 											readOnly,
 											nextMeeting: next,
 											shareUrl: inviteShareUrl,
+											templates: guestInviteTemplates ?? NO_INVITE_TEMPLATES,
+											joinLink: inviteContext.joinLink ?? null,
 											onRecord: recordInvite,
 										}}
 									/>
@@ -508,6 +538,10 @@ interface InviteProps {
 	readOnly: boolean;
 	nextMeeting: NextMeetingSummary["nextMeeting"];
 	shareUrl: string;
+	/** The club's own invite wording; `{}` means the built-in text (#1547). */
+	templates: GuestInviteTemplates;
+	/** The next meeting's video call link, for `{joinLink}`; null when unset. */
+	joinLink: string | null;
 	onRecord: (guestId: string, meetingId: string) => void;
 }
 
@@ -597,6 +631,27 @@ function GuestInvite({
 		);
 	}
 	const meetingId = next.id;
+	const kind = inviteKindFor(guest);
+	const body = customTemplateFor(invite.templates, kind, "body");
+	const subject = customTemplateFor(invite.templates, kind, "subject");
+	// A field the club has not edited stays on the built-in builder, so a club
+	// that never opened the editor sees no change (#1547).
+	const custom =
+		body === null && subject === null
+			? undefined
+			: {
+					body,
+					subject,
+					values: guestInviteValues({
+						guestName: greetingName(guest),
+						clubName: invite.clubName,
+						meeting: next,
+						shareUrl: invite.shareUrl,
+						joinLink: invite.joinLink,
+						guest,
+						timeZone: timezone,
+					}),
+				};
 	return (
 		<fieldset
 			aria-label={label}
@@ -606,7 +661,7 @@ function GuestInvite({
 			<span className="text-xs font-semibold">{label}</span>
 			<NudgeButtons
 				mode="invite"
-				inviteKind={inviteKindFor(guest)}
+				inviteKind={kind}
 				name={guest.name}
 				preferredName={guest.preferredName}
 				phone={phone}
@@ -616,6 +671,7 @@ function GuestInvite({
 				location={next.location}
 				clubName={invite.clubName}
 				shareUrl={invite.shareUrl}
+				custom={custom}
 				onContacted={() => invite.onRecord(guest.id, meetingId)}
 			/>
 		</fieldset>

@@ -3,10 +3,9 @@
 // No DOM here, so every rule is a plain unit test.
 
 import {
-	isPromoPlaceholder,
 	normalizePromoName,
 	PROMO_VARIABLES,
-	type PromoVariable,
+	type TemplateVariable,
 	toStoredText,
 } from "#/lib/promo-template";
 
@@ -19,16 +18,19 @@ export interface FieldToken {
 }
 
 /** Every `{name}` token in `text`, known or not, in order. */
-export function findTokens(text: string): FieldToken[] {
+export function findTokens(
+	text: string,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
+): FieldToken[] {
+	const isKey = (name: string) => variables.some((v) => v.key === name);
 	const out: FieldToken[] = [];
 	for (const m of text.matchAll(/\{([^{}\n]+)\}/g)) {
 		const whole = m[0];
 		const inner = m[1];
 		const start = m.index ?? 0;
-		const stored = toStoredText(whole);
+		const stored = toStoredText(whole, variables);
 		const known =
-			isPromoPlaceholder(inner) ||
-			(stored !== whole && isPromoPlaceholder(stored.slice(1, -1)));
+			isKey(inner) || (stored !== whole && isKey(stored.slice(1, -1)));
 		out.push({ start, end: start + whole.length, inner, known });
 	}
 	return out;
@@ -71,11 +73,14 @@ export function menuStateFromInput(
 }
 
 /** The variables a filter keeps, in table order. */
-export function filterVariables(filter: string): PromoVariable[] {
+export function filterVariables<V extends TemplateVariable = TemplateVariable>(
+	filter: string,
+	variables: readonly V[] = PROMO_VARIABLES as unknown as readonly V[],
+): V[] {
 	const norm = normalizePromoName(filter);
 	const lower = filter.trim().toLowerCase();
-	if (!norm && !lower) return [...PROMO_VARIABLES];
-	return PROMO_VARIABLES.filter(
+	if (!norm && !lower) return [...variables];
+	return variables.filter(
 		(v) =>
 			(norm && normalizePromoName(v.key).startsWith(norm)) ||
 			(lower &&
@@ -126,9 +131,10 @@ export function caretRule(
 	selStart: number,
 	selEnd: number,
 	key: string,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
 ): CaretEdit | null {
 	if (selStart !== selEnd) return null;
-	const tokens = findTokens(text).filter((t) => t.known);
+	const tokens = findTokens(text, variables).filter((t) => t.known);
 	if (key === "Backspace") {
 		const t = tokens.find((x) => x.end === selStart);
 		if (t) return remove(text, t);
@@ -155,8 +161,12 @@ function remove(text: string, t: FieldToken): CaretEdit {
 
 /** Where a collapsed caret strictly inside a known token should sit instead
  *  (the nearer edge), or null when it is not strictly inside one. */
-export function snapCaret(text: string, pos: number): number | null {
-	const t = findTokens(text).find(
+export function snapCaret(
+	text: string,
+	pos: number,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
+): number | null {
+	const t = findTokens(text, variables).find(
 		(x) => x.known && pos > x.start && pos < x.end,
 	);
 	if (!t) return null;

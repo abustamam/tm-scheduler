@@ -500,6 +500,11 @@ export const clubs = pgTable(
 		// (`resolvePromoTemplate`) rather than trusted. The app only DRAFTS: no
 		// blast is ever sent from GavelUp's servers.
 		promoTemplate: jsonb("promo_template"),
+		// The club's own wording for the four guest invite drafts (#1547), keyed by
+		// `InviteKind`, each with an optional `body` and `subject`. NULL = every draft
+		// uses the built-in text. Parsed on every read (`resolveGuestInviteTemplates`),
+		// never trusted; a field saved as its default or blank is stored as unset.
+		guestInviteTemplates: jsonb("guest_invite_templates"),
 		// Soft-archive (ADR-0016 / #186). NULL = active; a set timestamp = archived.
 		// Reversible: unarchive clears it. Archiving retains all club data untouched
 		// and blocks every access path except the superadmin console. This comment used

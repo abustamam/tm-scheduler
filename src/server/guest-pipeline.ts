@@ -8,6 +8,7 @@ import {
 	requireClubRole,
 	requireUser,
 } from "./guards";
+import { loadNextMeetingJoinLink } from "./guest-invite-template-logic";
 import type { GuestLinkExpected } from "./guest-pipeline-logic";
 import {
 	applyAddGuestToClub,
@@ -116,15 +117,24 @@ export const getOtherAdminClubs = createServerFn({ method: "GET" })
 
 /**
  * What the VPM page needs to draft an invite (#899): the club's timezone and its
- * next non-cancelled meeting, slim — never `join_url` (see
- * `loadNextMeetingSummary`). AUTHED — the same gate as `getGuestPipeline`.
+ * next non-cancelled meeting, slim, plus that meeting's video call link for a
+ * template that opts into `{joinLink}` (#1547). The link is NOT on
+ * `loadNextMeetingSummary`; it is read here, behind the admin view. AUTHED — the
+ * same gate as `getGuestPipeline`.
  */
 export const getGuestInviteContext = createServerFn({ method: "GET" })
 	.validator((clubId: unknown) => uuid.parse(clubId))
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		return loadNextMeetingSummary(clubId, new Date());
+		const now = new Date();
+		const [summary, joinLink] = await Promise.all([
+			loadNextMeetingSummary(clubId, now),
+			// A query of its own: the summary is shared with slides and reporting and
+			// carries no link. Reaching it here is gated by the admin view above.
+			loadNextMeetingJoinLink(clubId, now),
+		]);
+		return { ...summary, joinLink };
 	});
 
 /**

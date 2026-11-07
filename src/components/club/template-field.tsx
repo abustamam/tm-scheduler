@@ -16,10 +16,8 @@ import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
 import {
 	PROMO_VARIABLES,
-	type PromoPlaceholder,
-	type PromoValues,
-	promoVariable,
 	suggestPlaceholder,
+	type TemplateVariable,
 	toEditorText,
 	toStoredText,
 	unknownPlaceholders,
@@ -76,14 +74,16 @@ function applyEdit(
 
 function Backdrop({
 	value,
+	variables,
 	innerRef,
 }: {
 	value: string;
+	variables: readonly TemplateVariable[];
 	innerRef: React.Ref<HTMLDivElement>;
 }) {
 	const parts: React.ReactNode[] = [];
 	let pos = 0;
-	for (const t of findTokens(value)) {
+	for (const t of findTokens(value, variables)) {
 		if (t.start > pos) parts.push(value.slice(pos, t.start));
 		parts.push(
 			<span key={t.start} className={t.known ? PILL_CLASS : UNKNOWN_CLASS}>
@@ -118,6 +118,7 @@ export function TemplateField({
 	defaultValue,
 	values,
 	hint,
+	variables = PROMO_VARIABLES,
 }: {
 	id: string;
 	label: string;
@@ -133,8 +134,10 @@ export function TemplateField({
 	/** Editor form of the default, for "Use default". */
 	defaultValue: string;
 	/** This meeting's values for the menu's value column; null while unknown. */
-	values: PromoValues | null;
+	values: Readonly<Record<string, string>> | null;
 	hint?: string;
+	/** The variables this field offers. Defaults to Promote's. */
+	variables?: readonly TemplateVariable[];
 }) {
 	const uid = useId();
 	const listboxId = `${id}-listbox-${uid.replace(/:/g, "")}`;
@@ -165,9 +168,9 @@ export function TemplateField({
 		isSuppressed(value, caret, suppression);
 	const triggerMenu = trigger && !suppressed ? trigger : null;
 	const options = manualOpen
-		? [...PROMO_VARIABLES]
+		? [...variables]
 		: triggerMenu
-			? filterVariables(triggerMenu.filter)
+			? filterVariables(triggerMenu.filter, variables)
 			: [];
 	const open = options.length > 0;
 	const active = options[Math.min(activeIdx, options.length - 1)] ?? null;
@@ -192,7 +195,7 @@ export function TemplateField({
 
 	// The opening announcement is cleared on close, so reopening changes the
 	// live region's text again and is read out. A just-set "Inserted X" stays.
-	const openingText = `${PROMO_VARIABLES.length} variables, use up and down then Enter`;
+	const openingText = `${variables.length} variables, use up and down then Enter`;
 	useEffect(() => {
 		if (open) setAnnounce(openingText);
 		else setAnnounce((a) => (a === openingText ? "" : a));
@@ -238,16 +241,17 @@ export function TemplateField({
 	function syncCaret(ta: HTMLTextAreaElement) {
 		if (composing) return;
 		if (ta.selectionStart === ta.selectionEnd) {
-			const snapped = snapCaret(ta.value, ta.selectionStart);
+			const snapped = snapCaret(ta.value, ta.selectionStart, variables);
 			if (snapped !== null) ta.setSelectionRange(snapped, snapped);
 		}
 		remember(ta);
 	}
 
-	function pick(key: PromoPlaceholder) {
+	function pick(key: string) {
 		const ta = taRef.current;
 		if (!ta) return;
-		const text = `{${promoVariable(key).label}}`;
+		const label = variables.find((v) => v.key === key)?.label ?? key;
+		const text = `{${label}}`;
 		let start: number;
 		let end: number;
 		if (manualOpen) {
@@ -258,7 +262,7 @@ export function TemplateField({
 		} else return;
 		setManualOpen(false);
 		applyEdit(ta, start, end, text);
-		setAnnounce(`Inserted ${promoVariable(key).label}`);
+		setAnnounce(`Inserted ${label}`);
 	}
 
 	function openManually() {
@@ -316,7 +320,13 @@ export function TemplateField({
 		}
 		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		const ta = e.currentTarget;
-		const edit = caretRule(ta.value, ta.selectionStart, ta.selectionEnd, e.key);
+		const edit = caretRule(
+			ta.value,
+			ta.selectionStart,
+			ta.selectionEnd,
+			e.key,
+			variables,
+		);
 		if (!edit) return;
 		e.preventDefault();
 		if (edit.text === ta.value) {
@@ -337,13 +347,13 @@ export function TemplateField({
 		if (!raw) return;
 		e.preventDefault();
 		const ta = e.currentTarget;
-		let segment = toEditorText(raw);
+		let segment = toEditorText(raw, variables);
 		if (!multiline) segment = flattenNewlines(segment);
 		let start = ta.selectionStart;
 		let end = ta.selectionEnd;
 		if (start === end) {
 			// A paste never lands inside a pill, which would break it.
-			const snapped = snapCaret(ta.value, start);
+			const snapped = snapCaret(ta.value, start, variables);
 			if (snapped !== null) start = end = snapped;
 		}
 		applyEdit(ta, start, end, segment);
@@ -361,16 +371,16 @@ export function TemplateField({
 	}
 
 	// --- counters and typo help ---------------------------------------------
-	const stored = toStoredText(value);
+	const stored = toStoredText(value, variables);
 	const storedLines = stored
 		.split(/\r?\n/)
 		.map((l) => l.trim())
 		.filter(Boolean);
-	const typos = unknownPlaceholders(stored).map((name) => ({
+	const typos = unknownPlaceholders(stored, variables).map((name) => ({
 		name,
-		suggestion: suggestPlaceholder(name),
+		suggestion: suggestPlaceholder(name, variables),
 	}));
-	const dirty = stored !== toStoredText(defaultValue);
+	const dirty = stored !== toStoredText(defaultValue, variables);
 	const longest = Math.max(0, ...storedLines.map((l) => l.length));
 	const over = bullets
 		? storedLines.length > bullets.max || longest > bullets.perLine
@@ -424,7 +434,11 @@ export function TemplateField({
 					data-slot="template-field"
 					className="relative rounded-md border border-input shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30"
 				>
-					<Backdrop value={value} innerRef={backdropRef} />
+					<Backdrop
+						value={value}
+						variables={variables}
+						innerRef={backdropRef}
+					/>
 					<Textarea
 						id={id}
 						ref={taRef}
@@ -461,6 +475,7 @@ export function TemplateField({
 							setManualOpen(false);
 							const normal = toEditorText(
 								multiline ? value : flattenNewlines(value),
+								variables,
 							);
 							if (normal !== value) onChange(normal);
 						}}
