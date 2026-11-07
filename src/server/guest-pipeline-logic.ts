@@ -15,6 +15,7 @@ import {
 	isNotNull,
 	isNull,
 	lt,
+	max,
 	min,
 	ne,
 	notExists,
@@ -1065,6 +1066,18 @@ export interface PipelineGuestRow {
 	conversionUndoable: boolean;
 	/** Earliest visited meeting date (derived — see `loadGuestPipeline`); null if none. */
 	firstVisitAt: Date | null;
+	/**
+	 * Visits counted on the INSTANT rule (a meeting counts only once it has
+	 * started), unlike `visitCount`, which counts today's meeting from club-local
+	 * midnight. Read only by the invite draft, whose target meeting is "next"
+	 * until it starts: tonight's role slot is not a visit yet.
+	 */
+	inviteVisitCount: number;
+	/**
+	 * Instant rule, see `inviteVisitCount`: true when the guest's latest visit is
+	 * the club's most recent started, non-cancelled meeting. False with no visits.
+	 */
+	lastVisitWasLatestMeeting: boolean;
 	/** Meetings visited (derived, never a stored counter). */
 	visitCount: number;
 	/**
@@ -1145,12 +1158,33 @@ export interface PipelineGuestRow {
  * row, so the "holding a slot never sets attendance" rule (#218,
  * `minutes-logic.ts`) is untouched.
  */
-function guestVisits(conn: DbOrTx, clubId: string, timeZone: string) {
-	const happened = and(
+/**
+ * "Has happened" for a meeting. Default: club-local DATE rule (today counts from
+ * midnight). With `startedBefore`: the INSTANT rule, `scheduledAt < startedBefore`,
+ * the one `loadNextMeetingSummary` uses, so the invite's recency never counts
+ * the meeting it is inviting to.
+ */
+function happenedMeetingSql(
+	clubId: string,
+	timeZone: string,
+	startedBefore?: Date,
+) {
+	return and(
 		eq(meetings.clubId, clubId),
 		ne(meetings.status, "cancelled"),
-		sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
+		startedBefore
+			? lt(meetings.scheduledAt, startedBefore)
+			: sql`(${meetings.scheduledAt} at time zone ${timeZone}::text)::date <= (now() at time zone ${timeZone}::text)::date`,
 	);
+}
+
+function guestVisits(
+	conn: DbOrTx,
+	clubId: string,
+	timeZone: string,
+	startedBefore?: Date,
+) {
+	const happened = happenedMeetingSql(clubId, timeZone, startedBefore);
 	const attended = conn
 		.select({
 			guestId: meetingAttendance.guestId,
@@ -1197,6 +1231,33 @@ export interface GuestVisitSummary {
 }
 
 /**
+ * Per-guest visit count and last visit on the INSTANT rule, plus the club's most
+ * recent started meeting, for the invite draft's recency only (see
+ * `PipelineGuestRow.inviteVisitCount`). `now` is threaded in so tests can pin it.
+ */
+async function loadInviteRecency(clubId: string, timeZone: string, now: Date) {
+	const visits = guestVisits(db, clubId, timeZone, now).as("invite_visits");
+	const [byGuest, [latest]] = await Promise.all([
+		db
+			.select({
+				guestId: visits.guestId,
+				visitCount: count(),
+				lastVisitAt: max(visits.scheduledAt),
+			})
+			.from(visits)
+			.groupBy(visits.guestId),
+		db
+			.select({ at: max(meetings.scheduledAt) })
+			.from(meetings)
+			.where(happenedMeetingSql(clubId, timeZone, now)),
+	]);
+	return {
+		byGuest: new Map(byGuest.map((v) => [v.guestId, v])),
+		latestStartedAt: latest?.at ? new Date(latest.at) : null,
+	};
+}
+
+/**
  * Every guest of a club's visit count and first visit, from {@link guestVisits}.
  * THE statement of "how many times has this guest visited": the pipeline board
  * reads it, and so does the club data export's `guests.csv`, so the two can
@@ -1232,6 +1293,8 @@ export async function loadGuestPipeline(
 	 * that are not a viewer's board (the MCP reader, an export) pass none.
 	 */
 	otherAdminClubIds: string[] = [],
+	/** The instant the invite recency is judged at; tests pin it. */
+	now: Date = new Date(),
 ): Promise<PipelineGuestRow[]> {
 	// Both club-level facts in ONE query. They live on the same `clubs` row, and
 	// the timezone has to resolve before the visits subquery can be built, so a
@@ -1239,117 +1302,122 @@ export async function loadGuestPipeline(
 	// not need to exist at all.
 	const { timeZone: tz, countryCode: cc } =
 		await loadClubPipelineSettings(clubId);
-	const [rows, visitRows, slotRows, linkRows, conversionRows, inviteRows] =
-		await Promise.all([
-			db
-				.select({
-					id: guests.id,
-					name: guests.name,
-					preferredName: guests.preferredName,
-					// A guest's contact lives on their Person (#1125), and so does the
-					// answer to "may this club change it".
-					email: people.email,
-					bookEmail: guests.bookEmail,
-					phone: people.phone,
-					contactRefusal: guestContactRefusalSql(clubId),
-					stage: guests.stage,
-					convertedMembershipId: guests.convertedMembershipId,
-					createdAt: guests.createdAt,
-					personId: guests.personId,
-					// Another club's guest row or membership on this Person (#1127). A
-					// boolean only; nothing about that club is selected.
-					sharedWithOtherClub: sql<boolean>`${personHeldElsewhereSql(sql`${guests.personId}`, sql`${clubId}::uuid`)}`,
-				})
-				.from(guests)
-				.innerJoin(people, eq(people.id, guests.personId))
-				.where(eq(guests.clubId, clubId))
-				.orderBy(asc(guests.name)),
-			loadGuestVisitSummaries(db, clubId, tz),
-			db
-				.select({
-					guestId: roleSlots.assignedGuestId,
-					heldSlotCount: count(),
-				})
-				.from(roleSlots)
-				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-				.where(
-					and(
-						eq(meetings.clubId, clubId),
-						isNotNull(roleSlots.assignedGuestId),
-					),
-				)
-				.groupBy(roleSlots.assignedGuestId),
-			// Which guests' pointers came from a LINK (#635) rather than a real
-			// convert. Joined to `guests` on BOTH the guest id and the CURRENT
-			// membership, so a stale record from a link that was since undone and
-			// replaced by a real convert does not read as reversible.
-			db
-				.select({ guestId: guests.id })
-				.from(activityLog)
-				.innerJoin(
-					guests,
-					// Both comparisons cast explicitly. `activity_log.target_id` is TEXT
-					// while `guests.id` / `converted_membership_id` are UUID, and Postgres
-					// has no text=uuid operator — the uncast version was a 500 on every
-					// board load, not a wrong answer.
-					and(
-						sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
-						sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
-					),
-				)
-				.where(
-					and(
-						eq(activityLog.clubId, clubId),
-						eq(activityLog.action, "member_merge"),
-					),
+	const [
+		rows,
+		visitRows,
+		slotRows,
+		linkRows,
+		conversionRows,
+		inviteRows,
+		recency,
+	] = await Promise.all([
+		db
+			.select({
+				id: guests.id,
+				name: guests.name,
+				preferredName: guests.preferredName,
+				// A guest's contact lives on their Person (#1125), and so does the
+				// answer to "may this club change it".
+				email: people.email,
+				bookEmail: guests.bookEmail,
+				phone: people.phone,
+				contactRefusal: guestContactRefusalSql(clubId),
+				stage: guests.stage,
+				convertedMembershipId: guests.convertedMembershipId,
+				createdAt: guests.createdAt,
+				personId: guests.personId,
+				// Another club's guest row or membership on this Person (#1127). A
+				// boolean only; nothing about that club is selected.
+				sharedWithOtherClub: sql<boolean>`${personHeldElsewhereSql(sql`${guests.personId}`, sql`${clubId}::uuid`)}`,
+			})
+			.from(guests)
+			.innerJoin(people, eq(people.id, guests.personId))
+			.where(eq(guests.clubId, clubId))
+			.orderBy(asc(guests.name)),
+		loadGuestVisitSummaries(db, clubId, tz),
+		db
+			.select({
+				guestId: roleSlots.assignedGuestId,
+				heldSlotCount: count(),
+			})
+			.from(roleSlots)
+			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+			.where(
+				and(eq(meetings.clubId, clubId), isNotNull(roleSlots.assignedGuestId)),
+			)
+			.groupBy(roleSlots.assignedGuestId),
+		// Which guests' pointers came from a LINK (#635) rather than a real
+		// convert. Joined to `guests` on BOTH the guest id and the CURRENT
+		// membership, so a stale record from a link that was since undone and
+		// replaced by a real convert does not read as reversible.
+		db
+			.select({ guestId: guests.id })
+			.from(activityLog)
+			.innerJoin(
+				guests,
+				// Both comparisons cast explicitly. `activity_log.target_id` is TEXT
+				// while `guests.id` / `converted_membership_id` are UUID, and Postgres
+				// has no text=uuid operator — the uncast version was a 500 on every
+				// board load, not a wrong answer.
+				and(
+					sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
+					sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
 				),
-			// Which guests' CONVERSIONS carry a replayable record (#618). Same join
-			// shape as the links above and for the same reason, but the predicate is
-			// applied in JS rather than in SQL: `readConversionRecord` is what
-			// `applyUndoGuestConversion` refuses on, and a second definition of
-			// "replayable" expressed in `jsonb ?` operators would drift from it. The
-			// board offering an Undo the server then refuses is precisely the bug the
-			// link comment above records.
-			db
-				.select({ guestId: guests.id, detail: activityLog.detail })
-				.from(activityLog)
-				.innerJoin(
-					guests,
-					and(
-						sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
-						sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
-					),
-				)
-				.where(
-					and(
-						eq(activityLog.clubId, clubId),
-						eq(activityLog.action, "member_add"),
-					),
+			)
+			.where(
+				and(
+					eq(activityLog.clubId, clubId),
+					eq(activityLog.action, "member_merge"),
 				),
-			// Invite drafts (#899). An invite to a meeting cancelled afterwards stays
-			// in the table but is not shown, so the filter is here rather than a
-			// delete on cancel. Latest first, so the first row per guest is
-			// `lastInvite`; one row per (guest, meeting) by the unique index, so the
-			// row count per guest IS the distinct-meeting count.
-			db
-				.select({
-					guestId: guestInvites.guestId,
-					meetingId: guestInvites.meetingId,
-					meetingAt: meetings.scheduledAt,
-					invitedByName: members.name,
-				})
-				.from(guestInvites)
-				.innerJoin(meetings, eq(meetings.id, guestInvites.meetingId))
-				.leftJoin(members, eq(members.id, guestInvites.invitedByMemberId))
-				.where(
-					and(
-						eq(guestInvites.clubId, clubId),
-						eq(meetings.clubId, clubId),
-						ne(meetings.status, "cancelled"),
-					),
-				)
-				.orderBy(desc(guestInvites.invitedAt), desc(guestInvites.id)),
-		]);
+			),
+		// Which guests' CONVERSIONS carry a replayable record (#618). Same join
+		// shape as the links above and for the same reason, but the predicate is
+		// applied in JS rather than in SQL: `readConversionRecord` is what
+		// `applyUndoGuestConversion` refuses on, and a second definition of
+		// "replayable" expressed in `jsonb ?` operators would drift from it. The
+		// board offering an Undo the server then refuses is precisely the bug the
+		// link comment above records.
+		db
+			.select({ guestId: guests.id, detail: activityLog.detail })
+			.from(activityLog)
+			.innerJoin(
+				guests,
+				and(
+					sql`${activityLog.detail}->>'fromGuestId' = ${guests.id}::text`,
+					sql`${activityLog.targetId} = ${guests.convertedMembershipId}::text`,
+				),
+			)
+			.where(
+				and(
+					eq(activityLog.clubId, clubId),
+					eq(activityLog.action, "member_add"),
+				),
+			),
+		// Invite drafts (#899). An invite to a meeting cancelled afterwards stays
+		// in the table but is not shown, so the filter is here rather than a
+		// delete on cancel. Latest first, so the first row per guest is
+		// `lastInvite`; one row per (guest, meeting) by the unique index, so the
+		// row count per guest IS the distinct-meeting count.
+		db
+			.select({
+				guestId: guestInvites.guestId,
+				meetingId: guestInvites.meetingId,
+				meetingAt: meetings.scheduledAt,
+				invitedByName: members.name,
+			})
+			.from(guestInvites)
+			.innerJoin(meetings, eq(meetings.id, guestInvites.meetingId))
+			.leftJoin(members, eq(members.id, guestInvites.invitedByMemberId))
+			.where(
+				and(
+					eq(guestInvites.clubId, clubId),
+					eq(meetings.clubId, clubId),
+					ne(meetings.status, "cancelled"),
+				),
+			)
+			.orderBy(desc(guestInvites.invitedAt), desc(guestInvites.id)),
+		loadInviteRecency(clubId, tz, now),
+	]);
 
 	// Which of the viewer's other admin clubs already hold each Person (#1127):
 	// an unconverted guest row or an active membership there means "Add to" is
@@ -1406,6 +1474,10 @@ export async function loadGuestPipeline(
 
 	return rows.map((r) => {
 		const v = visitsByGuest.get(r.id);
+		const inv = recency.byGuest.get(r.id);
+		// A guest with an instant-rule visit implies a started meeting exists, so
+		// `latestStartedAt` is non-null whenever `inv` is.
+		const lastInviteVisit = inv?.lastVisitAt ? new Date(inv.lastVisitAt) : null;
 		return {
 			id: r.id,
 			name: r.name,
@@ -1425,6 +1497,11 @@ export async function loadGuestPipeline(
 			conversionUndoable: undoable.has(r.id),
 			visitCount: Number(v?.visitCount ?? 0),
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
+			inviteVisitCount: Number(inv?.visitCount ?? 0),
+			lastVisitWasLatestMeeting:
+				lastInviteVisit !== null &&
+				recency.latestStartedAt !== null &&
+				lastInviteVisit >= recency.latestStartedAt,
 			heldSlotCount: Number(slotsByGuest.get(r.id)?.heldSlotCount ?? 0),
 			lastInvite: invitesByGuest.get(r.id)?.last ?? null,
 			inviteCount: invitesByGuest.get(r.id)?.meetings.size ?? 0,

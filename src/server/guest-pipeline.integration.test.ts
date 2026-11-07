@@ -246,8 +246,10 @@ async function attendanceForGuest(guestId: string) {
 		.where(eq(meetingAttendance.guestId, guestId));
 }
 
-async function pipelineRow(clubId: string, guestId: string) {
-	const row = (await loadGuestPipeline(clubId)).find((g) => g.id === guestId);
+async function pipelineRow(clubId: string, guestId: string, now?: Date) {
+	const row = (await loadGuestPipeline(clubId, [], now)).find(
+		(g) => g.id === guestId,
+	);
 	expect(row).toBeDefined();
 	return row!;
 }
@@ -1135,6 +1137,101 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			expect(row.firstVisitAt?.getTime()).toBe(
 				oldMeeting!.scheduledAt.getTime(),
 			);
+		});
+	});
+
+	describe("invite recency (instant rule)", () => {
+		async function meetingOn(at: Date): Promise<string> {
+			const [m] = await testDb
+				.insert(meetings)
+				.values({ clubId: seed.clubId, scheduledAt: at, status: "scheduled" })
+				.returning({ id: meetings.id });
+			return m!.id;
+		}
+		async function present(meetingId: string, guestId: string) {
+			await testDb
+				.insert(meetingAttendance)
+				.values({ meetingId, guestId, status: "present" });
+		}
+		// Meeting day: tonight at 19:00 UTC; last week's meeting 7 days earlier.
+		const TONIGHT = new Date("2031-06-10T19:00:00Z");
+		const LAST_WEEK = new Date("2031-06-03T19:00:00Z");
+		const BEFORE_START = new Date("2031-06-10T12:00:00Z");
+		const AFTER_START = new Date("2031-06-10T19:01:00Z");
+
+		it("is recent for a repeat visitor when the latest started meeting is their last", async () => {
+			const older = await meetingOn(new Date("2031-05-27T19:00:00Z"));
+			const newer = await meetingOn(LAST_WEEK);
+			const guestId = await seedGuest(seed.clubId, "Recent Repeat");
+			await present(older, guestId);
+			await present(newer, guestId);
+			const row = await pipelineRow(seed.clubId, guestId, BEFORE_START);
+			expect(row.inviteVisitCount).toBe(2);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("meeting day, before it starts: last week's visitor is NOT lapsed", async () => {
+			const last = await meetingOn(LAST_WEEK);
+			await meetingOn(TONIGHT);
+			const guestId = await seedGuest(seed.clubId, "Came Last Week");
+			await present(last, guestId);
+			const row = await pipelineRow(seed.clubId, guestId, BEFORE_START);
+			expect(row.inviteVisitCount).toBe(1);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("meeting day, before it starts: a role slot for tonight is not a visit", async () => {
+			await meetingOn(LAST_WEEK);
+			const tonight = await meetingOn(TONIGHT);
+			const guestId = await seedGuest(seed.clubId, "Slot Tonight");
+			await seedGuestRoleSlot(tonight, seed.roleDefinitionId, guestId);
+			const row = await pipelineRow(seed.clubId, guestId, BEFORE_START);
+			expect(row.inviteVisitCount).toBe(0);
+			expect(row.lastVisitWasLatestMeeting).toBe(false);
+		});
+
+		it("after tonight's meeting starts, a guest not on its roll IS lapsed", async () => {
+			const last = await meetingOn(LAST_WEEK);
+			await meetingOn(TONIGHT);
+			const guestId = await seedGuest(seed.clubId, "Missed Tonight");
+			await present(last, guestId);
+			const row = await pipelineRow(seed.clubId, guestId, AFTER_START);
+			expect(row.inviteVisitCount).toBe(1);
+			expect(row.lastVisitWasLatestMeeting).toBe(false);
+		});
+
+		it("a CANCELLED meeting after the visit does not make the guest lapsed", async () => {
+			const last = await meetingOn(LAST_WEEK);
+			const [c] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: TONIGHT,
+					status: "cancelled",
+				})
+				.returning({ id: meetings.id });
+			expect(c).toBeDefined();
+			const guestId = await seedGuest(seed.clubId, "Cancelled After");
+			await present(last, guestId);
+			const row = await pipelineRow(seed.clubId, guestId, AFTER_START);
+			expect(row.lastVisitWasLatestMeeting).toBe(true);
+		});
+
+		it("leaves visitCount on the date rule: tonight's slot still counts there", async () => {
+			const tonight = await seedMeetingLaterToday(seed.clubId);
+			const guestId = await seedGuest(seed.clubId, "Date Rule");
+			await seedGuestRoleSlot(tonight, seed.roleDefinitionId, guestId);
+			const row = await pipelineRow(seed.clubId, guestId);
+			expect(row.visitCount).toBe(1);
+			expect(row.inviteVisitCount).toBe(0);
+		});
+
+		it("a guest with no visits is not recent", async () => {
+			await meetingOn(LAST_WEEK);
+			const guestId = await seedGuest(seed.clubId, "Never Came");
+			const row = await pipelineRow(seed.clubId, guestId, BEFORE_START);
+			expect(row.inviteVisitCount).toBe(0);
+			expect(row.lastVisitWasLatestMeeting).toBe(false);
 		});
 	});
 

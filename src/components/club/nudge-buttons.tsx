@@ -14,6 +14,7 @@ import {
 	DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
+import type { InviteKind } from "#/lib/guest-invite";
 import type { LevelProgress } from "#/lib/level-proximity";
 import { buildNudge } from "#/lib/nudge";
 import type { OrientationTick } from "#/lib/orientation-roster";
@@ -108,6 +109,7 @@ type NudgeButtonsMeetingArm =
 			/** A guest invite to the next meeting (#899). Role-less, and never
 			 *  carries a personal link or a `join_url`. */
 			mode: "invite";
+			inviteKind: InviteKind;
 			clubName: string;
 			meetingTime: string;
 			location?: string | null;
@@ -240,6 +242,7 @@ export function NudgeButtons(props: NudgeButtonsProps) {
 									meetingDate: props.meetingDate,
 									shareUrl: props.shareUrl,
 									mode: props.mode,
+									inviteKind: props.inviteKind,
 									clubName: props.clubName,
 									meetingTime: props.meetingTime,
 									location: props.location,

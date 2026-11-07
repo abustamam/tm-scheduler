@@ -5,6 +5,7 @@
 
 import { GENERIC_EVALUATION_RESOURCE } from "#/lib/evaluation-resources";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
+import type { InviteKind } from "#/lib/guest-invite";
 import {
 	type LevelProgress,
 	plural,
@@ -99,6 +100,8 @@ export type NudgeInput =
 	// shareable artifact, #731/#754).
 	| (NudgeInputBase & {
 			mode: "invite";
+			/** Picks the wording; see `inviteKindFor`. */
+			inviteKind: InviteKind;
 			clubName: string;
 			/** Already formatted in the club's timezone. */
 			meetingTime: string;
@@ -228,6 +231,36 @@ export interface Nudge {
 	mailtoUrl?: string;
 }
 
+/** Each invite kind's body and subject together (see `inviteKindFor`). */
+const INVITE_DRAFTS: Record<
+	InviteKind,
+	{
+		message: (club: string, when: string, url: string, who: string) => string;
+		subject: (club: string, date: string) => string;
+	}
+> = {
+	never: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, we'd love to have you visit ${club}! We meet on ${when}. Agenda: ${url}`,
+		subject: (club, date) => `Join us at ${club} on ${date}?`,
+	},
+	firstRecent: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, thanks for visiting ${club} for the first time! We meet again on ${when}. We'd love to have you back. Agenda: ${url}`,
+		subject: (club) => `Thanks for visiting ${club}`,
+	},
+	repeatRecent: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, great to see you again at ${club}. Our next meeting is ${when}. Hope you can make it! Agenda: ${url}`,
+		subject: (club, date) => `See you at ${club} on ${date}?`,
+	},
+	lapsed: {
+		message: (club, when, url, who) =>
+			`Hi ${who}, it's been a little while. We'd love to see you back at ${club}! We meet next on ${when}. Agenda: ${url}`,
+		subject: (club) => `We'd love to see you back at ${club}`,
+	},
+};
+
 function messageFor(i: NudgeInput): string {
 	// Greet by first/preferred name — "Hi Zabihullah Kogyani," reads like a mail
 	// merge, which undercuts a draft whose whole point is that a human wrote it.
@@ -272,7 +305,13 @@ function messageFor(i: NudgeInput): string {
 	}
 	if (i.mode === "invite") {
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
-		return `Hi ${who}, it was great having you at ${i.clubName}. We meet again on ${i.meetingDate} at ${i.meetingTime}${where}. We'd love to see you there. Agenda: ${i.shareUrl}`;
+		const when = `${i.meetingDate} at ${i.meetingTime}${where}`;
+		return INVITE_DRAFTS[i.inviteKind].message(
+			i.clubName,
+			when,
+			i.shareUrl,
+			who,
+		);
 	}
 	// A SEPARATE mode rather than a reuse of `attendance`, because the two are sent
 	// at different moments and only one of them is still a question about the
@@ -603,7 +642,7 @@ function subjectFor(i: NudgeInput): string {
 		return `Your Toastmaster script — ${i.meetingDate}`;
 	}
 	if (i.mode === "invite") {
-		return `See you at ${i.clubName} on ${i.meetingDate}?`;
+		return INVITE_DRAFTS[i.inviteKind].subject(i.clubName, i.meetingDate);
 	}
 	if (i.mode === "level") {
 		return `${plural(i.projectsLeft, "project")} to ${levelLabel(i.level)}`;
