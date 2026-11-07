@@ -104,9 +104,9 @@ async function isSpeakerOfSpeech(
 
 /**
  * A field the form did not SEND keeps its stored value. The sheet hides the
- * free-text path, project and level inputs behind the project picker, and has
- * no introduction input at all, so a title-only edit would otherwise read them
- * as blank and wipe history. A field the form sent as "" is a deliberate clear
+ * free-text path, project and level inputs behind the project picker, and the
+ * introduction input is not drawn for a viewer who cannot read introductions
+ * (members only), so an edit would otherwise read them as blank and wipe history. A field the form sent as "" is a deliberate clear
  * and is not touched here (an absent key and `undefined` are the same on the
  * wire, which is why the sheet sends "" for a shown-but-empty input).
  *

@@ -364,6 +364,7 @@ function MeetingView() {
 		logoUrl,
 		digitalVoting,
 		clubDigitalVotingEnabled,
+		speechIntroductions,
 	} = Route.useLoaderData();
 	// The key every link on this page is built from: Share, Present and the
 	// export menu, the ballot QR, the nudge drafts and the feedback link. It is
@@ -1391,6 +1392,7 @@ function MeetingView() {
 						<MeetingAgenda
 							slotExtra={coverChipUnderRow}
 							slots={slots}
+							speechIntroductions={speechIntroductions}
 							viewer={viewer}
 							actions={actions}
 							roster={roster}

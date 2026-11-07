@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { SpeechLogEditButton } from "#/components/speech-log-edit";
+import { SPEAKER_LIMITS } from "#/lib/speaker-limits";
 import { readSource } from "#/test/guard-source";
 
 /**
@@ -159,6 +160,80 @@ describe("EditSpeechSheet free text the form did not show", () => {
 	});
 });
 
+describe("EditSpeechSheet introduction", () => {
+	const sentDetails = (fn: typeof server.updateSpeakerDetails) =>
+		(
+			fn.mock.calls[0] as unknown as [
+				{ data: { speakerDetails: Record<string, unknown> } },
+			]
+		)[0].data.speakerDetails;
+
+	it("prefills the stored introduction and resends it trimmed on the agenda writer", async () => {
+		render(
+			<EditSpeechSheet
+				slot={{ ...slot, introduction: "Please introduce me" }}
+				onOpenChange={() => {}}
+				onSaved={() => {}}
+			/>,
+		);
+		const box = screen.getByLabelText("Introduction") as HTMLTextAreaElement;
+		expect(box.value).toBe("Please introduce me");
+		expect(box.maxLength).toBe(SPEAKER_LIMITS.introduction);
+		await userEvent.click(screen.getByRole("button", { name: "Save speech" }));
+		await waitFor(() =>
+			expect(server.updateSpeakerDetails).toHaveBeenCalledTimes(1),
+		);
+		expect(sentDetails(server.updateSpeakerDetails).introduction).toBe(
+			"Please introduce me",
+		);
+	});
+
+	it("sends an emptied introduction as an empty string (a deliberate clear) on both writers", async () => {
+		for (const writer of ["agenda", "speech-log"] as const) {
+			vi.clearAllMocks();
+			const { unmount } = render(
+				<EditSpeechSheet
+					writer={writer}
+					slot={{ ...slot, introduction: "Old" }}
+					onOpenChange={() => {}}
+					onSaved={() => {}}
+				/>,
+			);
+			await userEvent.clear(screen.getByLabelText("Introduction"));
+			await userEvent.click(
+				screen.getByRole("button", { name: "Save speech" }),
+			);
+			const fn =
+				writer === "agenda"
+					? server.updateSpeakerDetails
+					: server.editSpeechFromLog;
+			await waitFor(() => expect(fn).toHaveBeenCalledTimes(1));
+			expect(
+				sentDetails(fn as typeof server.updateSpeakerDetails).introduction,
+			).toBe("");
+			unmount();
+		}
+	});
+
+	it("draws no field and sends no introduction when the viewer may not read it", async () => {
+		render(
+			<EditSpeechSheet
+				slot={slot}
+				onOpenChange={() => {}}
+				onSaved={() => {}}
+			/>,
+		);
+		expect(screen.queryByLabelText("Introduction")).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Save speech" }));
+		await waitFor(() =>
+			expect(server.updateSpeakerDetails).toHaveBeenCalledTimes(1),
+		);
+		expect(
+			sentDetails(server.updateSpeakerDetails).introduction,
+		).toBeUndefined();
+	});
+});
+
 describe("SpeechLogEditButton", () => {
 	it("opens the sheet for the row, saves through the speech-log writer, then refreshes", async () => {
 		render(
@@ -177,6 +252,7 @@ describe("SpeechLogEditButton", () => {
 					minMinutes: null,
 					maxMinutes: null,
 					presentationUrl: null,
+					introduction: null,
 				}}
 			/>,
 		);
@@ -215,5 +291,25 @@ describe("the profile route's wiring", () => {
 			/\{showSpeechEdit\s*\?\s*\(\s*<SpeechLogEditButton\b/,
 		);
 		expect(source).toMatch(/const showSpeechEdit\s*=\s*mayShowSpeechLogEdit\(/);
+	});
+});
+
+describe("the agenda's introduction wiring", () => {
+	// Dropping either link silently hides the field (or, worse, feeds the sheet
+	// another slot's text); no behavioural test above would notice.
+	it("the meeting route hands the loader's speechIntroductions to MeetingAgenda", () => {
+		const route = readSource(
+			resolve(__dirname, "../routes/club.$clubId.meeting.$meetingId.tsx"),
+		);
+		expect(route).toMatch(/speechIntroductions=\{speechIntroductions\}/);
+	});
+
+	it("MeetingAgenda looks the edited slot up in it, and passes undefined for a non-member", () => {
+		const agenda = readSource(
+			resolve(__dirname, "./agenda/meeting-agenda.tsx"),
+		);
+		expect(agenda).toMatch(
+			/introduction:\s*speechIntroductions\s*\?\s*\(speechIntroductions\[editSpeechSlot\.id\]\s*\?\?\s*null\)\s*:\s*undefined/,
+		);
 	});
 });

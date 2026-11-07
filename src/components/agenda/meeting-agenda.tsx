@@ -122,6 +122,9 @@ export interface MeetingAgendaActions {
 
 export interface MeetingAgendaProps {
 	slots: AgendaSlot[];
+	/** Members-only stored introductions by slot id (#1480); `null` for a viewer
+	 *  who may not read them, which hides the field on the Edit speech sheet. */
+	speechIntroductions?: Record<string, string> | null;
 	viewer: MeetingViewer;
 	actions: MeetingAgendaActions;
 	/** Roster for the assign picker — only needed where `viewer.canAssign`. */
@@ -250,6 +253,7 @@ export function MeetingAgenda({
 	onUncontacted,
 	onOwnLateRelease,
 	slotExtra,
+	speechIntroductions = null,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -1092,6 +1096,9 @@ export function MeetingAgenda({
 								minMinutes: editSpeechSlot.minMinutes,
 								maxMinutes: editSpeechSlot.maxMinutes,
 								presentationUrl: editSpeechSlot.presentationUrl ?? null,
+								introduction: speechIntroductions
+									? (speechIntroductions[editSpeechSlot.id] ?? null)
+									: undefined,
 							}
 						: null
 				}
