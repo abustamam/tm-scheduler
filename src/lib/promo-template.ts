@@ -53,6 +53,26 @@ import { escapeHtml } from "#/lib/html-escape";
 
 export type PromoVariableGroup = "meeting" | "links" | "club" | "extras";
 
+/** The shape every variable registry shares (Promote's and the guest invite's):
+ *  what the editor, its menu and the placeholder helpers need. `group` is a
+ *  plain string so each registry names its own groups. */
+export interface TemplateVariable {
+	readonly key: string;
+	readonly label: string;
+	readonly description: string;
+	readonly group: string;
+}
+
+/** The heading of every group any registry uses. A group id absent here is
+ *  shown as the id itself. */
+export const TEMPLATE_GROUP_LABELS: Readonly<Record<string, string>> = {
+	meeting: "Meeting",
+	links: "Links",
+	club: "Club",
+	extras: "Extras",
+	guest: "Guest",
+};
+
 /** Every variable, in menu order: groups in this order, rows in this order. The ONE list:
  *  checked against a shape whose `key` is a plain string (so the declaration is not circular),
  *  then the key union, the row type and the key array are all derived from it. */
@@ -315,10 +335,14 @@ export function normalizePromoName(name: string): string {
  * officer's evident intent. `{DATE}`, `{Date!}`, `{nope}` and canonical keys
  * round-trip unchanged.
  */
-export function toEditorText(stored: string): string {
-	return stored.replace(TOKEN, (whole, inner: string) =>
-		isPromoPlaceholder(inner) ? `{${promoVariable(inner).label}}` : whole,
-	);
+export function toEditorText(
+	stored: string,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
+): string {
+	return stored.replace(TOKEN, (whole, inner: string) => {
+		const v = variables.find((x) => x.key === inner);
+		return v ? `{${v.label}}` : whole;
+	});
 }
 
 /**
@@ -327,9 +351,13 @@ export function toEditorText(stored: string): string {
  * `{ date }` is read as that variable (the documented round-trip exception, see
  * the module header); `{DATE}` and `{Date!}` match neither and stay literal.
  */
-function matchTypedVariable(inner: string): PromoVariable | null {
-	if (isPromoPlaceholder(inner)) return promoVariable(inner);
-	const byLabel = PROMO_VARIABLES.find((v) => v.label === inner);
+function matchTypedVariable(
+	inner: string,
+	variables: readonly TemplateVariable[],
+): TemplateVariable | null {
+	const byKey = variables.find((v) => v.key === inner);
+	if (byKey) return byKey;
+	const byLabel = variables.find((v) => v.label === inner);
 	if (byLabel) return byLabel;
 	// A name with a space in it could never have rendered as a literal
 	// placeholder, so it is matched leniently (case, spacing, punctuation).
@@ -338,7 +366,7 @@ function matchTypedVariable(inner: string): PromoVariable | null {
 	if (!/\s/.test(inner)) return null;
 	const n = normalizePromoName(inner);
 	return (
-		PROMO_VARIABLES.find(
+		variables.find(
 			(v) =>
 				normalizePromoName(v.label) === n || normalizePromoName(v.key) === n,
 		) ?? null
@@ -359,20 +387,27 @@ function matchTypedVariable(inner: string): PromoVariable | null {
  * `{ date }` is stored as `{date}` on the next save: the one exception to
  * `toStoredText(toEditorText(s)) === s` (see the module header).
  */
-export function toStoredText(editor: string): string {
+export function toStoredText(
+	editor: string,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
+): string {
 	return editor.replace(TOKEN, (whole, inner: string) => {
-		const v = matchTypedVariable(inner);
+		const v = matchTypedVariable(inner, variables);
 		return v ? `{${v.key}}` : whole;
 	});
 }
 
 /** Every `{name}` in `text` that is not a known placeholder, once each, in
  *  order of first appearance. */
-export function unknownPlaceholders(text: string): string[] {
+export function unknownPlaceholders(
+	text: string,
+	variables: readonly TemplateVariable[] = PROMO_VARIABLES,
+): string[] {
 	const out: string[] = [];
 	for (const m of text.matchAll(TOKEN)) {
 		const name = m[1];
-		if (!isPromoPlaceholder(name) && !out.includes(name)) out.push(name);
+		if (!variables.some((v) => v.key === name) && !out.includes(name))
+			out.push(name);
 	}
 	return out;
 }
@@ -974,18 +1009,21 @@ function isSubsequence(needle: readonly string[], hay: readonly string[]) {
  *   3. the name (4+ characters) and exactly one variable's key or label contain
  *      one another: `rsvp` → RSVP link.
  */
-export function suggestPlaceholder(name: string): PromoVariable | null {
+export function suggestPlaceholder<V extends TemplateVariable = PromoVariable>(
+	name: string,
+	variables: readonly V[] = PROMO_VARIABLES as unknown as readonly V[],
+): V | null {
 	const n = normalizePromoName(name);
 	if (!n) return null;
-	const names = (v: PromoVariable) => [
+	const names = (v: V) => [
 		normalizePromoName(v.key),
 		normalizePromoName(v.label),
 	];
 
 	const max = n.length <= 4 ? 1 : 2;
-	let best: PromoVariable | null = null;
+	let best: V | null = null;
 	let bestDistance = Number.POSITIVE_INFINITY;
-	for (const v of PROMO_VARIABLES) {
+	for (const v of variables) {
 		const d = Math.min(...names(v).map((c) => editDistance(n, c)));
 		if (d <= max && d < bestDistance) {
 			best = v;
@@ -996,14 +1034,14 @@ export function suggestPlaceholder(name: string): PromoVariable | null {
 
 	const words = nameWords(name);
 	if (words.length > 0) {
-		const hits = PROMO_VARIABLES.filter((v) =>
+		const hits = variables.filter((v) =>
 			isSubsequence(words, nameWords(v.label)),
 		);
 		if (hits.length === 1) return hits[0];
 	}
 
 	if (n.length >= 4) {
-		const hits = PROMO_VARIABLES.filter((v) =>
+		const hits = variables.filter((v) =>
 			names(v).some((c) => c.includes(n) || (c.length >= 4 && n.includes(c))),
 		);
 		if (hits.length === 1) return hits[0];

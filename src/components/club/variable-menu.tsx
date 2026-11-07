@@ -5,8 +5,11 @@
 
 import {
 	BookOpen,
+	Braces,
 	Calendar,
 	CalendarCheck,
+	CalendarClock,
+	CalendarPlus,
 	ClipboardList,
 	Clock,
 	ExternalLink,
@@ -17,6 +20,7 @@ import {
 	MapPin,
 	Sparkles,
 	StickyNote,
+	User,
 	Users,
 	Video,
 } from "lucide-react";
@@ -27,15 +31,16 @@ import {
 	PopoverContent,
 } from "#/components/ui/popover";
 import {
-	PROMO_VARIABLE_GROUPS,
 	type PromoPlaceholder,
-	type PromoValues,
-	type PromoVariable,
+	TEMPLATE_GROUP_LABELS,
+	type TemplateVariable,
 } from "#/lib/promo-template";
 import { cn } from "#/lib/utils";
 
-/** Typed on the key union: a new placeholder without an icon fails typecheck. */
-export const VARIABLE_ICONS: Record<PromoPlaceholder, LucideIcon> = {
+/** Typed on the Promote key union: a new Promote placeholder without an icon fails
+ *  typecheck. The guest invite's own keys follow; any other key falls back to
+ *  `FALLBACK_ICON`. */
+export const VARIABLE_ICONS: Record<PromoPlaceholder | GuestOnlyKey, LucideIcon> = {
 	date: Calendar,
 	time: Clock,
 	location: MapPin,
@@ -50,13 +55,39 @@ export const VARIABLE_ICONS: Record<PromoPlaceholder, LucideIcon> = {
 	club: Users,
 	note: StickyNote,
 	online: Video,
+	guestName: User,
+	firstVisit: CalendarPlus,
+	lastVisit: CalendarClock,
+	visitCount: Hash,
 };
+
+const FALLBACK_ICON: LucideIcon = Braces;
+
+function iconFor(key: string): LucideIcon {
+	return (VARIABLE_ICONS as Record<string, LucideIcon | undefined>)[key] ?? FALLBACK_ICON;
+}
 
 /** An option row is 44px below `md`, 36px from `md` up. */
 export const OPTION_ROW_HEIGHT = "h-11 md:h-9";
 
 /** The variable whose description is a warning, not just a gloss. */
-const WARNING_DESCRIPTION: PromoPlaceholder = "joinLink";
+const WARNING_DESCRIPTION = "joinLink";
+
+/** Keys only the guest invite registry has; kept here so their icons are typed. */
+type GuestOnlyKey = "guestName" | "firstVisit" | "lastVisit" | "visitCount";
+
+/** The groups the listed options fall in, in order of first appearance, each
+ *  with its heading. Promote's table is grouped meeting, links, club, extras, so
+ *  this yields exactly the order the menu always had. */
+function groupsOf(
+	options: readonly TemplateVariable[],
+): { id: string; label: string }[] {
+	const out: { id: string; label: string }[] = [];
+	for (const v of options)
+		if (!out.some((g) => g.id === v.group))
+			out.push({ id: v.group, label: TEMPLATE_GROUP_LABELS[v.group] ?? v.group });
+	return out;
+}
 
 export function VariableMenu({
 	open,
@@ -72,10 +103,10 @@ export function VariableMenu({
 	onDismiss: () => void;
 	listboxId: string;
 	/** The variables to list, already filtered, in table order. */
-	options: readonly PromoVariable[];
-	activeKey: PromoPlaceholder | null;
-	onPick: (key: PromoPlaceholder) => void;
-	values: PromoValues | null;
+	options: readonly TemplateVariable[];
+	activeKey: string | null;
+	onPick: (key: string) => void;
+	values: Readonly<Record<string, string>> | null;
 	/** The field wrapper the popover anchors to. */
 	children: React.ReactNode;
 }) {
@@ -109,7 +140,7 @@ export function VariableMenu({
 					aria-label="Variables"
 					className="max-h-72 overflow-y-auto"
 				>
-					{PROMO_VARIABLE_GROUPS.map((group) => {
+					{groupsOf(options).map((group) => {
 						const rows = options.filter((v) => v.group === group.id);
 						if (rows.length === 0) return null;
 						return (
@@ -124,7 +155,7 @@ export function VariableMenu({
 										{group.label}
 									</li>
 									{rows.map((v) => {
-										const Icon = VARIABLE_ICONS[v.key];
+										const Icon = iconFor(v.key);
 										const active = v.key === activeKey;
 										const value = values?.[v.key];
 										return (
