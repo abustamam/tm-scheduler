@@ -326,8 +326,6 @@ const updateSpeakerDetailsSchema = z.object({
 	speakerDetails: speakerDetailsUpdateSchema,
 });
 
-/** The LOCKED re-read of the slot inside the transaction (`lock` takes a row
- *  lock on the slot only). The handler's unlocked read is its own, above. */
 type SlotConn = Pick<typeof db, "select">;
 
 const SPEAKER_SLOT_COLUMNS = {
@@ -342,6 +340,10 @@ const SPEAKER_SLOT_COLUMNS = {
 	personId: members.personId,
 };
 
+/** The slot `updateSpeakerDetails` decides on, with its role, meeting and
+ *  holder. `lock` takes a row lock on the slot only (FOR UPDATE OF role_slots).
+ *  The handler calls it with `lock` true, inside the transaction; its first
+ *  read, before the session gate, is spelled out in the handler (see there). */
 async function readSpeakerSlot(conn: SlotConn, slotId: string, lock: boolean) {
 	const query = conn
 		.select(SPEAKER_SLOT_COLUMNS)
@@ -360,6 +362,20 @@ async function readSpeakerSlot(conn: SlotConn, slotId: string, lock: boolean) {
 	return slot ?? null;
 }
 
+/** The speech owner of a speaker slot, or the refusal the sheet shows. */
+function speechOwnerOrThrow(
+	slot: NonNullable<Awaited<ReturnType<typeof readSpeakerSlot>>>,
+) {
+	if (!slot.isSpeakerRole) {
+		throw new Error("Only speaker roles have speech details.");
+	}
+	const owner = speechOwnerOf(slot);
+	if (!owner) {
+		throw new Error("Assign a member before adding speech details.");
+	}
+	return owner;
+}
+
 /** Edit a speaker slot's speech details. Blank title → "TBA". Any SIGNED-IN
  *  member of the club may (the sheet rule), and it is logged as a
  *  `meeting_edit` with the before and after title and project.
@@ -371,6 +387,8 @@ async function readSpeakerSlot(conn: SlotConn, slotId: string, lock: boolean) {
 export const updateSpeakerDetails = createServerFn({ method: "POST" })
 	.validator((input: unknown) => updateSpeakerDetailsSchema.parse(input))
 	.handler(async ({ data }) => {
+		// Spelled out here, not through `readSpeakerSlot(db, …)`: a `(db, ` call
+		// before the session gate fails `write-proof.guard.test.ts` (#761).
 		const [slot] = await db
 			.select(SPEAKER_SLOT_COLUMNS)
 			.from(roleSlots)
@@ -399,12 +417,7 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// Early errors only; nothing written depends on this read. The
 		// transaction below asks every one of them again, against the locked row.
 		assertMeetingAccepts(slot.meetingStatus, "plan");
-		if (!slot.isSpeakerRole) {
-			throw new Error("Only speaker roles have speech details.");
-		}
-		if (!speechOwnerOf(slot)) {
-			throw new Error("Assign a member before adding speech details.");
-		}
+		speechOwnerOrThrow(slot);
 		await db.transaction(async (tx) => {
 			// The meeting lock FIRST, then the slot FOR UPDATE: a concurrent
 			// reassign, release, convert or cancel serializes against this save.
@@ -413,15 +426,12 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 			if (!locked) throw new Error("Role not found.");
 			// #1057, by write class (#1135): the status of the LOCKED meeting row.
 			assertMeetingAccepts(meeting.status, "plan");
-			if (!locked.isSpeakerRole) {
-				throw new Error("Only speaker roles have speech details.");
-			}
+			// The archive gate again, against tx and the locked clubId, as
+			// `applySpeechLogEdit` does.
+			await assertClubNotArchived(locked.clubId, tx);
 			// A speech has exactly one owner (#1046): the member's Person, or the
 			// guest holding the slot (#1518), as of this locked read.
-			const owner = speechOwnerOf(locked);
-			if (!owner) {
-				throw new Error("Assign a member before adding speech details.");
-			}
+			const owner = speechOwnerOrThrow(locked);
 			await writeSpeakerDetails(tx, {
 				clubId: locked.clubId,
 				actorMemberId,
