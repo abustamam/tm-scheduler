@@ -43,13 +43,32 @@ function editorClasses(): { list: string; trigger: string } {
 	return { list, trigger };
 }
 
-/** The shared trigger's base literal (the long one), from `tabs.tsx`. */
+/** The source of one primitive's JSX construct in `tabs.tsx`, `<TabsPrimitive.X`
+ *  up to its closing `/>`, so a class search cannot land in another component. */
+function construct(name: string): string {
+	const start = TABS.indexOf(`<TabsPrimitive.${name}`);
+	if (start === -1) throw new Error(`<TabsPrimitive.${name} not in tabs.tsx`);
+	const end = TABS.indexOf("/>", start);
+	return TABS.slice(start, end === -1 ? TABS.length : end);
+}
+
+/** The shared trigger's base literal (the long one), from its own construct. */
 function triggerBase(): string {
-	const hit = [...TABS.matchAll(/"([^"\n]*)"/g)]
+	const hit = [...construct("Trigger").matchAll(/"([^"\n]*)"/g)]
 		.map((m) => m[1] as string)
 		.find((c) => c.includes("relative inline-flex"));
 	if (!hit) throw new Error("trigger classes not found in tabs.tsx");
 	return hit;
+}
+
+/** The Tabs root's class literal and its default orientation, from source. */
+function tabsRoot(): { classes: string; orientation: string } {
+	const classes = [...construct("Root").matchAll(/"([^"\n]*)"/g)]
+		.map((m) => m[1] as string)
+		.find((c) => c.includes("group/tabs"));
+	const orientation = /orientation = "(\w+)"/.exec(TABS)?.[1];
+	if (!classes || !orientation) throw new Error("Tabs root not in tabs.tsx");
+	return { classes, orientation };
 }
 
 const LABELS = [
@@ -62,8 +81,9 @@ const LABELS = [
 function fixture(listClass: string, triggerClass: string) {
 	const list = cn(tabsListVariants({ variant: "default" }), listClass);
 	const trigger = cn(triggerBase(), triggerClass);
+	const root = tabsRoot();
 	const html = `
-		<div data-slot="tabs" data-orientation="horizontal" class="group/tabs flex gap-2 data-[orientation=horizontal]:flex-col p-4">
+		<div data-slot="tabs" data-orientation="${root.orientation}" class="${root.classes} p-4">
 			<div id="list" role="tablist" data-slot="tabs-list" data-variant="default" class="group/tabs-list ${list}">
 				${LABELS.map((l) => `<button role="tab" class="${trigger}">${l}</button>`).join("")}
 			</div>
@@ -110,6 +130,9 @@ async function measure(listClass: string, triggerClass: string) {
 }
 
 describe("guest invite editor geometry harness availability", () => {
+	// protects=the geometry cases below really run in CI;
+	// fails_when=CI has no Chrome and they would all skip green;
+	// no_claim=says nothing about layout.
 	it("has a browser to measure with when running in CI", () => {
 		if (!process.env.CI) return;
 		expect(
@@ -137,8 +160,9 @@ describe.skipIf(!hasChrome)(
 			expect(m.docOverflows).toBe(false);
 		});
 
-		// The CONTROL: the classes this PR first shipped. It must overlap, or the
-		// case above could not have failed.
+		// protects=the case above can fail (the CONTROL is the pre-fix classes);
+		// fails_when=the pre-fix classes stop overlapping, meaning the harness no
+		// longer reproduces the bug; no_claim=says nothing about the current classes.
 		it("control: the pre-fix classes overlap the next element", async () => {
 			const m = await measure(
 				"grid h-auto w-full grid-cols-2 md:grid-cols-4",

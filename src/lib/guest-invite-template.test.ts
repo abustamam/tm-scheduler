@@ -5,6 +5,7 @@ import {
 	exampleGuestInviteValues,
 	GUEST_INVITE_LIMITS,
 	GUEST_INVITE_VARIABLES,
+	guestInviteTemplatesSchema,
 	guestInviteValues,
 	INVITE_KINDS,
 	renderGuestInviteText,
@@ -27,7 +28,7 @@ const values = guestInviteValues({
 	shareUrl: "https://gavelup.app/club/d/meeting/x",
 	joinLink: null,
 	guest: {
-		firstVisitAt: new Date("2026-09-04T23:00:00Z"),
+		inviteFirstVisitAt: new Date("2026-09-04T23:00:00Z"),
 		lastVisitAt: new Date("2026-09-25T23:00:00Z"),
 		inviteVisitCount: 2,
 	},
@@ -53,10 +54,59 @@ describe("resolveGuestInviteTemplates", () => {
 			{ lapsed: "x" },
 			{ never: { body: "x".repeat(GUEST_INVITE_LIMITS.body + 1) } },
 			{ never: { subject: "x".repeat(GUEST_INVITE_LIMITS.subject + 1) } },
+			{ never: { subject: "a\nBcc: x@evil.com" } },
 		]) {
 			expect(resolveGuestInviteTemplates(bad)).toEqual({});
 		}
 		expect(resolveGuestInviteTemplates(null)).toEqual({});
+	});
+});
+
+describe("resolveGuestInviteTemplates, per kind and field", () => {
+	// protects=one bad field does not wipe the club's other saved drafts;
+	// fails_when=the whole document collapses to {} when one kind is invalid;
+	// no_claim=says nothing about what the editor does with the result.
+	it("keeps the valid kinds and fields and drops only the invalid ones", () => {
+		expect(
+			resolveGuestInviteTemplates({
+				never: { body: 42 },
+				lapsed: { body: "Keep this" },
+			}),
+		).toEqual({ lapsed: { body: "Keep this" } });
+		expect(
+			resolveGuestInviteTemplates({
+				never: { body: "x".repeat(GUEST_INVITE_LIMITS.body + 1), subject: "S" },
+			}),
+		).toEqual({ never: { subject: "S" } });
+	});
+});
+
+describe("GUEST_INVITE_LIMITS", () => {
+	// protects=the spec's ceilings (1000 body, 200 subject);
+	// fails_when=either limit is raised or lowered, even together;
+	// no_claim=does not check the stored column.
+	it("is exactly 1000 for the body and 200 for the subject", () => {
+		expect(GUEST_INVITE_LIMITS.body).toBe(1000);
+		expect(GUEST_INVITE_LIMITS.subject).toBe(200);
+	});
+});
+
+describe("the subject is one line", () => {
+	// protects=a CR or LF cannot reach the mailto subject header;
+	// fails_when=guestInviteTemplatesSchema accepts a newline in a subject;
+	// no_claim=does not cover the body, which may span lines.
+	it("rejects CR and LF in a subject but allows them in a body", () => {
+		for (const bad of ["a\nb", "a\rb", "a\r\nb"]) {
+			expect(
+				guestInviteTemplatesSchema.safeParse({ never: { subject: bad } })
+					.success,
+			).toBe(false);
+		}
+		expect(
+			guestInviteTemplatesSchema.safeParse({
+				never: { subject: "One line", body: "a\nb" },
+			}).success,
+		).toBe(true);
 	});
 });
 
@@ -107,6 +157,40 @@ describe("renderGuestInviteText", () => {
 			lastVisit: "",
 		});
 		expect(out).toBe("A \n\nB .");
+	});
+
+	// protects=decision A: an edited default with no venue reads like the built-in;
+	// fails_when=", at ." (or ", at ") is left behind for an empty location, or the
+	// clause collapses when a location IS set; no_claim=only the ", at {location}" clause collapses.
+	it("collapses ', at {location}' only when the location is empty", () => {
+		const now = new Date("2026-10-01T12:00:00Z");
+		for (const kind of INVITE_KINDS) {
+			const v = exampleGuestInviteValues(kind, now, "UTC");
+			const bare = { ...v, location: "" };
+			const rendered = renderGuestInviteText(
+				DEFAULT_GUEST_INVITE_TEMPLATES[kind].body,
+				bare,
+			);
+			expect(rendered).not.toContain(", at .");
+			expect(rendered).not.toMatch(/, at\b/);
+			const builtIn = buildNudge({
+				mode: "invite",
+				inviteKind: kind,
+				name: "Alex",
+				clubName: bare.club,
+				meetingDate: bare.date,
+				meetingTime: bare.time,
+				location: "",
+				shareUrl: bare.agendaLink,
+			});
+			expect(rendered).toBe(builtIn.message);
+		}
+		expect(renderGuestInviteText("Come {location}", { ...values, location: "" })).toBe(
+			"Come ",
+		);
+		expect(renderGuestInviteText("at 6, at {location}.", values)).toBe(
+			"at 6, at Room 4.",
+		);
 	});
 
 	// protects=a typo is visible to the officer; fails_when=an unknown token is

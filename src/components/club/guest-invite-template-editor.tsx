@@ -24,7 +24,7 @@ import {
 	INVITE_KIND_LABELS,
 	INVITE_KINDS,
 } from "#/lib/guest-invite-template";
-import { buildNudge } from "#/lib/nudge";
+import { buildNudge, type NudgeInput, nudgeSubject } from "#/lib/nudge";
 import { toEditorText, toStoredText } from "#/lib/promo-template";
 import {
 	resetGuestInviteTemplate,
@@ -56,10 +56,13 @@ function editorDrafts(t: GuestInviteTemplates): Drafts {
 	};
 }
 
-/** The fields as they would be stored: canonical keys. */
-function storedDrafts(d: Drafts): GuestInviteTemplates {
+/** The given drafts as they would be stored: canonical keys. */
+function storedDrafts(
+	d: Drafts,
+	kinds: readonly InviteKind[] = INVITE_KINDS,
+): GuestInviteTemplates {
 	const out: GuestInviteTemplates = {};
-	for (const kind of INVITE_KINDS) {
+	for (const kind of kinds) {
 		out[kind] = {
 			body: toStoredText(d[kind].body, GUEST_INVITE_VARIABLES),
 			subject: toStoredText(d[kind].subject, GUEST_INVITE_VARIABLES),
@@ -106,7 +109,14 @@ export function GuestInviteTemplateEditor({
 
 	async function onSave(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
-		const parsed = guestInviteTemplatesSchema.safeParse(storedDrafts(fields));
+		// Only the drafts this form changed go to the server, which merges them
+		// into what is stored: an officer's other tabs, and another officer's
+		// saves since this page loaded, are not overwritten.
+		const sent = fields;
+		const sentKinds = INVITE_KINDS.filter((k) => !sameDraft(sent[k], baseline[k]));
+		const parsed = guestInviteTemplatesSchema.safeParse(
+			storedDrafts(sent, sentKinds),
+		);
 		if (!parsed.success) {
 			const path = parsed.error.issues[0]?.path ?? [];
 			const [k, f] = path as [InviteKind?, GuestInviteField?];
@@ -123,8 +133,13 @@ export function GuestInviteTemplateEditor({
 				data: { clubId, templates: parsed.data },
 			});
 			// A field saved as its default is stored as unset and reads back as the
-			// default, so the loaded snapshot is the fields themselves.
-			setBaseline(fields);
+			// default, so the saved snapshot is what was SENT (`sent`, not the live
+			// fields): text typed while the save ran stays "changed".
+			setBaseline((prev) => {
+				const next = { ...prev };
+				for (const k of sentKinds) next[k] = sent[k];
+				return next;
+			});
 			toast.success("Guest invite templates saved.");
 			await onSaved();
 		} catch (err) {
@@ -251,27 +266,26 @@ function InviteTab({
 			subject: toStoredText(draft.subject, GUEST_INVITE_VARIABLES),
 		},
 	};
-	const message = buildNudge({
+	const inputFor = (v: typeof values): NudgeInput => ({
 		mode: "invite",
 		inviteKind: kind,
 		name: "Alex Example",
-		clubName: values.club,
-		meetingDate: values.date,
-		meetingTime: values.time,
-		location: values.location,
-		shareUrl: values.agendaLink,
+		clubName: v.club,
+		meetingDate: v.date,
+		meetingTime: v.time,
+		location: v.location,
+		shareUrl: v.agendaLink,
 		email: "alex@example.com",
 		custom: {
 			body: customTemplateFor(stored, kind, "body"),
 			subject: customTemplateFor(stored, kind, "subject"),
-			values,
+			values: v,
 		},
 	});
-	const subject = decodeURIComponent(
-		new URL(message.mailtoUrl ?? "mailto:?subject=").searchParams.get(
-			"subject",
-		) ?? "",
-	);
+	const message = buildNudge(inputFor(values));
+	const subject = nudgeSubject(inputFor(values));
+	// A club with no venue set: the same draft with an empty location.
+	const noLocation = buildNudge(inputFor({ ...values, location: "" }));
 
 	return (
 		<div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]">
@@ -322,6 +336,15 @@ function InviteTab({
 						className="text-sm break-words whitespace-pre-wrap"
 					>
 						{message.message}
+					</p>
+				</div>
+				<div className="space-y-1">
+					<p className="text-xs font-semibold">With no location</p>
+					<p
+						data-testid="guest-invite-preview-no-location"
+						className="text-sm break-words whitespace-pre-wrap"
+					>
+						{noLocation.message}
 					</p>
 				</div>
 				<div className="space-y-1">

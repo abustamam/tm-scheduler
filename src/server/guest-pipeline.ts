@@ -8,7 +8,7 @@ import {
 	requireClubRole,
 	requireUser,
 } from "./guards";
-import { loadNextMeetingJoinLink } from "./guest-invite-template-logic";
+import { loadMeetingJoinLink } from "./guest-invite-template-logic";
 import type { GuestLinkExpected } from "./guest-pipeline-logic";
 import {
 	applyAddGuestToClub,
@@ -127,13 +127,13 @@ export const getGuestInviteContext = createServerFn({ method: "GET" })
 	.handler(async ({ data: clubId }) => {
 		const currentUser = await requireUser();
 		await requireClubAdminView(currentUser.id, clubId);
-		const now = new Date();
-		const [summary, joinLink] = await Promise.all([
-			loadNextMeetingSummary(clubId, now),
-			// A query of its own: the summary is shared with slides and reporting and
-			// carries no link. Reaching it here is gated by the admin view above.
-			loadNextMeetingJoinLink(clubId, now),
-		]);
+		const summary = await loadNextMeetingSummary(clubId, new Date());
+		// By the summary's own meeting id, so the link belongs to the meeting the
+		// draft names. The summary is shared with slides and reporting and carries
+		// no link; reaching it here is gated by the admin view above.
+		const joinLink = summary.nextMeeting
+			? await loadMeetingJoinLink(clubId, summary.nextMeeting.id)
+			: null;
 		return { ...summary, joinLink };
 	});
 

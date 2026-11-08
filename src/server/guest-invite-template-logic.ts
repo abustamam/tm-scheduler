@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, ne } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import type { InviteKind } from "#/lib/guest-invite";
@@ -51,18 +51,32 @@ export async function loadGuestInviteTemplates(
 	return resolveGuestInviteTemplates(row.stored);
 }
 
-/** Replace the club's templates. The caller validates the shape
- *  (`guestInviteTemplatesSchema`); this normalises, then stores. */
+/** Merge the given drafts into the club's stored templates. The caller
+ *  validates the shape (`guestInviteTemplatesSchema`). Only the kinds present in
+ *  `templates` change (each replaces that kind's stored draft); the rest are
+ *  untouched, so two officers saving different kinds do not overwrite each
+ *  other. Read-merge-write under `FOR UPDATE`, as reset does. */
 export async function applyUpdateGuestInviteTemplates(
 	clubId: string,
 	templates: GuestInviteTemplates,
 ): Promise<{ ok: true }> {
-	const updated = await db
-		.update(clubs)
-		.set({ guestInviteTemplates: normalizeGuestInviteTemplates(templates) })
-		.where(eq(clubs.id, clubId))
-		.returning({ id: clubs.id });
-	if (updated.length === 0) throw new Error("Club not found.");
+	await db.transaction(async (tx) => {
+		const [row] = await tx
+			.select({ stored: clubs.guestInviteTemplates })
+			.from(clubs)
+			.where(eq(clubs.id, clubId))
+			.for("update")
+			.limit(1);
+		if (!row) throw new Error("Club not found.");
+		const merged = { ...resolveGuestInviteTemplates(row.stored) };
+		for (const kind of INVITE_KINDS) {
+			if (templates[kind] !== undefined) merged[kind] = templates[kind];
+		}
+		await tx
+			.update(clubs)
+			.set({ guestInviteTemplates: normalizeGuestInviteTemplates(merged) })
+			.where(eq(clubs.id, clubId));
+	});
 	return { ok: true };
 }
 
@@ -90,26 +104,20 @@ export async function applyResetGuestInviteTemplate(
 }
 
 /**
- * The club's next non-cancelled meeting's video call link, or null. The same
- * "next" as `loadNextMeetingSummary` (a start at or after `now`), but a query of
- * its own: that summary is shared with slides and reporting and must never carry
- * the link. Reached only through the officer-gated `getGuestInviteContext`.
+ * One meeting's video call link, or null. Read BY the meeting id the invite
+ * context's `loadNextMeetingSummary` resolved, so the link always belongs to the
+ * meeting the draft names. That summary is shared with slides and reporting and
+ * must never carry the link; this is reached only through the officer-gated
+ * `getGuestInviteContext`.
  */
-export async function loadNextMeetingJoinLink(
+export async function loadMeetingJoinLink(
 	clubId: string,
-	now: Date,
+	meetingId: string,
 ): Promise<string | null> {
-	const [next] = await db
+	const [row] = await db
 		.select({ joinLink: meetings.joinUrl })
 		.from(meetings)
-		.where(
-			and(
-				eq(meetings.clubId, clubId),
-				gte(meetings.scheduledAt, now),
-				ne(meetings.status, "cancelled"),
-			),
-		)
-		.orderBy(asc(meetings.scheduledAt))
+		.where(and(eq(meetings.clubId, clubId), eq(meetings.id, meetingId)))
 		.limit(1);
-	return next?.joinLink?.trim() || null;
+	return row?.joinLink?.trim() || null;
 }

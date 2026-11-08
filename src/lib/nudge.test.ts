@@ -896,6 +896,9 @@ describe("buildNudge invite mode (#899)", () => {
 	};
 
 	for (const kind of Object.keys(drafts) as InviteKind[]) {
+		// protects=a club's own body and subject reach the draft for every kind;
+		// fails_when=custom text is ignored for a kind or the subject skips the
+		// template; no_claim=which kind the page picks (inviteKindFor).
 		it(`renders a custom body and subject for ${kind}`, () => {
 			const r = buildNudge({
 				...invite,
@@ -913,6 +916,8 @@ describe("buildNudge invite mode (#899)", () => {
 		});
 	}
 
+	// protects=fields are customized independently; fails_when=one custom field
+	// drags the other off the built-in text; no_claim=none beyond protects.
 	it("a custom body leaves the subject on the built-in text, and the reverse", () => {
 		const bodyOnly = buildNudge({
 			...invite,
@@ -932,6 +937,9 @@ describe("buildNudge invite mode (#899)", () => {
 		);
 	});
 
+	// protects=a club that never edited a field keeps today's bytes;
+	// fails_when=null custom fields change the built-in text or its ", at" clause;
+	// no_claim=an edited field (the tests above).
 	it("null custom fields fall back to the exact built-in bytes, location clause included", () => {
 		for (const kind of Object.keys(drafts) as InviteKind[]) {
 			const r = buildNudge({
@@ -952,6 +960,9 @@ describe("buildNudge invite mode (#899)", () => {
 		expect(noLocation.message).not.toContain(", at");
 	});
 
+	// protects=a blank variable renders as empty and drops no line;
+	// fails_when=a line holding an empty variable is removed or collapsed;
+	// no_claim=the ", at {location}" clause (guest-invite-template.test.ts).
 	it("an empty value renders as nothing and drops no line", () => {
 		const r = buildNudge({
 			...invite,

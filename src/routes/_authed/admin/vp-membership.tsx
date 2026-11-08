@@ -109,11 +109,13 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 				clubSlug: null,
 				inviteContext: NO_INVITE_CONTEXT,
 				guestInviteTemplates: NO_INVITE_TEMPLATES,
+				guestInviteTemplatesFailed: false,
 				profiles: NO_PROFILES,
 				otherAdminClubs: NO_OTHER_CLUBS,
 				readOnly: false,
 			};
 		}
+		let guestInviteTemplatesFailed = false;
 		const [
 			guests,
 			resolved,
@@ -127,9 +129,12 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 			getGuestInviteContext({ data: club.clubId }),
 			// The club's own invite wording (#1547): a failed read drafts with the
 			// built-in text rather than taking the pipeline down.
-			getGuestInviteTemplates({ data: club.clubId }).catch(
-				() => NO_INVITE_TEMPLATES,
-			),
+			// The page says so (`guestInviteTemplatesFailed`) rather than silently
+			// drafting wording the club did not write.
+			getGuestInviteTemplates({ data: club.clubId }).catch(() => {
+				guestInviteTemplatesFailed = true;
+				return NO_INVITE_TEMPLATES;
+			}),
 			// Captions and counts are decoration on this page: a failed read
 			// degrades to none of them rather than taking the pipeline down.
 			getGuestProfiles({ data: club.clubId }).catch(() => NO_PROFILES),
@@ -146,6 +151,7 @@ export const Route = createFileRoute("/_authed/admin/vp-membership")({
 			clubSlug: resolved?.slug ?? null,
 			inviteContext,
 			guestInviteTemplates,
+			guestInviteTemplatesFailed,
 			// A READ-ONLY impersonation passes the admin-view read that loads this
 			// page but not the admin write `recordGuestInvite` runs, so its invite
 			// links would open a draft and then fail to record (#899).
@@ -237,6 +243,7 @@ function VpMembership() {
 		clubSlug,
 		inviteContext,
 		guestInviteTemplates,
+		guestInviteTemplatesFailed,
 		readOnly,
 		otherAdminClubs,
 	} = Route.useLoaderData();
@@ -394,6 +401,17 @@ function VpMembership() {
 			{/* Pipeline, bucketed by stage. The id is a fragment target: `/tour`'s
 			    screenshot capture (#901) links straight to it, and
 			    `scroll-mt-24` lands it below the sticky top bar, not under it. */}
+			{guestInviteTemplatesFailed ? (
+				<p
+					role="status"
+					data-testid="invite-templates-failed"
+					className="rounded-md border border-warning/60 bg-warning/10 px-3 py-2 text-sm text-warning-foreground"
+				>
+					Couldn't load your club's custom invite wording; drafts below use the
+					default text.
+				</p>
+			) : null}
+
 			<div id="guest-pipeline" className="scroll-mt-24 space-y-6">
 				{STAGES.map((stage) => {
 					const inStage = guests.filter((g) => g.stage === stage.id);

@@ -50,6 +50,9 @@ describe("guest invite template authz wiring (#1547)", () => {
 		);
 	});
 
+	// protects=a reset is gated to an effective admin before it runs;
+	// fails_when=the gate is removed, weakened or moved after the write;
+	// no_claim=what the gate admits (the integration test).
 	it("resetGuestInviteTemplate: session, then ADMIN, then the write", () => {
 		assertOrder(
 			handlerBody("resetGuestInviteTemplate"),
@@ -58,6 +61,9 @@ describe("guest invite template authz wiring (#1547)", () => {
 		);
 	});
 
+	// protects=the read is behind the admin view before it runs;
+	// fails_when=the gate is removed, weakened or moved after the read;
+	// no_claim=what the gate admits (the integration test).
 	it("getGuestInviteTemplates: session, then the admin view, then the read", () => {
 		assertOrder(
 			handlerBody("getGuestInviteTemplates"),
@@ -66,6 +72,9 @@ describe("guest invite template authz wiring (#1547)", () => {
 		);
 	});
 
+	// protects=no handler is opened to the member role;
+	// fails_when="member" or a membership-only gate appears in the module;
+	// no_claim=comments are ignored (comment-blind source).
 	it("no gate admits a plain member", () => {
 		expect(SRC).not.toMatch(/"member"/);
 		expect(SRC).not.toMatch(/requireClubViewAccess|requireMembership\(/);

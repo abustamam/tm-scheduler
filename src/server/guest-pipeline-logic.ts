@@ -1079,6 +1079,12 @@ export interface PipelineGuestRow {
 	 */
 	lastVisitAt: Date | null;
 	/**
+	 * Instant rule, see `inviteVisitCount`: the guest's first visit, or null with
+	 * none. Distinct from `firstVisitAt` (end-of-day rule). Read by the invite
+	 * draft's `{firstVisit}` so it agrees with `{visitCount}` and `{lastVisit}`.
+	 */
+	inviteFirstVisitAt: Date | null;
+	/**
 	 * Instant rule, see `inviteVisitCount`: true when the guest's latest visit is
 	 * the club's most recent started, non-cancelled meeting. False with no visits.
 	 */
@@ -1248,6 +1254,7 @@ async function loadInviteRecency(clubId: string, timeZone: string, now: Date) {
 				guestId: visits.guestId,
 				visitCount: count(),
 				lastVisitAt: max(visits.scheduledAt),
+				firstVisitAt: min(visits.scheduledAt),
 			})
 			.from(visits)
 			.groupBy(visits.guestId),
@@ -1504,6 +1511,7 @@ export async function loadGuestPipeline(
 			firstVisitAt: v?.firstVisitAt ? new Date(v.firstVisitAt) : null,
 			inviteVisitCount: Number(inv?.visitCount ?? 0),
 			lastVisitAt: lastInviteVisit,
+			inviteFirstVisitAt: inv?.firstVisitAt ? new Date(inv.firstVisitAt) : null,
 			lastVisitWasLatestMeeting:
 				lastInviteVisit !== null &&
 				recency.latestStartedAt !== null &&

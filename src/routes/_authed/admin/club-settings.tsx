@@ -526,6 +526,9 @@ function ApplyDefaultJoinUrl({
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
+	// "View as this club" passes this page's admin-view reads but not the admin
+	// write the guest invite editor's Save runs.
+	const viewingReadOnly = !exportLinkAllowed(impersonating, adminClub.clubId);
 	const {
 		profile,
 		agenda,
@@ -1202,6 +1205,10 @@ function ClubSettings() {
 			{promoTemplate ? (
 				<Suspense fallback={null}>
 					<PromoTemplateEditor
+						// The active club comes from a cookie-backed context, not the URL,
+						// so a club switch re-renders this component: a new key remounts
+						// the editor, which reads its text once.
+						key={adminClub.clubId}
 						clubId={adminClub.clubId}
 						template={promoTemplate.template}
 						storedInvalid={promoTemplate.storedInvalid}
@@ -1210,15 +1217,29 @@ function ClubSettings() {
 				</Suspense>
 			) : null}
 
-			{guestInviteTemplates ? (
+			{guestInviteTemplates && !viewingReadOnly ? (
 				<Suspense fallback={null}>
 					<GuestInviteTemplateEditor
+						key={adminClub.clubId}
 						clubId={adminClub.clubId}
 						templates={guestInviteTemplates}
 						timezone={timezone.timezone}
 						onSaved={() => router.invalidate()}
 					/>
 				</Suspense>
+			) : guestInviteTemplates ? (
+				<section aria-labelledby="guest-invite-heading" className="space-y-2 pt-2">
+					<h2
+						id="guest-invite-heading"
+						className="font-display text-xl font-semibold tracking-[-0.01em]"
+					>
+						Guest invites
+					</h2>
+					<p className="text-sm text-muted-foreground">
+						Not available while viewing as this club. Editing the wording needs
+						"Act as admin".
+					</p>
+				</section>
 			) : null}
 
 			{/* #915. A plain link, not a server fn: the route streams a file and

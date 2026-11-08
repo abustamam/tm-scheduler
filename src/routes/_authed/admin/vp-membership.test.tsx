@@ -118,6 +118,7 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		linkReversible: false,
 		conversionUndoable: false,
 		firstVisitAt: null,
+		inviteFirstVisitAt: null,
 		inviteVisitCount: 0,
 		lastVisitAt: null,
 		lastVisitWasLatestMeeting: false,

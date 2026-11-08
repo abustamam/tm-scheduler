@@ -203,12 +203,71 @@ describe.skipIf(!hasTestDb)("guest invite templates (#1547)", () => {
 		}
 	});
 
+	// protects=decision B: officers saving different drafts do not overwrite each
+	// other; fails_when=update replaces the whole document, so B's save (loaded
+	// before A's) wipes A's draft; no_claim=the editor's choice of what to send
+	// (guest-invite-template-editor.test.tsx).
+	it("merges a save into what is stored: A saves never, B (loaded earlier) saves lapsed, both survive", async () => {
+		await update({
+			data: { clubId: seed.clubId, templates: { never: TEXT.never } },
+		});
+		await update({
+			data: { clubId: seed.clubId, templates: { lapsed: TEXT.lapsed } },
+		});
+		expect(await stored()).toEqual(TEXT);
+		// A kind that IS sent replaces that kind; an all-default one removes it.
+		await update({
+			data: {
+				clubId: seed.clubId,
+				templates: { never: { body: "Second {club}" } },
+			},
+		});
+		expect(await stored()).toEqual({
+			never: { body: "Second {club}" },
+			lapsed: TEXT.lapsed,
+		});
+	});
+
+	// protects=two concurrent saves of different kinds both land (FOR UPDATE);
+	// fails_when=read-merge-write runs without the row lock and one save is lost;
+	// no_claim=ordering between saves of the SAME kind.
+	it("keeps both of two concurrent saves of different kinds", async () => {
+		await Promise.all([
+			update({ data: { clubId: seed.clubId, templates: { never: TEXT.never } } }),
+			update({
+				data: { clubId: seed.clubId, templates: { lapsed: TEXT.lapsed } },
+			}),
+		]);
+		expect(await stored()).toEqual(TEXT);
+	});
+
+	// protects=a field that is invalid in storage costs only itself, and a reset
+	// of one kind keeps the other kinds' valid drafts; fails_when=the stored
+	// document collapses to {} so reset (or the next save) wipes valid drafts;
+	// no_claim=none beyond protects.
+	it("keeps valid drafts around an invalid stored one, through a reset", async () => {
+		await testDb
+			.update(clubs)
+			.set({
+				guestInviteTemplates: { never: { body: 42 }, lapsed: { body: "Keep this" } },
+			})
+			.where(eq(clubs.id, seed.clubId));
+		expect(await read({ data: seed.clubId })).toEqual({
+			lapsed: { body: "Keep this" },
+		});
+		await reset({ data: { clubId: seed.clubId, kind: "never" } });
+		expect(await stored()).toEqual({ lapsed: { body: "Keep this" } });
+	});
+
 	// protects=acceptance 4; fails_when=the invite context omits the next
 	// meeting's link, reads another meeting's, or the shared summary grows a join
 	// field; no_claim=a real browser.
 	describe("the invite context's joinLink", () => {
 		const ROOM = `https://zoom.example/j/${randomUUID()}`;
 
+		// protects=acceptance 4, the simple case; fails_when=the link is dropped, or
+		// not trimmed, or a null link is not null; no_claim=choosing among several
+		// meetings (the next test).
 		it("carries the next meeting's link, and null when it has none", async () => {
 			expect(
 				((await context({ data: seed.clubId })) as { joinLink: unknown })
@@ -226,11 +285,63 @@ describe.skipIf(!hasTestDb)("guest invite templates (#1547)", () => {
 			expect(ctx.nextMeeting?.id).toBe(seed.meetingId);
 		});
 
+		async function meetingAt(
+			daysFromNow: number,
+			joinUrl: string | null,
+			status: "scheduled" | "cancelled" = "scheduled",
+		) {
+			const [m] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + daysFromNow * 86_400_000),
+					status,
+					joinUrl,
+				})
+				.returning({ id: meetings.id });
+			return m!.id;
+		}
+
+		// protects=the link belongs to the meeting the draft names;
+		// fails_when=it is read by an independent "next meeting" query or by club,
+		// so a past, cancelled or later meeting's link (or a neighbour's null)
+		// reaches the draft; no_claim=none beyond protects.
+		it("is the link of the summary's own meeting, among past, cancelled and later ones", async () => {
+			const S = `${ROOM}/s`;
+			await meetingAt(-3, `${ROOM}/past`);
+			await meetingAt(1, `${ROOM}/cancelled`, "cancelled");
+			const nearest = await meetingAt(2, ` ${S} `);
+			await meetingAt(30, `${ROOM}/later`);
+			const ctx = (await context({ data: seed.clubId })) as {
+				joinLink: string | null;
+				nextMeeting: { id: string } | null;
+			};
+			expect(ctx.nextMeeting?.id).toBe(nearest);
+			expect(ctx.joinLink).toBe(S);
+		});
+
+		// protects=a meeting with no link yields null, not a later meeting's link;
+		// fails_when=the lookup falls through to another meeting; no_claim=none beyond protects.
+		it("is null when the summary's meeting has no link though a later one does", async () => {
+			const nearest = await meetingAt(2, null);
+			await meetingAt(30, `${ROOM}/later`);
+			const ctx = (await context({ data: seed.clubId })) as {
+				joinLink: string | null;
+				nextMeeting: { id: string } | null;
+			};
+			expect(ctx.nextMeeting?.id).toBe(nearest);
+			expect(ctx.joinLink).toBeNull();
+		});
+
+		// protects=the link is officer-only; fails_when=a plain member reads it;
+		// no_claim=an open-term officer (covered above for the writes).
 		it("refuses a non-officer", async () => {
 			signedInAs = seed.memberUserId;
 			await expect(context({ data: seed.clubId })).rejects.toThrow();
 		});
 
+		// protects=the shared summary (slides, reporting) never carries a join link;
+		// fails_when=a join field is added to it; no_claim=other consumers' output.
 		it("loadNextMeetingSummary never carries the link", async () => {
 			await testDb
 				.update(meetings)

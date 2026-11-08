@@ -25,7 +25,13 @@ export const GUEST_INVITE_LIMITS = { body: 1000, subject: 200 } as const;
 
 const draftSchema = z.object({
 	body: z.string().max(GUEST_INVITE_LIMITS.body).optional(),
-	subject: z.string().max(GUEST_INVITE_LIMITS.subject).optional(),
+	// An email subject is one line: a CR or LF would break the header the
+	// draft's mailto link carries.
+	subject: z
+		.string()
+		.max(GUEST_INVITE_LIMITS.subject)
+		.regex(/^[^\r\n]*$/)
+		.optional(),
 });
 
 export const guestInviteTemplatesSchema = z.object({
@@ -155,12 +161,30 @@ export const DEFAULT_GUEST_INVITE_TEMPLATES: Record<
 	},
 };
 
-/** A stored value read safely: anything that fails the schema is `{}`. */
+/** A stored value read safely, one kind and one field at a time: a field that
+ *  fails its schema is dropped, and the valid ones around it are kept. A stored
+ *  value that is not an object reads as `{}`. */
 export function resolveGuestInviteTemplates(
 	stored: unknown,
 ): GuestInviteTemplates {
-	const parsed = guestInviteTemplatesSchema.safeParse(stored);
-	return parsed.success ? parsed.data : {};
+	if (typeof stored !== "object" || stored === null || Array.isArray(stored))
+		return {};
+	const out: GuestInviteTemplates = {};
+	for (const kind of INVITE_KINDS) {
+		const raw = (stored as Record<string, unknown>)[kind];
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+			continue;
+		const draft: { body?: string; subject?: string } = {};
+		for (const field of ["body", "subject"] as const) {
+			const parsed = draftSchema.shape[field].safeParse(
+				(raw as Record<string, unknown>)[field],
+			);
+			if (parsed.success && parsed.data !== undefined)
+				draft[field] = parsed.data;
+		}
+		if (Object.keys(draft).length > 0) out[kind] = draft;
+	}
+	return out;
 }
 
 /** True when `text` is blank or is exactly the field's default, i.e. it should
@@ -187,12 +211,16 @@ export function customTemplateFor(
 }
 
 /** `{key}` becomes its value; an unknown `{token}` stays as typed. A blank value
- *  is an empty string: nothing is dropped and nothing is collapsed. */
+ *  is an empty string, with ONE exception: an empty `{location}` takes the
+ *  ", at " right before it along (so an edited default with no venue reads like
+ *  the built-in, which omits the whole clause). */
 export function renderGuestInviteText(
 	text: string,
 	values: GuestInviteValues,
 ): string {
-	return text.replace(/\{([^{}\n]+)\}/g, (whole, name: string) =>
+	const source =
+		values.location === "" ? text.replaceAll(", at {location}", "") : text;
+	return source.replace(/\{([^{}\n]+)\}/g, (whole, name: string) =>
 		GUEST_KEYS.has(name) ? values[name as GuestInviteKey] : whole,
 	);
 }
@@ -208,7 +236,8 @@ export function guestInviteValues(input: {
 	shareUrl: string;
 	joinLink: string | null;
 	guest: {
-		firstVisitAt: DateInput;
+		/** Instant rule, as `lastVisitAt` and `inviteVisitCount`. */
+		inviteFirstVisitAt: DateInput;
 		lastVisitAt: DateInput;
 		inviteVisitCount: number;
 	};
@@ -224,7 +253,7 @@ export function guestInviteValues(input: {
 		location: meeting.location?.trim() ?? "",
 		agendaLink: input.shareUrl,
 		joinLink: input.joinLink?.trim() ?? "",
-		firstVisit: day(guest.firstVisitAt),
+		firstVisit: day(guest.inviteFirstVisitAt),
 		lastVisit: day(guest.lastVisitAt),
 		visitCount: String(Math.max(0, Math.trunc(guest.inviteVisitCount))),
 	};
@@ -259,7 +288,7 @@ export function exampleGuestInviteValues(
 		shareUrl: `${origin}/club/your-club/meeting/next`,
 		joinLink: "https://meet.example.com/your-club",
 		guest: {
-			firstVisitAt: visits ? at(visits.first) : null,
+			inviteFirstVisitAt: visits ? at(visits.first) : null,
 			lastVisitAt: visits ? at(visits.last) : null,
 			inviteVisitCount: visits?.count ?? 0,
 		},

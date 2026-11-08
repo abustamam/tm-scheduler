@@ -682,6 +682,11 @@ export function toastmasterScriptUrl(
 	return `${origin}${personalMeetingHref(target)}/script`;
 }
 
+/** The draft's email subject as text, for a preview: no mailto parsing. */
+export function nudgeSubject(input: NudgeInput): string {
+	return subjectFor(input);
+}
+
 export function buildNudge(input: NudgeInput): Nudge {
 	const message = messageFor(input);
 	const nudge: Nudge = { message };
