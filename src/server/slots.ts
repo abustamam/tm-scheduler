@@ -25,9 +25,10 @@ import {
 	claimSlotCore,
 	confirmSlotCore,
 	editSlotSpeech,
+	lockSpeakerSlotForDetails,
 	reassignSlotCore,
 	releaseSlotCore,
-	speechOwnerOf,
+	speakerDetailsOwnerOrThrow,
 	writeSpeakerDetails,
 } from "./slots-logic";
 import {
@@ -368,33 +369,38 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// deliberately: it is the call `public-readers-archive-gate`'s WRITE_GATES
 		// row pins in this file, and it outlives a change to that gate.
 		await assertClubNotArchived(slot.clubId);
+		// Early errors only: nothing written depends on this unlocked read. The
+		// transaction asks every one of them again against the locked rows (#1529).
 		// By write class (#1135): completed says locked, cancelled says cancelled.
 		// #1057. A cancelled meeting keeps every assignment until restored, and a
 		// blank input here UNLINKS the speech (`editSlotSpeech`), which a restore
 		// cannot bring back — on a page that is read-only, so the holder could not
 		// put it right either.
 		assertMeetingAccepts(slot.meetingStatus, "plan");
-		if (!slot.isSpeakerRole) {
-			throw new Error("Only speaker roles have speech details.");
-		}
-		// A speech has exactly one owner (#1046): the member's Person, or the
-		// guest holding the slot (#1518). An empty slot has nobody to own it.
-		const owner = speechOwnerOf(slot);
-		if (!owner) {
-			throw new Error("Assign a member before adding speech details.");
-		}
+		speakerDetailsOwnerOrThrow(slot);
 		await db.transaction(async (tx) => {
-			await writeSpeakerDetails(tx, {
-				clubId: slot.clubId,
-				actorMemberId,
+			// The meeting lock, then the slot FOR UPDATE: a concurrent reassign,
+			// release, guest convert/link or cancel serializes against this save,
+			// and the speech goes to whoever holds the slot as of the lock.
+			const locked = await lockSpeakerSlotForDetails(tx, {
 				meetingId: slot.meetingId,
 				slotId: data.slotId,
-				currentSpeechId: slot.speechId,
+			});
+			assertMeetingAccepts(locked.meetingStatus, "plan");
+			// The archive gate again, against tx, as `applySpeechLogEdit` does.
+			await assertClubNotArchived(locked.clubId, tx);
+			const owner = speakerDetailsOwnerOrThrow(locked);
+			await writeSpeakerDetails(tx, {
+				clubId: locked.clubId,
+				actorMemberId,
+				meetingId: locked.meetingId,
+				slotId: data.slotId,
+				currentSpeechId: locked.speechId,
 				write: () =>
 					editSlotSpeech(tx, {
 						slotId: data.slotId,
 						...owner,
-						currentSpeechId: slot.speechId,
+						currentSpeechId: locked.speechId,
 						input: data.speakerDetails,
 					}),
 			});
