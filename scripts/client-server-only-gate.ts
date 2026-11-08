@@ -23,15 +23,17 @@ const SERVER_ONLY: ReadonlyArray<{ test: (id: string) => boolean; why: string }>
 			why: "the db client (src/db/index.ts)",
 		},
 		{
-			test: (id) =>
-				/\/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?(pg|pg-[^/]+|pgpass)\//.test(
-					id,
-				),
+			// Unanchored, so a nested layout's inner `/node_modules/pg/` matches.
+			test: (id) => /\/node_modules\/(pg|pg-[^/]+|pgpass)\//.test(id),
 			why: "the Postgres driver",
 		},
 		// Not "any `__vite-browser-external`": pptxgenjs dynamically imports a
 		// Node built-in behind a Node-only branch, harmlessly, on clean main.
 	];
+
+function serverOnlyRule(id: string) {
+	return SERVER_ONLY.find((r) => r.test(id));
+}
 
 export interface Leak {
 	id: string;
@@ -48,7 +50,7 @@ export function findServerOnlyLeaks(
 ): Leak[] {
 	const leaks: Leak[] = [];
 	for (const id of moduleIds) {
-		const rule = SERVER_ONLY.find((r) => r.test(id));
+		const rule = serverOnlyRule(id);
 		if (!rule) continue;
 		leaks.push({ id, why: rule.why, chain: chainToApp(id, importersOf) });
 	}
@@ -69,9 +71,10 @@ function chainToApp(
 	const queue = [start];
 	while (queue.length > 0) {
 		const id = queue.shift() as string;
-		if (id !== start && isAppModule(id) && !SERVER_ONLY.some((r) => r.test(id))) {
+		if (id !== start && isAppModule(id) && !serverOnlyRule(id)) {
 			const chain: string[] = [];
-			for (let at: string | null = id; at !== null; at = parent.get(at) ?? null) {
+			let at: string | null = id;
+			for (; at !== null; at = parent.get(at) ?? null) {
 				chain.push(at);
 			}
 			return chain;

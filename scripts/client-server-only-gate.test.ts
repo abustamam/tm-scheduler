@@ -1,8 +1,40 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 import {
+	clientServerOnlyGate,
 	findServerOnlyLeaks,
 	formatLeaks,
 } from "./client-server-only-gate.ts";
+
+describe("client server-only gate wiring", () => {
+	// A gate nobody registers passes every build. Read the config as source:
+	// importing it would load Start, Nitro and Tailwind into this test.
+	const config = readFileSync(join(__dirname, "..", "vite.config.ts"), "utf8");
+
+	it("is registered in vite.config.ts's plugins array", () => {
+		const plugins = config.slice(config.indexOf("plugins: ["));
+		const body = plugins.slice(0, plugins.indexOf("\n\t],"));
+		// Code lines only, so a commented-out call does not count.
+		const code = body
+			.split("\n")
+			.filter((line) => !line.trim().startsWith("//"))
+			.join("\n");
+		expect(code).toMatch(/^\t\tclientServerOnlyGate\(\),$/m);
+	});
+
+	it("runs on the client build only", () => {
+		const plugin: Plugin = clientServerOnlyGate();
+		expect(plugin.apply).toBe("build");
+		const applies = plugin.applyToEnvironment as (env: {
+			name: string;
+		}) => boolean;
+		expect(applies({ name: "client" })).toBe(true);
+		expect(applies({ name: "ssr" })).toBe(false);
+		expect(typeof plugin.buildEnd).toBe("function");
+	});
+});
 
 const R = "/repo";
 

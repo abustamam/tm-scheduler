@@ -20,7 +20,8 @@ import { readSource } from "#/test/guard-source";
  * This is a source-shape heuristic, not a full import-graph analysis, but it
  * catches the exact mistake both regressions made. A third (#1550) got past it
  * with a non-exported `typeof db` type alias; the build-time graph check in
- * `scripts/client-server-only-gate.ts` is the backstop that catches any shape. Pure server helpers with no
+ * `scripts/client-server-only-gate.ts` is the backstop that catches any shape.
+ * Pure server helpers with no
  * `createServerFn` (e.g. `guards.ts`, `activity.ts`, `*-logic.ts`) are exempt —
  * by convention they are never imported by client routes.
  */
