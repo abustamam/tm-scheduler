@@ -126,14 +126,16 @@ function Line({ line }: { line: ScriptLine }) {
 				<strong>{line.speaker}</strong>
 				{line.title ? ` · ${line.title}` : ""}
 			</p>
-			<blockquote className="border-primary border-l-4 pl-3">
-				{line.say}
-			</blockquote>
+			{/* The evaluator first, then the introduction, so the speaker walks
+			    up straight from their introduction. */}
 			{line.evaluatorAsk ? (
 				<blockquote className="border-primary border-l-4 pl-3">
 					{line.evaluatorAsk}
 				</blockquote>
 			) : null}
+			<blockquote className="border-primary border-l-4 pl-3">
+				{line.say}
+			</blockquote>
 			{line.prepNote ? (
 				<p className="text-muted-foreground text-sm">{line.prepNote}</p>
 			) : null}

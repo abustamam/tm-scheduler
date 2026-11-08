@@ -43,7 +43,9 @@ export type ScriptLine =
 			evaluator: string | null;
 			/** The quoted evaluator ask, or null when `evaluator` is null. */
 			evaluatorAsk: string | null;
-			/** The quoted introduction line. */
+			/** The quoted introduction line, read after the evaluator ask: the
+			 *  written introduction, else "Help me introduce {name} with their
+			 *  speech {title}." */
 			say: string;
 			introduction: "shown" | "members-only" | "none";
 			/** Set whenever `title` is null; rendered as a note, never inside the
@@ -130,8 +132,8 @@ export function buildToastmasterScript(input: {
 				introduction === "shown" && written
 					? written
 					: title
-						? `${title} – ${spoken} – ${spoken} – ${title}`
-						: `Introduce ${spoken}.`;
+						? `Help me introduce ${spoken} with their speech ${title}.`
+						: `Help me introduce ${spoken}.`;
 			const names = evaluators.length > 0 ? joinNames(evaluators) : null;
 			lines.push({
 				kind: "speech",
