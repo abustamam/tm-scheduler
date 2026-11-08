@@ -82,7 +82,10 @@ const loaderFor = (label: string) => ({
 	guestInviteTemplates: { never: { body: `${label} never body` } },
 });
 
-type Impersonating = { mode: "read_only" | "read_write"; clubId: string } | null;
+type Impersonating = {
+	mode: "read_only" | "read_write";
+	clubId: string;
+} | null;
 
 async function renderSettings(initial: {
 	clubId: string;
@@ -148,7 +151,9 @@ describe("a club switch on Club settings", () => {
 		);
 		const body = await neverBody();
 		await user.type(body, "!");
-		await user.click(screen.getByRole("button", { name: "Save guest invites" }));
+		await user.click(
+			screen.getByRole("button", { name: "Save guest invites" }),
+		);
 		await waitFor(() =>
 			expect(updateGuestInviteTemplates).toHaveBeenCalledTimes(1),
 		);
@@ -172,7 +177,9 @@ describe("a club switch on Club settings", () => {
 			expect((await headline()).value).toBe("Club B headline"),
 		);
 		await user.type(await headline(), "!");
-		await user.click(screen.getByRole("button", { name: "Save promo template" }));
+		await user.click(
+			screen.getByRole("button", { name: "Save promo template" }),
+		);
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { clubId: string };
@@ -191,9 +198,15 @@ describe("View as this club (read-only impersonation)", () => {
 			impersonating: { mode: "read_only", clubId: CLUB_A },
 		});
 		await screen.findByRole("heading", { name: "Guest invites" });
-		expect(screen.queryByRole("button", { name: "Save guest invites" })).toBeNull();
-		expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
-		expect(screen.getByText(/Not available while viewing as this club\. Editing/)).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Save guest invites" }),
+		).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Reset to default" }),
+		).toBeNull();
+		expect(
+			screen.getByText(/Not available while viewing as this club\. Editing/),
+		).toBeTruthy();
 	});
 
 	// protects=a read-write ("Act as admin") session still edits;

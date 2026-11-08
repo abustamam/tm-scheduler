@@ -172,8 +172,7 @@ export function resolveGuestInviteTemplates(
 	const out: GuestInviteTemplates = {};
 	for (const kind of INVITE_KINDS) {
 		const raw = (stored as Record<string, unknown>)[kind];
-		if (typeof raw !== "object" || raw === null || Array.isArray(raw))
-			continue;
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
 		const draft: { body?: string; subject?: string } = {};
 		for (const field of ["body", "subject"] as const) {
 			const parsed = draftSchema.shape[field].safeParse(

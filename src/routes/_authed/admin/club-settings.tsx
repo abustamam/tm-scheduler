@@ -1228,7 +1228,10 @@ function ClubSettings() {
 					/>
 				</Suspense>
 			) : guestInviteTemplates ? (
-				<section aria-labelledby="guest-invite-heading" className="space-y-2 pt-2">
+				<section
+					aria-labelledby="guest-invite-heading"
+					className="space-y-2 pt-2"
+				>
 					<h2
 						id="guest-invite-heading"
 						className="font-display text-xl font-semibold tracking-[-0.01em]"

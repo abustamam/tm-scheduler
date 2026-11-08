@@ -113,7 +113,9 @@ export function GuestInviteTemplateEditor({
 		// into what is stored: an officer's other tabs, and another officer's
 		// saves since this page loaded, are not overwritten.
 		const sent = fields;
-		const sentKinds = INVITE_KINDS.filter((k) => !sameDraft(sent[k], baseline[k]));
+		const sentKinds = INVITE_KINDS.filter(
+			(k) => !sameDraft(sent[k], baseline[k]),
+		);
 		const parsed = guestInviteTemplatesSchema.safeParse(
 			storedDrafts(sent, sentKinds),
 		);

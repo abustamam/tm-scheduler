@@ -185,9 +185,9 @@ describe("renderGuestInviteText", () => {
 			});
 			expect(rendered).toBe(builtIn.message);
 		}
-		expect(renderGuestInviteText("Come {location}", { ...values, location: "" })).toBe(
-			"Come ",
-		);
+		expect(
+			renderGuestInviteText("Come {location}", { ...values, location: "" }),
+		).toBe("Come ");
 		expect(renderGuestInviteText("at 6, at {location}.", values)).toBe(
 			"at 6, at Room 4.",
 		);

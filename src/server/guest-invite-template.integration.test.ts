@@ -233,7 +233,9 @@ describe.skipIf(!hasTestDb)("guest invite templates (#1547)", () => {
 	// no_claim=ordering between saves of the SAME kind.
 	it("keeps both of two concurrent saves of different kinds", async () => {
 		await Promise.all([
-			update({ data: { clubId: seed.clubId, templates: { never: TEXT.never } } }),
+			update({
+				data: { clubId: seed.clubId, templates: { never: TEXT.never } },
+			}),
 			update({
 				data: { clubId: seed.clubId, templates: { lapsed: TEXT.lapsed } },
 			}),
@@ -249,7 +251,10 @@ describe.skipIf(!hasTestDb)("guest invite templates (#1547)", () => {
 		await testDb
 			.update(clubs)
 			.set({
-				guestInviteTemplates: { never: { body: 42 }, lapsed: { body: "Keep this" } },
+				guestInviteTemplates: {
+					never: { body: 42 },
+					lapsed: { body: "Keep this" },
+				},
 			})
 			.where(eq(clubs.id, seed.clubId));
 		expect(await read({ data: seed.clubId })).toEqual({

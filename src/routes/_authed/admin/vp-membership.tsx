@@ -402,14 +402,13 @@ function VpMembership() {
 			    screenshot capture (#901) links straight to it, and
 			    `scroll-mt-24` lands it below the sticky top bar, not under it. */}
 			{guestInviteTemplatesFailed ? (
-				<p
-					role="status"
+				<output
 					data-testid="invite-templates-failed"
-					className="rounded-md border border-warning/60 bg-warning/10 px-3 py-2 text-sm text-warning-foreground"
+					className="block rounded-md border border-warning/60 bg-warning/10 px-3 py-2 text-sm text-warning-foreground"
 				>
 					Couldn't load your club's custom invite wording; drafts below use the
 					default text.
-				</p>
+				</output>
 			) : null}
 
 			<div id="guest-pipeline" className="scroll-mt-24 space-y-6">

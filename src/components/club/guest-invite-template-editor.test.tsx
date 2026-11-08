@@ -94,7 +94,9 @@ describe("Save", () => {
 		const body = screen.getByLabelText("Message");
 		await user.clear(body);
 		await user.type(body, "Never body");
-		await user.click(screen.getByRole("button", { name: "Save guest invites" }));
+		await user.click(
+			screen.getByRole("button", { name: "Save guest invites" }),
+		);
 		await waitFor(() =>
 			expect(updateGuestInviteTemplates).toHaveBeenCalledTimes(1),
 		);
@@ -104,7 +106,9 @@ describe("Save", () => {
 		const lapsed = screen.getByLabelText("Message");
 		await user.clear(lapsed);
 		await user.type(lapsed, "Lapsed body");
-		await user.click(screen.getByRole("button", { name: "Save guest invites" }));
+		await user.click(
+			screen.getByRole("button", { name: "Save guest invites" }),
+		);
 		await waitFor(() =>
 			expect(updateGuestInviteTemplates).toHaveBeenCalledTimes(2),
 		);
@@ -124,15 +128,18 @@ describe("Save", () => {
 		const body = screen.getByLabelText("Message");
 		await user.clear(body);
 		await user.type(body, "First");
-		await user.click(screen.getByRole("button", { name: "Save guest invites" }));
+		await user.click(
+			screen.getByRole("button", { name: "Save guest invites" }),
+		);
 		await user.type(body, " and more");
 		release({ ok: true });
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Save guest invites" })).toHaveProperty(
-				"disabled",
-				false,
-			),
+			expect(
+				screen.getByRole("button", { name: "Save guest invites" }),
+			).toHaveProperty("disabled", false),
 		);
-		expect(screen.getByRole("button", { name: "Discard changes" })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Discard changes" }),
+		).toBeTruthy();
 	});
 });
