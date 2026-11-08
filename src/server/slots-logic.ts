@@ -1372,6 +1372,68 @@ export function speechOwnerOf(slot: {
 	return null;
 }
 
+/** The speech owner of a slot whose speech details are being saved, or the
+ *  refusal the edit sheet shows. A speech has exactly one owner (#1046): the
+ *  member's Person, or the guest holding the slot (#1518). */
+export function speakerDetailsOwnerOrThrow(slot: {
+	isSpeakerRole: boolean;
+	assignedMemberId: string | null;
+	personId: string | null;
+	assignedGuestId: string | null;
+}): SpeechOwner {
+	if (!slot.isSpeakerRole) {
+		throw new Error("Only speaker roles have speech details.");
+	}
+	const owner = speechOwnerOf(slot);
+	if (!owner) {
+		throw new Error("Assign a member before adding speech details.");
+	}
+	return owner;
+}
+
+/**
+ * The slot `updateSpeakerDetails` writes against, read inside its transaction
+ * (#1529): the meeting's slot-edit lock FIRST, then the slot `FOR UPDATE OF
+ * role_slots`, so a concurrent reassign, release, guest convert/link or cancel
+ * serializes against the save. The owner, the speaker-role check, the
+ * empty-slot refusal and the meeting status all come from here, never from the
+ * handler's unlocked read. The pattern `applySpeechLogEdit` follows.
+ *
+ * Lives here, not in `slots.ts`: that module is imported by client routes, and
+ * a db-touching helper there (even a `typeof db` type) put `pg` in the browser
+ * bundle and crashed production (#1550).
+ */
+export async function lockSpeakerSlotForDetails(
+	tx: Tx,
+	args: { meetingId: string; slotId: string },
+) {
+	const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
+	const [slot] = await tx
+		.select({
+			isSpeakerRole: roleDefinitions.isSpeakerRole,
+			clubId: meetings.clubId,
+			meetingId: roleSlots.meetingId,
+			speechId: roleSlots.speechId,
+			assignedMemberId: roleSlots.assignedMemberId,
+			assignedGuestId: roleSlots.assignedGuestId,
+			personId: members.personId,
+		})
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
+		.where(
+			and(eq(roleSlots.id, args.slotId), eq(roleSlots.meetingId, meeting.id)),
+		)
+		.for("update", { of: roleSlots })
+		.limit(1);
+	if (!slot) throw new Error("Role not found.");
+	return { meetingStatus: meeting.status, ...slot };
+}
+
 /**
  * Attach a new Speech to a freshly-claimed speaker slot and point
  * the slot at it. Pure-TBA / empty input creates nothing (slot stays TBA,
