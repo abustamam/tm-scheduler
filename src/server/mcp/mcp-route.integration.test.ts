@@ -207,6 +207,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"restore_meeting",
 			"set_attendance",
 			"set_awards",
+			"set_contact_preference",
 			"set_my_attendance",
 			"update_meeting_schedule",
 			"upsert_agendas",
@@ -625,6 +626,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("update_meeting_schedule", {
 				clubId: seed.clubId,
 				scheduleText: "Tuesdays 7 PM",
+			}),
+			// #1543. A preview only (no planHash): names members, reads their
+			// contact detail to decide, and must never echo it.
+			toolsCall("set_contact_preference", {
+				clubId: seed.clubId,
+				memberIds: [seed.memberId],
+				method: "email",
 			}),
 		];
 		const rawByTool = new Map<string, string>();
