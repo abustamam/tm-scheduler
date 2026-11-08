@@ -577,6 +577,37 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			expect(row).toEqual({ pathwayPath: null, projectName: "Typed Project" });
 		});
 
+		it('an introduction sent as "" is cleared to NULL, and an omitted one keeps the stored text', async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Old title",
+			});
+			await testDb
+				.update(speeches)
+				.set({ introduction: "Introduce me kindly" })
+				.where(eq(speeches.id, speechId as string));
+			sessionUserId = seed.memberUserId;
+			const stored = async () =>
+				(
+					await testDb
+						.select({ introduction: speeches.introduction })
+						.from(speeches)
+						.where(eq(speeches.id, speechId as string))
+				)[0]?.introduction;
+
+			await editSpeechFromLog({
+				data: { slotId, speakerDetails: { speechTitle: "Retitled" } },
+			});
+			expect(await stored()).toBe("Introduce me kindly");
+
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Retitled", introduction: "" },
+				},
+			});
+			expect(await stored()).toBeNull();
+		});
+
 		it("also works on a scheduled meeting, and a second edit replaces the first project", async () => {
 			const { slotId } = await emptyMemberSlot(seed.memberId);
 			sessionUserId = seed.memberUserId;

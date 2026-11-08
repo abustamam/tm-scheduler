@@ -104,11 +104,14 @@ async function isSpeakerOfSpeech(
 
 /**
  * A field the form did not SEND keeps its stored value. The sheet hides the
- * free-text path, project and level inputs behind the project picker, and the
- * introduction input is not drawn for a viewer who cannot read introductions
- * (members only), so an edit would otherwise read them as blank and wipe history. A field the form sent as "" is a deliberate clear
- * and is not touched here (an absent key and `undefined` are the same on the
- * wire, which is why the sheet sends "" for a shown-but-empty input).
+ * free-text path, project and level inputs behind the project picker, so a
+ * title-only edit would otherwise read them as blank and wipe history. The
+ * introduction input is always drawn on THIS writer (the speech log is
+ * members-only), so an unsent introduction only comes from a caller other than
+ * the sheet; the agenda writer is where the field can be hidden. A field sent
+ * as "" is a deliberate clear and is not touched here (an absent key and
+ * `undefined` are the same on the wire, which is why the sheet sends "" for a
+ * shown-but-empty input).
  *
  * One exception: when the stored speech is linked to a catalog project and the
  * input unlinks it, the stored path, project and level were DERIVED from that
