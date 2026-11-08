@@ -111,8 +111,11 @@ describe("ToastmasterScriptPage (#1480)", () => {
 		expect(quote.tagName).toBe("BLOCKQUOTE");
 		const note = screen.getByText(/Their title isn't on the agenda yet/);
 		expect(note.closest("blockquote")).toBeNull();
-		expect(screen.getByText("Evaluating this speech is Eval0.").tagName).toBe(
-			"BLOCKQUOTE",
-		);
+		const ask = screen.getByText("Evaluating this speech is Eval0.");
+		expect(ask.tagName).toBe("BLOCKQUOTE");
+		// The evaluator ask is read first; the introduction follows it.
+		expect(
+			ask.compareDocumentPosition(quote) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 });

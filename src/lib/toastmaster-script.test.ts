@@ -256,7 +256,7 @@ describe("buildToastmasterScript", () => {
 		expect(first?.kind === "speech" && first.introduction).toBe("shown");
 		const second = withIntro[1];
 		expect(second?.kind === "speech" && second.say).toBe(
-			"Fall – Bea – Bea – Fall",
+			"Help me introduce Bea with their speech Fall.",
 		);
 		expect(second?.kind === "speech" && second.introduction).toBe("none");
 	});
@@ -269,18 +269,20 @@ describe("buildToastmasterScript", () => {
 		const first = speeches(script(club(), null))[0];
 		expect(first?.kind === "speech" && first.introduction).toBe("members-only");
 		expect(first?.kind === "speech" && first.say).toBe(
-			"Rise – Ann – Ann – Rise",
+			"Help me introduce Ann with their speech Rise.",
 		);
 	});
 
-	// protects=AC6: no title -> "Introduce {speaker}." and the note outside it;
+	// protects=AC6: no title -> "Help me introduce {speaker}." and the note outside it;
 	//   an introduction with no title keeps the note.
 	// fails_when=the note is dropped when an introduction exists, or is put in say.
 	// no_claim=the wording of any `detail`, or that the route feeds these rows (the route guard covers that).
 	it("no title: the plain line plus a prep note, and the note survives an introduction", () => {
 		const slots = club([null, null]);
 		const plain = speeches(script(slots, {}))[0];
-		expect(plain?.kind === "speech" && plain.say).toBe("Introduce Ann.");
+		expect(plain?.kind === "speech" && plain.say).toBe(
+			"Help me introduce Ann.",
+		);
 		expect(plain?.kind === "speech" && plain.prepNote).toBe(MISSING_TITLE_NOTE);
 		const intro = speeches(script(slots, { sp0: "About Ann." }))[0];
 		expect(intro?.kind === "speech" && intro.say).toBe("About Ann.");
@@ -377,7 +379,7 @@ describe("buildToastmasterScript", () => {
 		const line = speeches(script(slots))[0];
 		if (line?.kind !== "speech") throw new Error("no speech line");
 		expect(line.speaker).toBe("Vic (V)");
-		expect(line.say).toBe("Rise \u2013 Vic \u2013 Vic \u2013 Rise");
+		expect(line.say).toBe("Help me introduce Vic with their speech Rise.");
 	});
 
 	// protects=a MEMBER whose own name contains " (V)" or " \u00b7 Guest" is read
@@ -391,7 +393,9 @@ describe("buildToastmasterScript", () => {
 			);
 			const line = speeches(script(slots))[0];
 			if (line?.kind !== "speech") throw new Error("no speech line");
-			expect(line.say).toBe(`Rise \u2013 ${name} \u2013 ${name} \u2013 Rise`);
+			expect(line.say).toBe(
+				`Help me introduce ${name} with their speech Rise.`,
+			);
 		}
 	});
 
