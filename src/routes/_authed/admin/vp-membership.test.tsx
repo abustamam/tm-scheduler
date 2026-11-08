@@ -153,6 +153,7 @@ async function renderRoute(
 	readOnly = false,
 	profiles = NO_PROFILES,
 	guestInviteTemplates: GuestInviteTemplates = {},
+	guestInviteTemplatesFailed = false,
 ) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		guests,
@@ -162,6 +163,7 @@ async function renderRoute(
 		clubSlug: "downtown",
 		inviteContext,
 		guestInviteTemplates,
+		guestInviteTemplatesFailed,
 		readOnly,
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
@@ -855,14 +857,55 @@ describe("VP Membership guest card — invite to the next meeting (#899)", () =>
 		vi.mocked(getClubByIdentifier).mockResolvedValue(null);
 		const load = Route.options.loader as unknown as (a: {
 			context: unknown;
-		}) => Promise<{ guestInviteTemplates: GuestInviteTemplates }>;
+		}) => Promise<{
+			guestInviteTemplates: GuestInviteTemplates;
+			guestInviteTemplatesFailed: boolean;
+		}>;
 
 		vi.mocked(getGuestInviteTemplates).mockRejectedValue(new Error("boom"));
-		expect((await load({ context })).guestInviteTemplates).toEqual({});
+		const failed = await load({ context });
+		expect(failed.guestInviteTemplates).toEqual({});
+		expect(failed.guestInviteTemplatesFailed).toBe(true);
 
 		const saved = { never: { body: "Hello {guestName}" } };
 		vi.mocked(getGuestInviteTemplates).mockResolvedValue(saved);
-		expect((await load({ context })).guestInviteTemplates).toEqual(saved);
+		const ok = await load({ context });
+		expect(ok.guestInviteTemplates).toEqual(saved);
+		expect(ok.guestInviteTemplatesFailed).toBe(false);
+	});
+
+	// protects=acceptance 8 end to end and decision C: after a failed load the page
+	// renders, the guest's draft is the DEFAULT text, and a notice says so, while a
+	// successful load shows no notice; fails_when=the draft is blank or custom, the
+	// notice is missing after a failure or shows after a success;
+	// no_claim=the loader's own fallback (the test above).
+	it("a failed template load renders the default draft and a visible notice", async () => {
+		const guest = guestRow({ inviteVisitCount: 0 });
+		const withNext2: NextMeetingSummary = {
+			timezone: "America/Los_Angeles",
+			nextMeeting: {
+				id: "33333333-3333-4333-8333-333333333333",
+				urlKey: "2099-10-08",
+				scheduledAt: new Date("2099-10-09T02:00:00Z"),
+				location: "Room 4",
+			},
+		};
+		const draftOf = async () => {
+			const email = await within(
+				screen.getByRole("group", { name: /^Invite/ }),
+			).findByRole("link", { name: /email/i });
+			return decodeURIComponent(email.getAttribute("href") ?? "");
+		};
+		await renderRoute([guest], withNext2, false, NO_PROFILES, {}, true);
+		expect(screen.getByTestId("invite-templates-failed").textContent).toBe(
+			"Couldn't load your club's custom invite wording; drafts below use the default text.",
+		);
+		expect(await draftOf()).toContain(
+			"we'd love to have you visit Downtown Club! We meet on",
+		);
+		cleanup();
+		await renderRoute([guest], withNext2);
+		expect(screen.queryByTestId("invite-templates-failed")).toBeNull();
 	});
 
 	it("shows the write-error toast when recording fails", async () => {
