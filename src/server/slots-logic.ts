@@ -2641,9 +2641,18 @@ export async function updateOrAttachSlotSpeech(
 	const { content } = normalizeSpeech(args.input);
 	if (args.currentSpeechId) {
 		const values = await applyProjectDisplay(conn, content);
+		// An introduction the caller did not SEND keeps its stored value. It is
+		// member-only text that can arrive from a speech request, and a sheet that
+		// cannot show it (a non-member viewer) must not null it. "" is a deliberate
+		// clear and normalizes to null above.
+		const { introduction, ...rest } = values;
 		await conn
 			.update(speeches)
-			.set({ ...values, updatedAt: new Date() })
+			.set({
+				...rest,
+				...(args.input?.introduction === undefined ? {} : { introduction }),
+				updatedAt: new Date(),
+			})
 			.where(eq(speeches.id, args.currentSpeechId));
 		return;
 	}

@@ -1442,3 +1442,59 @@ describe("MeetingAgenda: a holder who said they can't make it (#764)", () => {
 		expect(screen.getByText("Filled")).toBeTruthy();
 	});
 });
+
+// The Edit speech sheet's introduction comes from the members-only
+// `speechIntroductions` map; the lookup has three outcomes.
+describe("Edit speech sheet introduction lookup", () => {
+	const mine = slot({
+		id: "sp-intro",
+		roleName: "Speaker",
+		category: "speaker",
+		isSpeakerRole: true,
+		status: "claimed",
+		assigneeId: "me",
+		assigneeName: "Mia Pick",
+	});
+	const viewer = meetingViewer({
+		currentMemberId: "me",
+		canManage: false,
+		isTmod: false,
+		isGrammarian: false,
+		isEditableWindow: true,
+		isSignedIn: true,
+	});
+	// A sheet left open holds `pointer-events: none` on the body (Radix), which
+	// would block the next test's click.
+	afterEach(() => {
+		cleanup();
+		document.body.style.pointerEvents = "";
+		document.body.removeAttribute("data-scroll-locked");
+	});
+	async function openSheet(speechIntroductions: Record<string, string> | null) {
+		renderAgenda(viewer, [mine], undefined, undefined, {
+			speechIntroductions,
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Edit speech" }));
+	}
+
+	it("no map (a non-member): the field is not drawn", async () => {
+		await openSheet(null);
+		expect(screen.queryByLabelText("Introduction")).toBeNull();
+	});
+
+	it("a map without the slot: an empty field is shown", async () => {
+		await openSheet({ other: "Not mine" });
+		const box = (await screen.findByLabelText(
+			"Introduction",
+		)) as HTMLTextAreaElement;
+		expect(box.value).toBe("");
+	});
+
+	it("a map with the slot: the field is prefilled", async () => {
+		await openSheet({ "sp-intro": "Introduce Mia" });
+		const box = (await screen.findByLabelText(
+			"Introduction",
+		)) as HTMLTextAreaElement;
+		expect(box.value).toBe("Introduce Mia");
+	});
+});

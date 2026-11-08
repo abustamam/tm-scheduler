@@ -577,6 +577,37 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			expect(row).toEqual({ pathwayPath: null, projectName: "Typed Project" });
 		});
 
+		it('an introduction sent as "" is cleared to NULL, and an omitted one keeps the stored text', async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Old title",
+			});
+			await testDb
+				.update(speeches)
+				.set({ introduction: "Introduce me kindly" })
+				.where(eq(speeches.id, speechId as string));
+			sessionUserId = seed.memberUserId;
+			const stored = async () =>
+				(
+					await testDb
+						.select({ introduction: speeches.introduction })
+						.from(speeches)
+						.where(eq(speeches.id, speechId as string))
+				)[0]?.introduction;
+
+			await editSpeechFromLog({
+				data: { slotId, speakerDetails: { speechTitle: "Retitled" } },
+			});
+			expect(await stored()).toBe("Introduce me kindly");
+
+			await editSpeechFromLog({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Retitled", introduction: "" },
+				},
+			});
+			expect(await stored()).toBeNull();
+		});
+
 		it("also works on a scheduled meeting, and a second edit replaces the first project", async () => {
 			const { slotId } = await emptyMemberSlot(seed.memberId);
 			sessionUserId = seed.memberUserId;
@@ -608,6 +639,7 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			const { rows } = await loadSpeechLog([seed.memberId], seed.clubId, null);
 			expect(rows.find((r) => r.slotId === slotId)).toMatchObject({
 				memberId: seed.memberId,
+				introduction: null,
 				projectId,
 				minMinutes: 4,
 				maxMinutes: 6,
@@ -833,6 +865,66 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 				}),
 				/locked|completed|reopen/i,
 			);
+		});
+
+		async function storedIntroduction(speechId: string | null) {
+			const [row] = await testDb
+				.select({ introduction: speeches.introduction })
+				.from(speeches)
+				.where(eq(speeches.id, speechId as string));
+			return row?.introduction;
+		}
+
+		it("round-trips an introduction, keeps it when the sheet resends it, and clears it on an empty string", async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Mine",
+			});
+			sessionUserId = seed.memberUserId;
+
+			await updateSpeakerDetails({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Mine", introduction: "  Hello  " },
+				},
+			});
+			expect(await storedIntroduction(speechId)).toBe("Hello");
+			const { rows } = await loadSpeechLog([seed.memberId], seed.clubId, null);
+			expect(rows.find((r) => r.slotId === slotId)?.introduction).toBe("Hello");
+
+			// The sheet prefills and resubmits the stored value: it is kept.
+			await updateSpeakerDetails({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Retitled", introduction: "Hello" },
+				},
+			});
+			expect(await storedIntroduction(speechId)).toBe("Hello");
+
+			await updateSpeakerDetails({
+				data: {
+					slotId,
+					speakerDetails: { speechTitle: "Retitled", introduction: "" },
+				},
+			});
+			expect(await storedIntroduction(speechId)).toBeNull();
+		});
+
+		it("an introduction the sheet did not send is kept, not nulled (the wipe regression)", async () => {
+			const { slotId, speechId } = await speakerSlot(seed.memberId, {
+				title: "Mine",
+			});
+			await testDb
+				.update(speeches)
+				.set({ introduction: "From a speech request" })
+				.where(eq(speeches.id, speechId as string));
+			sessionUserId = seed.memberUserId;
+
+			await updateSpeakerDetails({
+				data: { slotId, speakerDetails: { speechTitle: "Edited title" } },
+			});
+
+			expect((await snapshot(slotId)).speech?.title).toBe("Edited title");
+			expect(await storedIntroduction(speechId)).toBe("From a speech request");
 		});
 
 		it("a blank save still unlinks the speech, and any signed-in member may edit", async () => {

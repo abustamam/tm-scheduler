@@ -353,6 +353,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 			minMinutes: null,
 			maxMinutes: null,
 			presentationUrl: null,
+			introduction: null,
 			// Resolved through the evaluator self-join, not the speaker's row.
 			evaluators: [{ name: "Evaluator Human A", isGuest: false }],
 			hasEvaluatorSlot: true,
