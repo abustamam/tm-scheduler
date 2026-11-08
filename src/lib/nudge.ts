@@ -7,6 +7,10 @@ import { GENERIC_EVALUATION_RESOURCE } from "#/lib/evaluation-resources";
 import type { EvaluatorFormBrief } from "#/lib/evaluator-form";
 import type { InviteKind } from "#/lib/guest-invite";
 import {
+	type GuestInviteValues,
+	renderGuestInviteText,
+} from "#/lib/guest-invite-template";
+import {
 	type LevelProgress,
 	plural,
 	projectsLeftBreakdown,
@@ -107,6 +111,18 @@ export type NudgeInput =
 			meetingTime: string;
 			/** Null or blank omits the ", at …" clause entirely. */
 			location?: string | null;
+			/**
+			 * The club's own wording (#1547). `body` and `subject` are ALREADY
+			 * resolved by `customTemplateFor`: null means "use the built-in text
+			 * for that field", so a field left at its default renders through
+			 * `INVITE_DRAFTS` unchanged. `values` is required whenever `custom`
+			 * is present, so a template can never render without them.
+			 */
+			custom?: {
+				body: string | null;
+				subject: string | null;
+				values: GuestInviteValues;
+			};
 	  })
 	// A member close to finishing a Pathways level (#900): "want to get it on
 	// the agenda?" Role-less, its own constituent for the same reason. It asks
@@ -304,6 +320,9 @@ function messageFor(i: NudgeInput): string {
 		return `Hi ${who}, I'd be glad to be your mentor! Want to grab a few minutes before or after our next meeting to say hi?`;
 	}
 	if (i.mode === "invite") {
+		if (i.custom?.body != null) {
+			return renderGuestInviteText(i.custom.body, i.custom.values);
+		}
 		const where = i.location?.trim() ? `, at ${i.location.trim()}` : "";
 		const when = `${i.meetingDate} at ${i.meetingTime}${where}`;
 		return INVITE_DRAFTS[i.inviteKind].message(
@@ -642,6 +661,9 @@ function subjectFor(i: NudgeInput): string {
 		return `Your Toastmaster script — ${i.meetingDate}`;
 	}
 	if (i.mode === "invite") {
+		if (i.custom?.subject != null) {
+			return renderGuestInviteText(i.custom.subject, i.custom.values);
+		}
 		return INVITE_DRAFTS[i.inviteKind].subject(i.clubName, i.meetingDate);
 	}
 	if (i.mode === "level") {
@@ -658,6 +680,11 @@ export function toastmasterScriptUrl(
 	target: { clubId: string; meetingId: string },
 ): string {
 	return `${origin}${personalMeetingHref(target)}/script`;
+}
+
+/** The draft's email subject as text, for a preview: no mailto parsing. */
+export function nudgeSubject(input: NudgeInput): string {
+	return subjectFor(input);
 }
 
 export function buildNudge(input: NudgeInput): Nudge {

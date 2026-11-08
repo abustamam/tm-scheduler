@@ -266,12 +266,20 @@ export const Route = createFileRoute("/_authed/admin/club-settings")({
 				getPromoTemplate({ data: context.adminClub.clubId }),
 			)
 			.catch(() => null);
+		// The guest invite drafts (#1547): same shape, same reason. A failed read
+		// hides the "Guest invites" section only.
+		const guestInviteTemplates = await import("#/server/guest-invite-template")
+			.then(({ getGuestInviteTemplates }) =>
+				getGuestInviteTemplates({ data: context.adminClub.clubId }),
+			)
+			.catch(() => null);
 		return {
 			profile,
 			agenda,
 			logoMeta,
 			timezone,
 			promoTemplate,
+			guestInviteTemplates,
 			charter,
 			areaNotice,
 		};
@@ -408,6 +416,12 @@ const PromoTemplateEditor = lazy(() =>
 	})),
 );
 
+const GuestInviteTemplateEditor = lazy(() =>
+	import("#/components/club/guest-invite-template-editor").then((m) => ({
+		default: m.GuestInviteTemplateEditor,
+	})),
+);
+
 /**
  * The demo club's reset card (#1200). Rendered only when the loader's club row
  * has `isDemo`, which is DISPLAY only: `resetDemoClubFromClub` refuses a club that
@@ -512,12 +526,16 @@ function ApplyDefaultJoinUrl({
 
 function ClubSettings() {
 	const { adminClub, impersonating } = Route.useRouteContext();
+	// "View as this club" passes this page's admin-view reads but not the admin
+	// write the guest invite editor's Save runs.
+	const viewingReadOnly = !exportLinkAllowed(impersonating, adminClub.clubId);
 	const {
 		profile,
 		agenda,
 		logoMeta,
 		timezone,
 		promoTemplate,
+		guestInviteTemplates,
 		charter,
 		areaNotice,
 	} = Route.useLoaderData();
@@ -1187,12 +1205,44 @@ function ClubSettings() {
 			{promoTemplate ? (
 				<Suspense fallback={null}>
 					<PromoTemplateEditor
+						// The active club comes from a cookie-backed context, not the URL,
+						// so a club switch re-renders this component: a new key remounts
+						// the editor, which reads its text once.
+						key={adminClub.clubId}
 						clubId={adminClub.clubId}
 						template={promoTemplate.template}
 						storedInvalid={promoTemplate.storedInvalid}
 						onSaved={() => router.invalidate()}
 					/>
 				</Suspense>
+			) : null}
+
+			{guestInviteTemplates && !viewingReadOnly ? (
+				<Suspense fallback={null}>
+					<GuestInviteTemplateEditor
+						key={adminClub.clubId}
+						clubId={adminClub.clubId}
+						templates={guestInviteTemplates}
+						timezone={timezone.timezone}
+						onSaved={() => router.invalidate()}
+					/>
+				</Suspense>
+			) : guestInviteTemplates ? (
+				<section
+					aria-labelledby="guest-invite-heading"
+					className="space-y-2 pt-2"
+				>
+					<h2
+						id="guest-invite-heading"
+						className="font-display text-xl font-semibold tracking-[-0.01em]"
+					>
+						Guest invites
+					</h2>
+					<p className="text-sm text-muted-foreground">
+						Not available while viewing as this club. Editing the wording needs
+						"Act as admin".
+					</p>
+				</section>
 			) : null}
 
 			{/* #915. A plain link, not a server fn: the route streams a file and

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildPanelRoleMap } from "#/lib/attendance-panel";
 import { evaluatorFormBrief } from "#/lib/evaluator-form";
 import type { InviteKind } from "#/lib/guest-invite";
+import type { GuestInviteValues } from "#/lib/guest-invite-template";
 import {
 	GRAMMARIAN_ROLE_KEY,
 	TIMER_ROLE_KEY,
@@ -879,6 +880,100 @@ describe("buildNudge invite mode (#899)", () => {
 			}
 		});
 	}
+
+	// The club's own wording (#1547).
+	const values: GuestInviteValues = {
+		guestName: "Ada",
+		club: "Downtown Club",
+		date: "Thu, Oct 9",
+		time: "7:00 PM",
+		location: "",
+		agendaLink: invite.shareUrl,
+		joinLink: "",
+		firstVisit: "Sep 4",
+		lastVisit: "Sep 25",
+		visitCount: "2",
+	};
+
+	for (const kind of Object.keys(drafts) as InviteKind[]) {
+		// protects=a club's own body and subject reach the draft for every kind;
+		// fails_when=custom text is ignored for a kind or the subject skips the
+		// template; no_claim=which kind the page picks (inviteKindFor).
+		it(`renders a custom body and subject for ${kind}`, () => {
+			const r = buildNudge({
+				...invite,
+				inviteKind: kind,
+				custom: {
+					body: "Hello {guestName}, last here {lastVisit} ({visitCount}x)",
+					subject: "{club} misses you",
+					values,
+				},
+			});
+			expect(r.message).toBe("Hello Ada, last here Sep 25 (2x)");
+			expect(r.mailtoUrl).toContain(
+				`subject=${encodeURIComponent("Downtown Club misses you")}`,
+			);
+		});
+	}
+
+	// protects=fields are customized independently; fails_when=one custom field
+	// drags the other off the built-in text; no_claim=none beyond protects.
+	it("a custom body leaves the subject on the built-in text, and the reverse", () => {
+		const bodyOnly = buildNudge({
+			...invite,
+			custom: { body: "Custom {club}", subject: null, values },
+		});
+		expect(bodyOnly.message).toBe("Custom Downtown Club");
+		expect(bodyOnly.mailtoUrl).toContain(
+			`subject=${encodeURIComponent(drafts.repeatRecent.subject)}`,
+		);
+		const subjectOnly = buildNudge({
+			...invite,
+			custom: { body: null, subject: "Custom {club}", values },
+		});
+		expect(subjectOnly.message).toBe(drafts.repeatRecent.message);
+		expect(subjectOnly.mailtoUrl).toContain(
+			`subject=${encodeURIComponent("Custom Downtown Club")}`,
+		);
+	});
+
+	// protects=a club that never edited a field keeps today's bytes;
+	// fails_when=null custom fields change the built-in text or its ", at" clause;
+	// no_claim=an edited field (the tests above).
+	it("null custom fields fall back to the exact built-in bytes, location clause included", () => {
+		for (const kind of Object.keys(drafts) as InviteKind[]) {
+			const r = buildNudge({
+				...invite,
+				inviteKind: kind,
+				custom: { body: null, subject: null, values },
+			});
+			expect(r.message).toBe(drafts[kind].message);
+			expect(r.mailtoUrl).toContain(
+				`subject=${encodeURIComponent(drafts[kind].subject)}`,
+			);
+		}
+		const noLocation = buildNudge({
+			...invite,
+			location: null,
+			custom: { body: null, subject: null, values },
+		});
+		expect(noLocation.message).not.toContain(", at");
+	});
+
+	// protects=a blank variable renders as empty and drops no line;
+	// fails_when=a line holding an empty variable is removed or collapsed;
+	// no_claim=the ", at {location}" clause (guest-invite-template.test.ts).
+	it("an empty value renders as nothing and drops no line", () => {
+		const r = buildNudge({
+			...invite,
+			custom: {
+				body: "Join: {joinLink}\nAt: {location}.",
+				subject: null,
+				values,
+			},
+		});
+		expect(r.message).toBe("Join: \nAt: .");
+	});
 });
 
 describe("buildNudge level mode (#900)", () => {

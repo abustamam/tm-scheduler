@@ -1,5 +1,6 @@
 // The pure rules of TemplateField (#1536). Each test states its card.
 import { describe, expect, it } from "vitest";
+import { GUEST_INVITE_VARIABLES } from "#/lib/guest-invite-template";
 import {
 	caretRule,
 	filterVariables,
@@ -197,5 +198,27 @@ describe("isSuppressed and flattenNewlines", () => {
 	// spaces; no_claim=where the paste lands in the field.
 	it("turns newlines into spaces", () => {
 		expect(flattenNewlines("a\r\nb\nc")).toBe("a b c");
+	});
+});
+
+describe("filterVariables with a registry argument (#1547)", () => {
+	// protects=the guest list drives the filter, including guest-only keys;
+	// fails_when=the filter still reads PROMO_VARIABLES (a guest key is missing, or a Promote-only one appears);
+	// no_claim=the menu rendering.
+	it("filters the guest list when given it", () => {
+		const keys = (f: string) =>
+			filterVariables(f, GUEST_INVITE_VARIABLES).map((v) => v.key);
+		expect(keys("")).toHaveLength(10);
+		expect(keys("last")).toEqual(["lastVisit"]);
+		expect(keys("guest")).toEqual(["guestName"]);
+		expect(keys("theme")).toEqual([]);
+	});
+
+	// protects=Promote does not change; fails_when=the default stops being PROMO_VARIABLES;
+	// no_claim=none beyond protects.
+	it("defaults to Promote's list", () => {
+		expect(filterVariables("")).toHaveLength(14);
+		expect(filterVariables("last")).toEqual([]);
+		expect(filterVariables("theme").map((v) => v.key)).toEqual(["theme"]);
 	});
 });

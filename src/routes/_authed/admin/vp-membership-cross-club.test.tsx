@@ -49,6 +49,9 @@ vi.mock("#/server/guest-pipeline", () => ({
 	unlinkGuestFromMember: vi.fn(),
 	updateGuest: vi.fn(),
 }));
+vi.mock("#/server/guest-invite-template", () => ({
+	getGuestInviteTemplates: vi.fn(),
+}));
 vi.mock("#/server/clubs", () => ({ getClubByIdentifier: vi.fn() }));
 vi.mock("#/server/guests", () => ({
 	getGuestProfile: vi.fn().mockResolvedValue(null),
@@ -88,7 +91,9 @@ function guestRow(over: Partial<PipelineGuestRow> = {}): PipelineGuestRow {
 		linkReversible: false,
 		conversionUndoable: false,
 		firstVisitAt: null,
+		inviteFirstVisitAt: null,
 		inviteVisitCount: 0,
+		lastVisitAt: null,
 		lastVisitWasLatestMeeting: false,
 		visitCount: 0,
 		heldSlotCount: 0,
