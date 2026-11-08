@@ -1,30 +1,27 @@
 /**
  * `set_contact_preference` — an officer sets how one or more members want to be
  * reached (#1543). The agent-side twin of the roster edit's "Preferred contact"
- * field (#1093), and it writes through THE SAME WRITER: `applyMemberEdit`, whose
- * preference UPDATE carries the rules in its own WHERE (the method needs its
- * contact detail, the member has not chosen it themselves, #1110, and this club
- * is the Person's sole holder). There is no second copy of those rules here.
+ * field (#1093), and it writes through THE SAME WRITER: `applyContactPreference`
+ * (members-logic.ts), a preference-only entry point whose UPDATE carries every
+ * rule in its own WHERE and is the one copy `applyMemberEdit` uses too: the
+ * member has not chosen it themselves (#1110; a signed-in member who never chose
+ * may be set), this club is the Person's sole holder, and the method has its
+ * contact detail. There is no second copy of those rules here
+ * and no name pass-through: the tool never touches a name or a goes-by.
  *
  * The preview needs each member's verdict WITHOUT writing, which the writer
- * cannot give, so the preview READS the same facts through the helpers the
- * roster page already uses for its read-only explanation
- * (`contactPreferenceRefusalFor`, `availableContactMethods`). A preview is a
+ * cannot give, so `planContactPreference` READS the same facts (`contactPreferenceRefusalFor`, `availableContactMethods`). A preview is a
  * prediction, never the gate: the apply re-plans, compares the `planHash`
- * (`PLAN_STALE` on a drift), then lets `applyMemberEdit`'s UPDATE decide, and a
- * member it refuses at that point is reported as refused, not as changed.
+ * (`PLAN_STALE` on a drift), then lets the writer decide. A member the writer
+ * refuses (a typed `ContactPreferenceError`, carrying its own code) is reported
+ * as refused with that code; any other error is not a refusal and propagates
+ * (INTERNAL, logged, errors.ts).
  *
  * Decision (triage on #1543): a refused member does not block the others. The
  * apply changes the members the plan marked "would change" and reports the rest.
  *
- * One rule is the tool's own: a Person who has signed in owns their own data, so
- * the preference is theirs to set (the roster form already hides the field for
- * them). `applyMemberEdit` does not enforce that, so the plan refuses it and the
- * apply's re-plan re-checks it; the window between that re-check and the UPDATE
- * is a few statements wide.
- *
  * Recorded as the club's change (`contact_preference_by = 'officer'`) with the
- * officer credited in the feed, exactly as the roster edit records an admin.
+ * officer credited in the feed, as the roster edit records an admin.
  * GavelUp messages no one.
  */
 import { and, eq, inArray } from "drizzle-orm";
@@ -34,7 +31,6 @@ import { members, people } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	availableContactMethods,
-	CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 	CONTACT_METHODS,
 	CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
 	CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
@@ -42,7 +38,8 @@ import {
 } from "#/lib/preferred-contact";
 import { loadClubContactPreferences } from "#/server/contact-preference-logic";
 import {
-	applyMemberEdit,
+	applyContactPreference,
+	ContactPreferenceError,
 	contactPreferenceRefusalFor,
 } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
@@ -70,28 +67,22 @@ const inputSchema = {
 		),
 };
 
-export const NOT_ON_ROSTER_MESSAGE =
+export const CONTACT_PREF_NOT_ON_ROSTER_MESSAGE =
 	"That member is not on this club's roster. find_people lists who is.";
-export const SIGNS_IN_MESSAGE =
-	"This member signs in themself, so their contact preference is theirs to set.";
 export const NO_PHONE_MESSAGE =
 	"This member has no phone number on file. Add one first.";
 export const NO_EMAIL_MESSAGE =
 	"This member has no email address on file. Add one first.";
 export const PLAN_STALE_MESSAGE =
 	"The members changed since you previewed this. Review the fresh plan and ask the user again.";
-const CHANGED_SINCE_MESSAGE =
-	"This member changed while the request ran, so nothing was written for them.";
 
 type Verdict = "would_change" | "already_set" | "refused";
 type RefusalCode =
 	| "not_on_roster"
-	| "signs_in"
 	| "member_set"
 	| "multi_club"
 	| "no_phone"
-	| "no_email"
-	| "changed_since_preview";
+	| "no_email";
 
 interface PlanRow {
 	memberId: string;
@@ -102,41 +93,30 @@ interface PlanRow {
 	refusal: { code: RefusalCode; message: string } | null;
 }
 
-/** What the apply needs beyond the (hashed) plan rows. */
-interface Subject {
-	memberId: string;
-	name: string;
-	preferredName: string | null;
-}
-
 const refusalMessages: Record<RefusalCode, string> = {
-	not_on_roster: NOT_ON_ROSTER_MESSAGE,
-	signs_in: SIGNS_IN_MESSAGE,
+	not_on_roster: CONTACT_PREF_NOT_ON_ROSTER_MESSAGE,
 	member_set: CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
 	multi_club: CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
 	no_phone: NO_PHONE_MESSAGE,
 	no_email: NO_EMAIL_MESSAGE,
-	changed_since_preview: CHANGED_SINCE_MESSAGE,
 };
 const refuse = (code: RefusalCode) => ({
 	code,
 	message: refusalMessages[code],
 });
 
-async function compute(
+async function planContactPreference(
 	clubId: string,
 	ids: string[],
 	method: ContactMethod | null,
-): Promise<{ rows: PlanRow[]; subjects: Map<string, Subject> }> {
+): Promise<PlanRow[]> {
 	const found = await db
 		.select({
 			id: members.id,
 			name: members.name,
-			preferredName: members.preferredName,
 			personId: members.personId,
 			email: people.email,
 			phone: people.phone,
-			userId: people.userId,
 		})
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
@@ -145,7 +125,6 @@ async function compute(
 	// the raw column (preferred-contact-reads.guard.test.ts).
 	const shown = await loadClubContactPreferences(clubId);
 	const byId = new Map(found.map((r) => [r.id, r]));
-	const subjects = new Map<string, Subject>();
 	const rows: PlanRow[] = [];
 	for (const id of ids) {
 		const m = byId.get(id);
@@ -159,11 +138,6 @@ async function compute(
 			});
 			continue;
 		}
-		subjects.set(id, {
-			memberId: id,
-			name: m.name,
-			preferredName: m.preferredName,
-		});
 		const base = {
 			memberId: id,
 			name: m.name,
@@ -174,10 +148,6 @@ async function compute(
 			verdict: "refused",
 			refusal: refuse(code),
 		});
-		if (m.userId !== null) {
-			rows.push(refused("signs_in"));
-			continue;
-		}
 		// The roster page's own read of the writer's two ownership rules.
 		const owner = await contactPreferenceRefusalFor(m.personId, clubId);
 		if (owner) {
@@ -194,7 +164,7 @@ async function compute(
 		}
 		rows.push({ ...base, verdict: "would_change", refusal: null });
 	}
-	return { rows, subjects };
+	return rows;
 }
 
 const summarize = (rows: PlanRow[]) => ({
@@ -220,7 +190,7 @@ export const setContactPreferenceTool: McpToolDefinition = {
 			"come from find_people. Call once WITHOUT planHash to preview: it " +
 			"writes nothing and lists, per member, would_change, already_set or " +
 			"refused with the reason (no phone, no email, the member chose their " +
-			"own, on another club's roster, signs in themself), plus a planHash. " +
+			"own, on another club's roster), plus a planHash. " +
 			"Show the plan to the user in full; after they agree, call again with " +
 			"the same input plus the planHash. A refused member does not block the " +
 			"others: the apply changes the would_change members and reports the " +
@@ -249,7 +219,7 @@ export const setContactPreferenceTool: McpToolDefinition = {
 			members: rows,
 		});
 
-		const { rows, subjects } = await compute(club.clubId, ids, method);
+		const rows = await planContactPreference(club.clubId, ids, method);
 		if (!args.planHash) {
 			return { applied: false, plan: view(rows), planHash: hashOf(rows) };
 		}
@@ -260,40 +230,33 @@ export const setContactPreferenceTool: McpToolDefinition = {
 			});
 		}
 
-		// The shared writer, one member at a time (it is its own transaction and
-		// retries its own deadlocks). Its UPDATE is the gate: a member it refuses
+		// The shared writer, one member at a time (its own transaction, retrying
+		// its own deadlocks). Its UPDATE is the gate: a member it refuses
 		// is reported, and the others still land.
 		const results: PlanRow[] = [];
 		for (const row of rows) {
-			const subject = subjects.get(row.memberId);
-			if (row.verdict !== "would_change" || !subject) {
+			if (row.verdict !== "would_change") {
 				results.push(row);
 				continue;
 			}
 			try {
-				await applyMemberEdit({
+				await applyContactPreference({
 					clubId: club.clubId,
-					memberId: subject.memberId,
-					// The edit's name and goes-by are not ours to change: send what the
-					// roster holds (an omitted goes-by would clear it).
-					name: subject.name,
-					preferredName: subject.preferredName,
+					memberId: row.memberId,
 					preferredContact: method,
 					actorMemberId: club.membershipId,
 				});
 				results.push({ ...row, current: method });
 			} catch (err) {
-				const message = err instanceof Error ? err.message : "";
+				// Only the writer's own typed verdict is a refusal; anything else
+				// (a dropped connection, a bug) is not "nothing was written".
+				if (!(err instanceof ContactPreferenceError)) throw err;
 				const code: RefusalCode =
-					message === CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
-						? "member_set"
-						: message === CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
-							? "multi_club"
-							: message === CONTACT_METHOD_UNAVAILABLE_MESSAGE
-								? method === "email"
-									? "no_email"
-									: "no_phone"
-								: "changed_since_preview";
+					err.code === "unavailable"
+						? method === "email"
+							? "no_email"
+							: "no_phone"
+						: err.code;
 				results.push({ ...row, verdict: "refused", refusal: refuse(code) });
 			}
 		}

@@ -288,6 +288,147 @@ export async function contactPreferenceRefusalFor(
 		: "multi_club";
 }
 
+export type ContactPreferenceErrorCode =
+	| "member_set"
+	| "multi_club"
+	| "unavailable";
+
+/** The preference write's refusal. The CODE is the writer's verdict (callers
+ *  map it, never the message); the message stays best-effort under a race. */
+export class ContactPreferenceError extends Error {
+	constructor(
+		readonly code: ContactPreferenceErrorCode,
+		message: string,
+	) {
+		super(message);
+		this.name = "ContactPreferenceError";
+	}
+}
+
+/**
+ * THE officer preference write (#1093, #1110, #1543), the one copy of its rules,
+ * shared by `applyMemberEdit` and `applyContactPreference`. Call it inside a
+ * transaction that already holds the Person `FOR UPDATE`, AFTER any phone/email
+ * write of the same save, so availability is judged against the row as it ends
+ * up. Three rules sit in the UPDATE's own WHERE, not in a prior read: the member
+ * has not chosen it themselves (provenance NULL or 'officer', #1110: a signed-in
+ * member who never chose may be set); this club is their SOLE holder; and the
+ * method's data exists.
+ *
+ * Zero rows throws a `ContactPreferenceError`, which rolls the transaction
+ * back. The WHERE decides; the code is BEST-EFFORT, from a read after the
+ * UPDATE with no membership lock, so a concurrent removal at another club can
+ * turn "multi_club" into "unavailable". The outcome (refused, nothing written)
+ * is right either way. Ownership is judged before availability.
+ */
+async function writeContactPreference(
+	tx: Pick<typeof db, "select" | "selectDistinct" | "update">,
+	input: {
+		personId: string;
+		clubId: string;
+		preferredContact: (typeof CONTACT_METHODS)[number] | null;
+	},
+): Promise<void> {
+	const { personId, clubId, preferredContact } = input;
+	const written = await tx
+		.update(people)
+		.set({ preferredContact, contactPreferenceBy: "officer" })
+		.where(
+			and(
+				eq(people.id, personId),
+				or(
+					isNull(people.contactPreferenceBy),
+					eq(people.contactPreferenceBy, "officer"),
+				),
+				soleHoldingClub(clubId),
+				contactMethodAvailableSql(preferredContact),
+			),
+		)
+		.returning({ id: people.id });
+	if (written.length > 0) return;
+	const owner = await contactPreferenceRefusalFor(personId, clubId, tx);
+	if (owner === "member_set") {
+		throw new ContactPreferenceError(
+			"member_set",
+			CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE,
+		);
+	}
+	if (owner === "multi_club") {
+		throw new ContactPreferenceError(
+			"multi_club",
+			CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE,
+		);
+	}
+	throw new ContactPreferenceError(
+		"unavailable",
+		CONTACT_METHOD_UNAVAILABLE_MESSAGE,
+	);
+}
+
+const contactPreferenceSchema = z.object({
+	clubId: z.string().uuid(),
+	memberId: z.string().uuid(),
+	preferredContact: z.enum(CONTACT_METHODS).nullable(),
+});
+
+/**
+ * Set ONLY a member's preferred contact method (#1543): the preference-only
+ * twin of `applyMemberEdit`, for callers that must not touch names, offices or
+ * anything else. Same Person lock, same write (`writeContactPreference`), and a
+ * `member_edit` activity entry shaped like the roster edit's for a preference
+ * change (before = the preference as SHOWN, after = the new value). Everything
+ * happens inside the one transaction; nothing runs after the commit.
+ * Throws `ContactPreferenceError` on a refusal.
+ */
+export async function applyContactPreference(
+	input: z.infer<typeof contactPreferenceSchema> & RosterActor,
+) {
+	return withDeadlockRetry(async () => {
+		const [current] = await db
+			.select({ personId: members.personId })
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			);
+		if (!current) throw new Error("Member not found.");
+		await db.transaction(async (tx) => {
+			// Person lock first, as in `applyMemberEdit` (guest conversion order).
+			const [person] = await tx
+				.select({
+					phone: people.phone,
+					email: people.email,
+					storedPreferredContact: people.preferredContact,
+				})
+				.from(people)
+				.where(eq(people.id, current.personId))
+				.for("update");
+			if (!person) throw new Error("Member's person not found.");
+			await writeContactPreference(tx, {
+				personId: current.personId,
+				clubId: input.clubId,
+				preferredContact: input.preferredContact,
+			});
+			await logActivity(tx, {
+				clubId: input.clubId,
+				actorMemberId: input.actorMemberId,
+				action: "member_edit",
+				targetType: "member",
+				targetId: input.memberId,
+				detail: {
+					before: {
+						preferredContact: effectivePreferredContact(
+							person.storedPreferredContact,
+							person,
+						),
+					},
+					after: { preferredContact: input.preferredContact },
+				},
+			});
+		});
+		return { ok: true as const };
+	});
+}
+
 /**
  * Update a roster member's name/contact and reconcile their office set (#100);
  * logs member_edit with the office change.
@@ -428,38 +569,11 @@ export async function applyMemberEdit(input: EditInput) {
 			// lock is taken for that: the outcome (refused, nothing written) is right
 			// either way, and only the sentence can be stale.
 			if (preferredContact !== undefined) {
-				const written = await tx
-					.update(people)
-					.set({ preferredContact, contactPreferenceBy: "officer" })
-					.where(
-						and(
-							eq(people.id, current.personId),
-							or(
-								isNull(people.contactPreferenceBy),
-								eq(people.contactPreferenceBy, "officer"),
-							),
-							soleHoldingClub(input.clubId),
-							contactMethodAvailableSql(preferredContact),
-						),
-					)
-					.returning({ id: people.id });
-				if (written.length === 0) {
-					// Ownership before availability, so a multi-club Person whose
-					// email write was just refused hears "another club", not "add an
-					// email" (#1093 review) — subject to the race described above.
-					const owner = await contactPreferenceRefusalFor(
-						current.personId,
-						input.clubId,
-						tx,
-					);
-					throw new Error(
-						owner === "member_set"
-							? CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE
-							: owner === "multi_club"
-								? CONTACT_PREFERENCE_MULTI_CLUB_MESSAGE
-								: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
-					);
-				}
+				await writeContactPreference(tx, {
+					personId: current.personId,
+					clubId: input.clubId,
+					preferredContact,
+				});
 			}
 			// The "goes by" name below is the only other person-level write this form makes
 			// besides the phone above (which is a Person fact outright, #906), and it

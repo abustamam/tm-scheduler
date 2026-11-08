@@ -1,13 +1,15 @@
 /**
  * DB-backed tests for `set_contact_preference` (#1543).
  *
- * The seeded roster member signs in (people.user_id set), so the members these
- * tests act on are extra, sign-in-less rows minted by `addMember`.
+ * The seeded roster member signs in (people.user_id set); the other members
+ * these tests act on are extra, sign-in-less rows minted by `addMember`. Per
+ * #1110 a signed-in member who never chose may be set; only their own choice
+ * (`contact_preference_by = 'member'`) is protected.
  */
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiTokens, members, people } from "#/db/schema";
+import { activityLog, apiTokens, members, people, user } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -19,10 +21,26 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// A seam between the tool's plan and the writer's turn: the apply loop runs up
+// to 99 transactions after the plan, so a test needs to move state in that gap.
+let beforeApply: (() => Promise<void>) | null = null;
+vi.mock("#/server/members-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/members-logic")>();
+	return {
+		...actual,
+		applyContactPreference: async (
+			...args: Parameters<typeof actual.applyContactPreference>
+		) => {
+			await beforeApply?.();
+			return actual.applyContactPreference(...args);
+		},
+	};
+});
+
 const {
 	setContactPreferenceTool,
-	NOT_ON_ROSTER_MESSAGE,
-	SIGNS_IN_MESSAGE,
+	CONTACT_PREF_NOT_ON_ROSTER_MESSAGE,
 	NO_PHONE_MESSAGE,
 	NO_EMAIL_MESSAGE,
 } = await import("#/server/mcp/tools/set-contact-preference");
@@ -34,7 +52,9 @@ const { CONTACT_PREFERENCE_MEMBER_OWNED_MESSAGE } = await import(
 
 const seeded: SeededClub[] = [];
 const extraMemberIds: string[] = [];
+const extraUserIds: string[] = [];
 afterEach(async () => {
+	beforeApply = null;
 	// A person shared with a second club blocks the club cleanup: drop the
 	// extra rows first.
 	if (extraMemberIds.length > 0) {
@@ -44,6 +64,9 @@ afterEach(async () => {
 	}
 	for (const s of seeded.splice(0).reverse()) {
 		await cleanup(s.clubId, [s.adminUserId, s.memberUserId]);
+	}
+	if (extraUserIds.length > 0) {
+		await testDb.delete(user).where(inArray(user.id, extraUserIds.splice(0)));
 	}
 });
 
@@ -215,12 +238,16 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 			f.noPhone.memberId,
 			f.noEmail.memberId,
 			f.shared.memberId,
-			f.s.memberId, // signs in
+			f.s.memberId, // signs in, never chose: settable (#1110)
 			ghost,
 		];
+		await testDb
+			.update(people)
+			.set({ email: "admin-pref@example.test" })
+			.where(eq(people.id, f.s.personId));
 		const before = await Promise.all(
-			[f.change, f.same, f.memberSet, f.noPhone, f.noEmail, f.shared].map((m) =>
-				personRow(m.personId),
+			[f.change, f.same, f.memberSet, f.noPhone, f.noEmail, f.shared, f.s].map(
+				(m) => personRow(m.personId),
 			),
 		);
 		const r = await outcome(
@@ -243,18 +270,18 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 			},
 		});
 		expect(by.get(f.shared.memberId)?.refusal?.code).toBe("multi_club");
-		expect(by.get(f.s.memberId)).toMatchObject({
-			verdict: "refused",
-			refusal: { code: "signs_in", message: SIGNS_IN_MESSAGE },
-		});
+		expect(by.get(f.s.memberId)?.verdict).toBe("would_change");
 		expect(by.get(ghost)).toMatchObject({
 			verdict: "refused",
-			refusal: { code: "not_on_roster", message: NOT_ON_ROSTER_MESSAGE },
+			refusal: {
+				code: "not_on_roster",
+				message: CONTACT_PREF_NOT_ON_ROSTER_MESSAGE,
+			},
 		});
 		expect(body.plan.summary).toEqual({
-			wouldChange: 2,
+			wouldChange: 3,
 			alreadySet: 1,
-			refused: 5,
+			refused: 4,
 		});
 		// no_email / no_phone via the methods they lack
 		const noEmail = await outcome(
@@ -279,8 +306,8 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 		).toEqual({ code: "no_phone", message: NO_PHONE_MESSAGE });
 
 		const after = await Promise.all(
-			[f.change, f.same, f.memberSet, f.noPhone, f.noEmail, f.shared].map((m) =>
-				personRow(m.personId),
+			[f.change, f.same, f.memberSet, f.noPhone, f.noEmail, f.shared, f.s].map(
+				(m) => personRow(m.personId),
 			),
 		);
 		expect(after).toEqual(before);
@@ -290,12 +317,7 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 		const f = await fixture();
 		const input = {
 			clubId: f.s.clubId,
-			memberIds: [
-				f.change.memberId,
-				f.same.memberId,
-				f.memberSet.memberId,
-				f.s.memberId,
-			],
+			memberIds: [f.change.memberId, f.same.memberId, f.memberSet.memberId],
 			method: "email",
 		};
 		const preview = (await outcome(call(f.adminToken, input))) as {
@@ -318,9 +340,7 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 		expect(v.applied).toBe(true);
 		expect(v.changed.map((m) => m.memberId)).toEqual([f.change.memberId]);
 		expect(v.alreadySet.map((m) => m.memberId)).toEqual([f.same.memberId]);
-		expect(v.refused.map((m) => m.memberId).sort()).toEqual(
-			[f.memberSet.memberId, f.s.memberId].sort(),
-		);
+		expect(v.refused.map((m) => m.memberId)).toEqual([f.memberSet.memberId]);
 		expect(await personRow(f.change.personId)).toEqual({
 			pref: "email",
 			by: "officer",
@@ -330,7 +350,6 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 			pref: "call",
 			by: "member",
 		});
-		expect(await personRow(f.s.personId)).toEqual({ pref: null, by: null });
 	});
 
 	it("does not rename the member it edits", async () => {
@@ -416,6 +435,249 @@ describe.skipIf(!hasTestDb)("set_contact_preference (#1543)", () => {
 		expect(await personRow(f.change.personId)).toEqual({
 			pref: null,
 			by: null,
+		});
+	});
+
+	/** Preview, then apply with the plan's hash; the gap hook may move state. */
+	async function previewThenApply(
+		f: Awaited<ReturnType<typeof fixture>>,
+		memberIds: string[],
+		method: string,
+		gap?: () => Promise<void>,
+	) {
+		const input = { clubId: f.s.clubId, memberIds, method };
+		const preview = (await outcome(call(f.adminToken, input))) as {
+			value: PlanBody;
+		};
+		beforeApply = gap ?? null;
+		return outcome(
+			call(f.adminToken, { ...input, planHash: preview.value.planHash }),
+		);
+	}
+
+	type Applied = {
+		value: {
+			changed: { memberId: string }[];
+			refused: { memberId: string; refusal: { code: string } }[];
+		};
+	};
+
+	it("an apply leaves every refused reason untouched", async () => {
+		const f = await fixture();
+		const ghost = randomUUID();
+		const rows = [f.memberSet, f.shared, f.noPhone, f.noEmail];
+		const before = await Promise.all(rows.map((m) => personRow(m.personId)));
+		const sms = await previewThenApply(
+			f,
+			[f.memberSet.memberId, f.shared.memberId, f.noPhone.memberId, ghost],
+			"sms",
+		);
+		const refused = (sms as unknown as Applied).value.refused;
+		expect(
+			Object.fromEntries(refused.map((r) => [r.memberId, r.refusal.code])),
+		).toEqual({
+			[f.memberSet.memberId]: "member_set",
+			[f.shared.memberId]: "multi_club",
+			[f.noPhone.memberId]: "no_phone",
+			[ghost]: "not_on_roster",
+		});
+		const email = await previewThenApply(f, [f.noEmail.memberId], "email");
+		expect((email as unknown as Applied).value.refused[0]?.refusal.code).toBe(
+			"no_email",
+		);
+		expect(await Promise.all(rows.map((m) => personRow(m.personId)))).toEqual(
+			before,
+		);
+	});
+
+	it("sets a signed-in member who never chose, as the officer (#1110)", async () => {
+		const f = await fixture();
+		await testDb
+			.update(people)
+			.set({ email: "admin-pref@example.test" })
+			.where(eq(people.id, f.s.personId));
+		const plan = await outcome(
+			call(f.adminToken, {
+				clubId: f.s.clubId,
+				memberIds: [f.s.memberId],
+				method: "email",
+			}),
+		);
+		expect((plan as { value: PlanBody }).value.plan.members[0]?.verdict).toBe(
+			"would_change",
+		);
+		const r = await previewThenApply(f, [f.s.memberId], "email");
+		expect(r.ok).toBe(true);
+		const v = (r as unknown as Applied).value;
+		expect(v.changed.map((c) => c.memberId)).toEqual([f.s.memberId]);
+		expect(v.refused).toEqual([]);
+		expect(await personRow(f.s.personId)).toEqual({
+			pref: "email",
+			by: "officer",
+		});
+	});
+
+	it("refuses a signed-in member who chose themself, untouched", async () => {
+		const f = await fixture();
+		await testDb
+			.update(people)
+			.set({
+				email: "admin-pref@example.test",
+				preferredContact: "email",
+				contactPreferenceBy: "member",
+			})
+			.where(eq(people.id, f.s.personId));
+		const r = await previewThenApply(f, [f.s.memberId], "email");
+		const planOnly = await outcome(
+			call(f.adminToken, {
+				clubId: f.s.clubId,
+				memberIds: [f.s.memberId],
+				method: "sms",
+			}),
+		);
+		expect(
+			(planOnly as { value: PlanBody }).value.plan.members[0]?.refusal?.code,
+		).toBe("member_set");
+		expect(r.ok).toBe(true);
+		expect(await personRow(f.s.personId)).toEqual({
+			pref: "email",
+			by: "member",
+		});
+	});
+
+	it("reports the writer's verdict when it refuses after a clean re-plan", async () => {
+		const f = await fixture();
+		const r = await previewThenApply(
+			f,
+			[f.change.memberId],
+			"sms",
+			async () => {
+				// The member sets their own preference after the re-plan.
+				await testDb
+					.update(people)
+					.set({ preferredContact: "call", contactPreferenceBy: "member" })
+					.where(eq(people.id, f.change.personId));
+			},
+		);
+		// The hook runs after the hash check, so the hash still matched.
+		expect((r as unknown as Applied).value.refused[0]?.refusal.code).toBe(
+			"member_set",
+		);
+		expect(await personRow(f.change.personId)).toEqual({
+			pref: "call",
+			by: "member",
+		});
+		// And a vanished phone number is no_phone, the writer's own unavailable.
+		const g = await fixture();
+		const r2 = await previewThenApply(
+			g,
+			[g.change.memberId],
+			"sms",
+			async () => {
+				await testDb
+					.update(people)
+					.set({ phone: null })
+					.where(eq(people.id, g.change.personId));
+			},
+		);
+		expect((r2 as unknown as Applied).value.refused[0]?.refusal.code).toBe(
+			"no_phone",
+		);
+	});
+
+	it("rethrows an unexpected writer error instead of reporting a refusal", async () => {
+		const f = await fixture();
+		const r = await previewThenApply(
+			f,
+			[f.change.memberId],
+			"email",
+			async () => {
+				throw new Error("connection dropped");
+			},
+		);
+		expect(r).toMatchObject({ ok: false, message: "connection dropped" });
+		expect(await personRow(f.change.personId)).toEqual({
+			pref: null,
+			by: null,
+		});
+	});
+
+	it("never touches names, even when the member was renamed after the plan", async () => {
+		const f = await fixture();
+		await testDb
+			.update(people)
+			.set({ preferredName: null })
+			.where(eq(people.id, f.change.personId));
+		const r = await previewThenApply(
+			f,
+			[f.change.memberId],
+			"sms",
+			async () => {
+				await testDb
+					.update(members)
+					.set({ name: "Renamed Meanwhile", preferredName: "Ren" })
+					.where(eq(members.id, f.change.memberId));
+				await testDb
+					.update(people)
+					.set({ preferredName: "Person Ren" })
+					.where(eq(people.id, f.change.personId));
+			},
+		);
+		expect((r as unknown as Applied).value.changed).toHaveLength(1);
+		const [m] = await testDb
+			.select({ name: members.name, preferredName: members.preferredName })
+			.from(members)
+			.where(eq(members.id, f.change.memberId));
+		expect(m).toEqual({ name: "Renamed Meanwhile", preferredName: "Ren" });
+		const [p] = await testDb
+			.select({ preferredName: people.preferredName })
+			.from(people)
+			.where(eq(people.id, f.change.personId));
+		expect(p?.preferredName).toBe("Person Ren");
+		// One member_edit entry, carrying only the preference.
+		const logs = await testDb
+			.select({ detail: activityLog.detail, actor: activityLog.actorMemberId })
+			.from(activityLog)
+			.where(eq(activityLog.targetId, f.change.memberId));
+		expect(logs).toHaveLength(1);
+		expect(logs[0]?.actor).toBe(f.s.adminMemberId);
+		expect(logs[0]?.detail).toEqual({
+			before: { preferredContact: null },
+			after: { preferredContact: "sms" },
+		});
+	});
+
+	it("the writer's WHERE refuses a signed-in Person who chose themself", async () => {
+		const f = await fixture();
+		const { applyMemberEdit, ContactPreferenceError } = await import(
+			"#/server/members-logic"
+		);
+		const [signedIn] = await testDb
+			.select({ name: members.name })
+			.from(members)
+			.where(eq(members.id, f.s.memberId));
+		await testDb
+			.update(people)
+			.set({
+				email: "admin-pref@example.test",
+				preferredContact: "call",
+				contactPreferenceBy: "member",
+			})
+			.where(eq(people.id, f.s.personId));
+		const err = await applyMemberEdit({
+			clubId: f.s.clubId,
+			memberId: f.s.memberId,
+			name: signedIn?.name ?? "Admin User",
+			preferredContact: "email",
+			actorMemberId: f.s.memberId,
+		}).catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(ContactPreferenceError);
+		expect((err as InstanceType<typeof ContactPreferenceError>).code).toBe(
+			"member_set",
+		);
+		expect(await personRow(f.s.personId)).toEqual({
+			pref: "call",
+			by: "member",
 		});
 	});
 });
