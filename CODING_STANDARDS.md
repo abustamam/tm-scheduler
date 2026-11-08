@@ -667,7 +667,9 @@ page). So: **server-fn modules export only `createServerFn`s and types.** Put th
 testable db logic in a sibling `*-logic.ts` (see `members-logic.ts`, `activity-feed-logic.ts`,
 `club-logic.ts`) that client code never imports; the wrapper's handler calls it and gets
 stripped. The `server-modules.guard.test.ts` unit test enforces this — it would have caught both
-regressions.
+regressions. A third (#1550) got past it with a non-exported `typeof db` type alias, so the
+client build itself now fails if `src/db/index.ts` or `pg` is in its module graph
+(`scripts/client-server-only-gate.ts`, registered in `vite.config.ts`).
 
 The split has a SECOND, independent motive, and it is the one that usually applies: a
 `createServerFn` cannot be invoked from a test (no session, no RPC layer), so a query living
