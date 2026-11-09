@@ -384,6 +384,20 @@ export async function applyRemoveRoleSlot(input: {
 	);
 }
 
+/** Whether a slot is held: seated with a member or guest, or in any status but
+ *  `open`. The ONE copy of the rule: `removeRoleSlotCore` refuses on it and the
+ *  `edit_role_slots` preview reads it, so the preview cannot promise a removal
+ *  the write refuses. */
+export function isSlotHeld(slot: {
+	status: string;
+	assignedMemberId: string | null;
+	assignedGuestId: string | null;
+}): boolean {
+	return Boolean(
+		slot.assignedMemberId || slot.assignedGuestId || slot.status !== "open",
+	);
+}
+
 /** The body of `applyRemoveRoleSlot` on the caller's transaction (see
  *  `addRoleSlotCore`). `meetingId` is the meeting the slot was located on; a
  *  slot that is not in it is "Role not found." */
@@ -402,7 +416,7 @@ export async function removeRoleSlotCore(
 		.for("update")
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
-	if (slot.assignedMemberId || slot.assignedGuestId || slot.status !== "open") {
+	if (isSlotHeld(slot)) {
 		throw new Error("Release the role before removing it.");
 	}
 	const shape = await loadMeetingShapeDefs(

@@ -271,6 +271,181 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 		});
 	});
 
+	describe("review round (#1562)", () => {
+		/** Run `change` after authorization and before the apply transaction opens. */
+		function beforeApplyTransaction(change: () => Promise<unknown>) {
+			const real = testDb.transaction.bind(testDb);
+			vi.spyOn(testDb, "transaction").mockImplementationOnce(
+				// biome-ignore lint/suspicious/noExplicitAny: forwards the driver's own overloads untouched
+				(async (...args: any[]) => {
+					await change();
+					return (real as (...a: unknown[]) => unknown)(...args);
+				}) as typeof testDb.transaction,
+			);
+		}
+
+		it("an UPPERCASE slot id removes the slot, as a lowercase one does", async () => {
+			const ops = [{ op: "remove", slotId: seed.slotId.toUpperCase() }];
+			const p = await preview(ops);
+			expect(p.blocking).toEqual([]);
+			expect(p.plan.removals).toEqual([
+				expect.objectContaining({ slotId: seed.slotId }),
+			]);
+			await call({
+				meetingId: seed.meetingId,
+				operations: ops,
+				planHash: p.planHash,
+			});
+			expect(await slots()).toEqual([]);
+		});
+
+		it("seats an ACTIVE member given by id", async () => {
+			const id = await addMember("By Id Ida");
+			const p = await preview([{ op: "add", role: "Timer", member: id }]);
+			expect(p.blocking).toEqual([]);
+			await call({
+				meetingId: seed.meetingId,
+				operations: [{ op: "add", role: "Timer", member: id }],
+				planHash: p.planHash,
+			});
+			const held = (await slots()).filter((r) => r.assignedMemberId === id);
+			expect(held).toHaveLength(1);
+		});
+
+		it("blocks an INACTIVE member given by id", async () => {
+			const id = await addMember("Gone Id", "inactive");
+			const ops = [{ op: "add", role: "Timer", member: id }];
+			const p = await preview(ops);
+			expect(p.blocking.map((b) => b.code)).toEqual(["NOT_A_MEMBER"]);
+			await expect(
+				call({
+					meetingId: seed.meetingId,
+					operations: ops,
+					planHash: p.planHash,
+				}),
+			).rejects.toMatchObject({ code: "BLOCKED" });
+			expect(await slots()).toHaveLength(1);
+		});
+
+		it("adds a role given by its id within the club", async () => {
+			const id = await addRole("Greeter");
+			const ops = [{ op: "add", role: id.toUpperCase() }];
+			const p = await preview(ops);
+			expect(p.blocking).toEqual([]);
+			await call({
+				meetingId: seed.meetingId,
+				operations: ops,
+				planHash: p.planHash,
+			});
+			expect(
+				(await slots()).filter((r) => r.roleDefinitionId === id),
+			).toHaveLength(1);
+		});
+
+		it("an enabled role beats a disabled role of the same name", async () => {
+			await addRole("Greeter", { enabled: false });
+			const live = await addRole("Greeter");
+			const ops = [{ op: "add", role: "greeter" }];
+			const p = await preview(ops);
+			expect(p.blocking).toEqual([]);
+			expect(p.plan.additions[0]).toMatchObject({ roleDefinitionId: live });
+			await call({
+				meetingId: seed.meetingId,
+				operations: ops,
+				planHash: p.planHash,
+			});
+			expect(
+				(await slots()).filter((r) => r.roleDefinitionId === live),
+			).toHaveLength(1);
+		});
+
+		it("two enabled roles with one name block, and nothing is picked", async () => {
+			await addRole("Greeter");
+			await addRole("Greeter");
+			const ops = [{ op: "add", role: "Greeter" }];
+			const p = await preview(ops);
+			expect(p.blocking.map((b) => b.code)).toEqual(["ROLE_NOT_EDITABLE"]);
+			await expect(
+				call({
+					meetingId: seed.meetingId,
+					operations: ops,
+					planHash: p.planHash,
+				}),
+			).rejects.toMatchObject({ code: "BLOCKED" });
+			expect(await slots()).toHaveLength(1);
+		});
+
+		it("a matching-hash apply after the slot became held is PLAN_STALE carrying the SLOT_HELD plan", async () => {
+			const ops = [{ op: "remove", slotId: seed.slotId }];
+			const p = await preview(ops);
+			expect(p.blocking).toEqual([]);
+			await testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, seed.slotId));
+			const err = (await call({
+				meetingId: seed.meetingId,
+				operations: ops,
+				planHash: p.planHash,
+			}).catch((e: unknown) => e)) as {
+				code: string;
+				detail: { plan: { blocking: { code: string }[] } };
+			};
+			expect(err.code).toBe("PLAN_STALE");
+			expect(err.detail.plan.blocking.map((b) => b.code)).toEqual([
+				"SLOT_HELD",
+			]);
+			expect(await slots()).toHaveLength(1);
+		});
+
+		it("accepts exactly the total-places ceiling across several adds, and refuses one more", async () => {
+			const twelve = { op: "add", role: "Timer", count: 12 };
+			const eight = { op: "add", role: "Timer", count: 8 };
+			const p = await preview([twelve, eight]);
+			expect(p.plan.additions).toHaveLength(20);
+			await expect(
+				call({
+					meetingId: seed.meetingId,
+					operations: [twelve, { op: "add", role: "Timer", count: 9 }],
+				}),
+			).rejects.toThrow();
+			expect(await slots()).toHaveLength(1);
+		});
+
+		it("an empty preview lists the addable roles; applying the empty plan writes nothing", async () => {
+			const p = await preview([]);
+			expect(p.blocking).toEqual([]);
+			expect(p.addableRoles.map((r) => r.name)).toEqual(["Timer"]);
+			const before = await slots();
+			const r = (await call({
+				meetingId: seed.meetingId,
+				operations: [],
+				planHash: p.planHash,
+			})) as { applied: boolean; summary: string };
+			expect(r).toMatchObject({ applied: true, summary: "No changes" });
+			expect(await slots()).toEqual(before);
+		});
+
+		it("a club archived after authorization is ARCHIVED and writes nothing", async () => {
+			const ops = [{ op: "add", role: "Timer" }];
+			const p = await preview(ops);
+			beforeApplyTransaction(() =>
+				testDb
+					.update(clubs)
+					.set({ archivedAt: new Date() })
+					.where(eq(clubs.id, seed.clubId)),
+			);
+			await expect(
+				call({
+					meetingId: seed.meetingId,
+					operations: ops,
+					planHash: p.planHash,
+				}),
+			).rejects.toMatchObject({ code: "ARCHIVED" });
+			expect(await slots()).toHaveLength(1);
+		});
+	});
+
 	describe("blocking items", () => {
 		/** Preview must name the code, and an apply with that hash must write nothing. */
 		async function blocked(operations: unknown[], code: string) {

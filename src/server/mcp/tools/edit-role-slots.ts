@@ -28,14 +28,32 @@
  * are `AMBIGUOUS_MEMBER` with the candidates listed, never a pick. The club
  * comes from the meeting (`authorizeTokenForMeeting`), as in every meeting tool.
  *
- * Lock order is `assign_roles`': the target members' merge lock (shared), then
- * the meeting row, then the slots.
+ * Lock order: the target members' merge lock (shared) first, then the meeting
+ * row, then the club's archive gate, then the slots (`removeRoleSlotCore` locks
+ * each slot it removes). A member's ROW is locked later still, inside
+ * `reassignSlotCore`, after the meeting lock; `assign_roles` takes the same
+ * order for the same calls.
+ *
+ * An empty `operations` list is valid: a preview returns just the club's
+ * addable roles, and an apply of that (empty) plan writes nothing.
  */
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
+import {
+	clubs,
+	meetings,
+	members,
+	roleDefinitions,
+	roleSlots,
+} from "#/db/schema";
 import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
+import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import {
+	MAX_ROLE_SLOT_OPS,
+	MAX_ROLE_SLOTS_PER_ADD,
+	MAX_ROLE_SLOTS_TOTAL_ADDED,
+} from "#/lib/mcp-limits";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	isMeetingCancelled,
@@ -52,6 +70,7 @@ import {
 import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import {
 	addRoleSlotCore,
+	isSlotHeld,
 	reassignSlotCore,
 	removeRoleSlotCore,
 } from "#/server/slots-logic";
@@ -60,11 +79,6 @@ import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 
 export const EDIT_ROLE_SLOTS_TOOL = "edit_role_slots";
-
-/** Operations per call, and places per `add`. A meeting holds a few dozen
- *  slots; this is "the whole agenda and then some". */
-export const MAX_ROLE_SLOT_OPS = 30;
-export const MAX_ROLE_SLOTS_PER_ADD = 20;
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
@@ -83,7 +97,14 @@ const opSchema = z.discriminatedUnion("op", [
 		.refine((o) => o.member === undefined || (o.count ?? 1) === 1, {
 			message: "A member can only be seated when adding one place.",
 		}),
-	z.object({ op: z.literal("remove"), slotId: z.string().uuid() }).strict(),
+	z
+		.object({
+			op: z.literal("remove"),
+			// Lowercased at the edge, as `assign_roles` does (#1418): an uppercase
+			// id must not read as another meeting's slot.
+			slotId: z.string().uuid().toLowerCase(),
+		})
+		.strict(),
 ]);
 
 type Op = z.infer<typeof opSchema>;
@@ -92,10 +113,18 @@ const inputSchema = {
 	meetingId: z.string().uuid(),
 	operations: z
 		.array(opSchema)
-		.min(1)
 		.max(MAX_ROLE_SLOT_OPS)
+		.refine(
+			(ops) =>
+				ops.reduce((n, o) => n + (o.op === "add" ? (o.count ?? 1) : 0), 0) <=
+				MAX_ROLE_SLOTS_TOTAL_ADDED,
+			{
+				message: `At most ${MAX_ROLE_SLOTS_TOTAL_ADDED} places can be added in one call.`,
+			},
+		)
 		.describe(
-			"Applied in order, all or none. {op:'add', role, count?, member?}: " +
+			"Empty to just list the club's addable roles (a preview). " +
+				"Applied in order, all or none. {op:'add', role, count?, member?}: " +
 				"`role` is a name or id from the addableRoles a preview returns; " +
 				"`member` is a member's name or id and needs count 1. " +
 				"{op:'remove', slotId}: an EMPTY slot id from get_agenda.",
@@ -159,7 +188,7 @@ type Plan = {
 	blocking: McpBlockingItem[];
 };
 
-type Step =
+type PlanStep =
 	| { kind: "add"; roleDefinitionId: string; memberId: string | null }
 	| { kind: "remove"; slotId: string };
 
@@ -209,7 +238,11 @@ async function loadSlots(conn: DbOrTx, meetingId: string): Promise<SlotRow[]> {
 		.orderBy(asc(roleSlots.roleDefinitionId), asc(roleSlots.slotIndex));
 	return rows.map(({ status, ...r }) => ({
 		...r,
-		open: status === "open" && !r.holderMemberId && !r.holderGuestId,
+		open: !isSlotHeld({
+			status,
+			assignedMemberId: r.holderMemberId,
+			assignedGuestId: r.holderGuestId,
+		}),
 	}));
 }
 
@@ -277,7 +310,7 @@ async function buildPlan(
 	ops: Op[],
 ): Promise<{
 	plan: Plan;
-	steps: Step[];
+	steps: PlanStep[];
 	addable: { roleId: string; name: string }[];
 }> {
 	const [roles, roster, slots, shape] = await Promise.all([
@@ -305,15 +338,15 @@ async function buildPlan(
 		});
 	}
 
-	const sim = slots.map((s) => ({ ...s }));
+	const simulatedSlots = slots.map((s) => ({ ...s }));
 	const additions: PlanAddition[] = [];
 	const removals: PlanRemoval[] = [];
-	const steps: Step[] = [];
+	const steps: PlanStep[] = [];
 	const removed = new Set<string>();
 
 	for (const [opIndex, op] of ops.entries()) {
 		if (op.op === "remove") {
-			const slot = sim.find((s) => s.id === op.slotId);
+			const slot = simulatedSlots.find((s) => s.id === op.slotId);
 			if (removed.has(op.slotId)) {
 				blocking.push({
 					code: "DUPLICATE_SLOT",
@@ -351,7 +384,7 @@ async function buildPlan(
 					role: slot.roleName,
 					slotIndex: slot.slotIndex,
 				});
-				sim.splice(sim.indexOf(slot), 1);
+				simulatedSlots.splice(simulatedSlots.indexOf(slot), 1);
 				steps.push({ kind: "remove", slotId: slot.id });
 			}
 			continue;
@@ -408,10 +441,10 @@ async function buildPlan(
 		}
 
 		for (let n = 0; n < (op.count ?? 1); n++) {
-			const same = sim.filter((s) => s.roleDefinitionId === role.id);
+			const same = simulatedSlots.filter((s) => s.roleDefinitionId === role.id);
 			const slotIndex =
 				same.length === 0 ? 0 : Math.max(...same.map((s) => s.slotIndex)) + 1;
-			sim.push({
+			simulatedSlots.push({
 				id: `new:${opIndex}:${n}`,
 				roleDefinitionId: role.id,
 				roleName: role.name,
@@ -542,6 +575,17 @@ export const editRoleSlotsTool: McpToolDefinition = {
 			await lockMembershipsAgainstMerge(tx, wanted);
 
 			const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
+			// The archive gate UNDER the lock: authorization read it before the
+			// transaction, and the club may have been archived since.
+			const [clubRow] = await tx
+				.select({ archivedAt: clubs.archivedAt })
+				.from(clubs)
+				.where(eq(clubs.id, meeting.clubId))
+				.limit(1);
+			if (!clubRow) throw new McpError("NOT_FOUND", "Club not found.");
+			if (isClubArchived(clubRow)) {
+				throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+			}
 			const { plan, steps } = await buildPlan(tx, meeting, ops);
 			const freshHash = hashOf(plan);
 			if (freshHash !== expected) {
@@ -578,7 +622,7 @@ async function writeSteps(
 	tx: Tx,
 	meetingId: string,
 	actorMemberId: string | null,
-	steps: Step[],
+	steps: PlanStep[],
 ): Promise<void> {
 	for (const step of steps) {
 		if (step.kind === "remove") {
