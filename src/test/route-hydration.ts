@@ -252,6 +252,77 @@ export async function startDevServer(opts: {
 	throw new Error(`dev server never answered /api/health:\n${out.join("")}`);
 }
 
+/**
+ * Start the PRODUCTION server (`node .output/server/index.mjs`, what
+ * `bun run build` made) against `databaseUrl` (#1557). The dev server serves
+ * modules unbundled, so it cannot show a client chunk that throws on
+ * evaluation; this serves the real bundle.
+ */
+export async function startBuiltServer(opts: {
+	databaseUrl: string;
+}): Promise<DevServer> {
+	const port = await freePort();
+	const base = `http://localhost:${port}`;
+	const out: string[] = [];
+	const child: ChildProcess = spawn(
+		"node",
+		[join(REPO_ROOT, ".output/server/index.mjs")],
+		{
+			cwd: REPO_ROOT,
+			detached: true,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: {
+				...process.env,
+				NODE_ENV: "production",
+				PORT: String(port),
+				HOST: "127.0.0.1",
+				DATABASE_URL: opts.databaseUrl,
+				BETTER_AUTH_URL: base,
+				BETTER_AUTH_SECRET:
+					process.env.BETTER_AUTH_SECRET ?? "test-better-auth-secret",
+				DISABLE_REMINDER_POLLER: "1",
+				RESEND_API_KEY: "",
+			},
+		},
+	);
+	child.stdout?.on("data", (b) => out.push(String(b)));
+	child.stderr?.on("data", (b) => out.push(String(b)));
+	const stop = async () => {
+		if (child.exitCode === null && child.pid) {
+			try {
+				process.kill(-child.pid, "SIGTERM");
+			} catch {
+				// already gone
+			}
+			const exited = new Promise<void>((done) => child.once("exit", done));
+			const timer = setTimeout(() => {
+				try {
+					if (child.pid) process.kill(-child.pid, "SIGKILL");
+				} catch {
+					// already gone
+				}
+			}, 5_000);
+			await exited;
+			clearTimeout(timer);
+		}
+	};
+	const deadline = Date.now() + 60_000;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null) {
+			throw new Error(`built server exited early:\n${out.join("")}`);
+		}
+		try {
+			const res = await fetch(`${base}/api/health`);
+			if (res.ok) return { base, log: () => out.join(""), stop };
+		} catch {
+			// not listening yet
+		}
+		await new Promise((r) => setTimeout(r, 250));
+	}
+	await stop();
+	throw new Error(`built server never answered /api/health:\n${out.join("")}`);
+}
+
 /** One hydration error, parsed. */
 export interface Mismatch {
 	/** `src/…:line:col` of the element React named, when it named one. */
@@ -1007,6 +1078,20 @@ export class HydrationBrowser {
 			text,
 			...(neverAttached ? { neverAttached } : {}),
 		};
+	}
+
+	/**
+	 * Every uncaught exception and console error since the last load began,
+	 * unfiltered (#1557): the built-bundle gate fails on ANY of them, not only
+	 * React's hydration messages.
+	 */
+	pageErrors(): string[] {
+		return [...new Set(this.errors)];
+	}
+
+	/** Failed or >= 400 requests of the last load (a chunk that 404s). */
+	failedRequestsSeen(): string[] {
+		return [...new Set(this.failedRequests)];
 	}
 
 	private resetLoadState() {
