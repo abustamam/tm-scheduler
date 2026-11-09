@@ -27,10 +27,10 @@ import { hasTestDb } from "#/test/db";
 import { findChrome } from "#/test/print-page-count";
 import {
 	DEFAULT_CLIENT,
-	type DevServer,
 	HydrationBrowser,
 	REPO_ROOT,
 	startBuiltServer,
+	type TestServer,
 } from "#/test/route-hydration";
 
 const required = process.env.BUILT_BUNDLE_GATE === "1";
@@ -58,7 +58,7 @@ describe("built client bundle", () => {
 	});
 
 	describe.skipIf(!ready)("in Chrome", () => {
-		let server: DevServer;
+		let server: TestServer;
 		let browser: HydrationBrowser;
 
 		beforeAll(async () => {
@@ -83,17 +83,18 @@ describe("built client bundle", () => {
 				...browser.pageErrors().map((e) => `/ raised: ${e}`),
 				// Only the app's own requests: web fonts are blocked in the browser.
 				...browser
-					.failedRequestsSeen()
+					.failedRequests()
 					.filter((r) => r.startsWith(server.base))
 					.map((r) => `/ request: ${r}`),
 			];
 
+			const list = JSON.stringify(chunks);
 			await browser.evaluate(`(() => {
 				window.__chunkProbe = null;
-				Promise.allSettled(${JSON.stringify(chunks)}.map((u) => import(u))).then((rs) => {
+				Promise.allSettled(${list}.map((u) => import(u))).then((rs) => {
 					window.__chunkProbe = rs.flatMap((r, i) =>
 						r.status === "rejected"
-							? [${JSON.stringify(chunks)}[i] + ": " + String(r.reason && (r.reason.stack || r.reason))]
+							? [${list}[i] + ": " + String(r.reason && (r.reason.stack || r.reason))]
 							: [],
 					);
 				});

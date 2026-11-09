@@ -81,6 +81,13 @@ const COUNT_CONDITIONS = [
 	'select(.title == "hydrates every route without a mismatch" and .status == "passed")',
 ];
 
+/** The jq conditions the built-bundle count step must hold, verbatim (#1557). */
+const BUNDLE_COUNT_CONDITIONS = [
+	".numTotalTests == 2",
+	".numPassedTests == .numTotalTests",
+	'select(.title == "loads every client chunk without a module-evaluation error" and .status == "passed")',
+];
+
 describe("route hydration gate CI wiring (#1022)", () => {
 	it("the gate files exist", () => {
 		for (const f of HYDRATION_GATE_FILES) {
@@ -173,5 +180,68 @@ describe("route hydration gate CI wiring (#1022)", () => {
 			"utf8",
 		);
 		expect(gate).toContain('it("hydrates every route without a mismatch"');
+	});
+});
+
+// The built bundle gate (#1557) loads the BUILT client bundle in Chrome. It is
+// only a gate if the `check` job runs it after the build, with the env that
+// makes a missing build/database/Chrome a failure, and then counts that it ran.
+describe("built bundle gate CI wiring (#1557)", () => {
+	const steps = () => job("check").steps;
+	const idx = (name: string) => steps().findIndex((s) => s.name === name);
+
+	it("runs after Build, with BUILT_BUNDLE_GATE=1, and cannot be skipped or soft-failed", () => {
+		const build = steps().findIndex((s) => code(s.run) === "bun run build");
+		const gate = idx("Built bundle gate");
+		expect(build, "no `bun run build` step").toBeGreaterThanOrEqual(0);
+		expect(gate, "no `Built bundle gate` step").toBeGreaterThanOrEqual(0);
+		expect(gate, "the gate must run AFTER the build").toBeGreaterThan(build);
+		const s = steps()[gate] as Step;
+		expect(s.env?.BUILT_BUNDLE_GATE).toBe("1");
+		expect(code(s.run)).toMatch(
+			/^bunx vitest run src\/test\/built-bundle\.test\.ts /,
+		);
+		expect(s.if).toBeUndefined();
+		expect(s["continue-on-error"]).toBeUndefined();
+		expect(code(s.run)).not.toMatch(/\|\||;|&&/);
+		expect(code(s.run)).toContain("--outputFile=built-bundle-report.json");
+	});
+
+	it("the env var the workflow sets is the one the test reads", () => {
+		const test = readFileSync(
+			join(REPO_ROOT, "src/test/built-bundle.test.ts"),
+			"utf8",
+		);
+		expect(test).toContain("process.env.BUILT_BUNDLE_GATE");
+	});
+
+	it("a count step after the gate fails the job unless exactly the 2 tests ran and passed", () => {
+		const gate = idx("Built bundle gate");
+		const count = idx("Built bundle gate ran (test count)");
+		expect(count, "no count step").toBeGreaterThan(gate);
+		const c = steps()[count] as Step;
+		expect(c.if).toBeUndefined();
+		expect(c["continue-on-error"]).toBeUndefined();
+		const script = code(c.run);
+		for (const cond of BUNDLE_COUNT_CONDITIONS) {
+			expect(script).toContain(cond);
+		}
+		const lines = script.split("\n").map((l) => l.trim());
+		const open = lines.findIndex((l) => l.startsWith("jq -e"));
+		expect(lines[open], "jq -e must start its own line").toBe("jq -e '");
+		const close = lines.indexOf("' built-bundle-report.json > /dev/null || {");
+		expect(close, "the jq check must end in `|| {`").toBeGreaterThan(open);
+		expect(lines[close + 1]).toMatch(/^echo "::error::/);
+		expect(lines.slice(close + 2)).toEqual(["exit 1", "}"]);
+	});
+
+	it("the title the count step demands is a real test in the gate", () => {
+		const test = readFileSync(
+			join(REPO_ROOT, "src/test/built-bundle.test.ts"),
+			"utf8",
+		);
+		expect(test).toContain(
+			'it("loads every client chunk without a module-evaluation error"',
+		);
 	});
 });

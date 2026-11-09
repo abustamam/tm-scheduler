@@ -148,65 +148,47 @@ async function freePort(): Promise<number> {
 	});
 }
 
-export interface DevServer {
+export interface TestServer {
 	base: string;
 	/** Everything the server printed, for a failure message. */
 	log: () => string;
 	stop: () => Promise<void>;
 }
 
-/**
- * Start `vite dev` under a UTC, en-US runtime whose clock is moved by
- * `clockOffsetMs`, against `databaseUrl`.
- *
- * `DISABLE_REMINDER_POLLER`: the dev server boots the in-process poller, and
- * against the shared test database it would deliver OTHER suites' queued
- * access-request mail out from under them. (The flag stops delivery only; the
- * retention sweeps still run, see `reminder-poller.ts`.)
- */
-export async function startDevServer(opts: {
-	databaseUrl: string;
-	clockOffsetMs: number;
-	env?: Record<string, string>;
-}): Promise<DevServer> {
-	const port = await freePort();
-	const base = `http://localhost:${port}`;
-	const dir = mkdtempSync(join(tmpdir(), "route-hydration-server-"));
-	const preload = join(dir, "clock.mjs");
-	writeFileSync(preload, clockShiftSource(opts.clockOffsetMs));
+/** The dev-server name the hydration suite imports. */
+export type DevServer = TestServer;
 
+/**
+ * Spawn `node <args>` in its own process group with `env` laid over the
+ * test-safe defaults, and resolve once `/api/health` answers. Shared by the dev
+ * and the built server: the env block, the group kill (SIGTERM, SIGKILL after
+ * 5s, await exit) and the health poll are one implementation, so a fix to one
+ * cannot miss the other.
+ */
+async function spawnTestServer(opts: {
+	label: string;
+	args: string[];
+	base: string;
+	env: Record<string, string | undefined>;
+	startupMs: number;
+	/** Extra teardown after the process has exited. */
+	cleanup?: () => void;
+}): Promise<TestServer> {
 	const out: string[] = [];
-	const child: ChildProcess = spawn(
-		"node",
-		[
-			join(REPO_ROOT, "node_modules/vite/bin/vite.js"),
-			"dev",
-			"--port",
-			String(port),
-			"--strictPort",
-		],
-		{
-			cwd: REPO_ROOT,
-			detached: true,
-			stdio: ["ignore", "pipe", "pipe"],
-			env: {
-				...process.env,
-				NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
-				NODE_ENV: "development",
-				TZ: "UTC",
-				LANG: "en_US.UTF-8",
-				LC_ALL: "en_US.UTF-8",
-				DATABASE_URL: opts.databaseUrl,
-				BETTER_AUTH_URL: base,
-				BETTER_AUTH_SECRET:
-					process.env.BETTER_AUTH_SECRET ?? "test-better-auth-secret",
-				ENABLE_DEV_LOGIN: "1",
-				DISABLE_REMINDER_POLLER: "1",
-				RESEND_API_KEY: "",
-				...opts.env,
-			},
+	const child: ChildProcess = spawn("node", opts.args, {
+		cwd: REPO_ROOT,
+		detached: true,
+		stdio: ["ignore", "pipe", "pipe"],
+		env: {
+			...process.env,
+			BETTER_AUTH_URL: opts.base,
+			BETTER_AUTH_SECRET:
+				process.env.BETTER_AUTH_SECRET ?? "test-better-auth-secret",
+			DISABLE_REMINDER_POLLER: "1",
+			RESEND_API_KEY: "",
+			...opts.env,
 		},
-	);
+	});
 	child.stdout?.on("data", (b) => out.push(String(b)));
 	child.stderr?.on("data", (b) => out.push(String(b)));
 
@@ -229,27 +211,71 @@ export async function startDevServer(opts: {
 			clearTimeout(timer);
 		}
 		try {
-			rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+			opts.cleanup?.();
 		} catch {
 			// A temp dir the OS reaps anyway must never fail the gate.
 		}
 	};
 
-	const deadline = Date.now() + 180_000;
+	const deadline = Date.now() + opts.startupMs;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null) {
-			throw new Error(`dev server exited early:\n${out.join("")}`);
+			throw new Error(`${opts.label} exited early:\n${out.join("")}`);
 		}
 		try {
-			const res = await fetch(`${base}/api/health`);
-			if (res.ok) return { base, log: () => out.join(""), stop };
+			const res = await fetch(`${opts.base}/api/health`);
+			if (res.ok) return { base: opts.base, log: () => out.join(""), stop };
 		} catch {
 			// not listening yet
 		}
 		await new Promise((r) => setTimeout(r, 250));
 	}
 	await stop();
-	throw new Error(`dev server never answered /api/health:\n${out.join("")}`);
+	throw new Error(`${opts.label} never answered /api/health:\n${out.join("")}`);
+}
+
+/**
+ * Start `vite dev` under a UTC, en-US runtime whose clock is moved by
+ * `clockOffsetMs`, against `databaseUrl`.
+ *
+ * `DISABLE_REMINDER_POLLER` (set by `spawnTestServer`): the dev server boots
+ * the in-process poller, and against the shared test database it would deliver
+ * OTHER suites' queued access-request mail out from under them. (The flag stops
+ * delivery only; the retention sweeps still run, see `reminder-poller.ts`.)
+ */
+export async function startDevServer(opts: {
+	databaseUrl: string;
+	clockOffsetMs: number;
+	env?: Record<string, string>;
+}): Promise<TestServer> {
+	const port = await freePort();
+	const base = `http://localhost:${port}`;
+	const dir = mkdtempSync(join(tmpdir(), "route-hydration-server-"));
+	const preload = join(dir, "clock.mjs");
+	writeFileSync(preload, clockShiftSource(opts.clockOffsetMs));
+	return spawnTestServer({
+		label: "dev server",
+		args: [
+			join(REPO_ROOT, "node_modules/vite/bin/vite.js"),
+			"dev",
+			"--port",
+			String(port),
+			"--strictPort",
+		],
+		base,
+		startupMs: 180_000,
+		env: {
+			NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+			NODE_ENV: "development",
+			TZ: "UTC",
+			LANG: "en_US.UTF-8",
+			LC_ALL: "en_US.UTF-8",
+			DATABASE_URL: opts.databaseUrl,
+			ENABLE_DEV_LOGIN: "1",
+			...opts.env,
+		},
+		cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }),
+	});
 }
 
 /**
@@ -260,67 +286,20 @@ export async function startDevServer(opts: {
  */
 export async function startBuiltServer(opts: {
 	databaseUrl: string;
-}): Promise<DevServer> {
+}): Promise<TestServer> {
 	const port = await freePort();
-	const base = `http://localhost:${port}`;
-	const out: string[] = [];
-	const child: ChildProcess = spawn(
-		"node",
-		[join(REPO_ROOT, ".output/server/index.mjs")],
-		{
-			cwd: REPO_ROOT,
-			detached: true,
-			stdio: ["ignore", "pipe", "pipe"],
-			env: {
-				...process.env,
-				NODE_ENV: "production",
-				PORT: String(port),
-				HOST: "127.0.0.1",
-				DATABASE_URL: opts.databaseUrl,
-				BETTER_AUTH_URL: base,
-				BETTER_AUTH_SECRET:
-					process.env.BETTER_AUTH_SECRET ?? "test-better-auth-secret",
-				DISABLE_REMINDER_POLLER: "1",
-				RESEND_API_KEY: "",
-			},
+	return spawnTestServer({
+		label: "built server",
+		args: [join(REPO_ROOT, ".output/server/index.mjs")],
+		base: `http://localhost:${port}`,
+		startupMs: 60_000,
+		env: {
+			NODE_ENV: "production",
+			PORT: String(port),
+			HOST: "127.0.0.1",
+			DATABASE_URL: opts.databaseUrl,
 		},
-	);
-	child.stdout?.on("data", (b) => out.push(String(b)));
-	child.stderr?.on("data", (b) => out.push(String(b)));
-	const stop = async () => {
-		if (child.exitCode === null && child.pid) {
-			try {
-				process.kill(-child.pid, "SIGTERM");
-			} catch {
-				// already gone
-			}
-			const exited = new Promise<void>((done) => child.once("exit", done));
-			const timer = setTimeout(() => {
-				try {
-					if (child.pid) process.kill(-child.pid, "SIGKILL");
-				} catch {
-					// already gone
-				}
-			}, 5_000);
-			await exited;
-			clearTimeout(timer);
-		}
-	};
-	const deadline = Date.now() + 60_000;
-	while (Date.now() < deadline) {
-		if (child.exitCode !== null) {
-			throw new Error(`built server exited early:\n${out.join("")}`);
-		}
-		try {
-			const res = await fetch(`${base}/api/health`);
-			if (res.ok) return { base, log: () => out.join(""), stop };
-		} catch {
-			// not listening yet
-		}
-		await new Promise((r) => setTimeout(r, 250));
-	}
-	await stop();
-	throw new Error(`built server never answered /api/health:\n${out.join("")}`);
+	});
 }
 
 /** One hydration error, parsed. */
@@ -635,7 +614,7 @@ export class HydrationBrowser {
 	/** URL of each request seen in this load, by CDP requestId (#1338). */
 	private requestUrls = new Map<string, string>();
 	/** Requests that failed or answered >= 400 in this load (#1338). */
-	private failedRequests: string[] = [];
+	private failedRequestLog: string[] = [];
 	private chrome!: ChildProcess;
 	private dir!: string;
 	/** The tail of Chrome's stderr, kept for as long as it runs. */
@@ -934,7 +913,7 @@ export class HydrationBrowser {
 		} else if (msg.method === "Network.responseReceived") {
 			const { requestId, response } = msg.params;
 			if (response?.status >= 400) {
-				this.failedRequests.push(
+				this.failedRequestLog.push(
 					`${response.url ?? this.requestUrls.get(requestId)} -> HTTP ${response.status}`,
 				);
 			}
@@ -949,7 +928,7 @@ export class HydrationBrowser {
 				!msg.params.canceled &&
 				msg.params.type !== "EventSource"
 			) {
-				this.failedRequests.push(
+				this.failedRequestLog.push(
 					`${this.requestUrls.get(msg.params.requestId) ?? `request ${msg.params.requestId}`} failed: ${msg.params.errorText}`,
 				);
 			}
@@ -1053,7 +1032,7 @@ export class HydrationBrowser {
 			neverAttached = {
 				ms: Date.now() - loadStarted,
 				errors: [...new Set(this.errors)],
-				failedRequests: [...new Set(this.failedRequests)],
+				failedRequests: [...new Set(this.failedRequestLog)],
 			};
 			console.warn(
 				`[route-hydration] ${path}: React never attached after ${neverAttached.ms}ms; retrying once. ` +
@@ -1090,14 +1069,14 @@ export class HydrationBrowser {
 	}
 
 	/** Failed or >= 400 requests of the last load (a chunk that 404s). */
-	failedRequestsSeen(): string[] {
-		return [...new Set(this.failedRequests)];
+	failedRequests(): string[] {
+		return [...new Set(this.failedRequestLog)];
 	}
 
 	private resetLoadState() {
 		this.errors = [];
 		this.navigations = 0;
-		this.failedRequests = [];
+		this.failedRequestLog = [];
 		this.requestUrls.clear();
 	}
 
