@@ -80,6 +80,23 @@ export type McpBlockingCode =
 	| "NO_MEETING_ON_DATE"
 	| "AMBIGUOUS_DATE"
 	| "AMBIGUOUS_GUEST"
+	/**
+	 * A member NAME matches more than one active member of the club
+	 * (`edit_role_slots`, #1542). Never guessed: `detail.candidates` lists them
+	 * and the caller names one by id.
+	 */
+	| "AMBIGUOUS_MEMBER"
+	/**
+	 * `edit_role_slots` cannot add or remove this role: the club does not define
+	 * it, it is disabled, or it is a paired speaker/evaluator role that the
+	 * speaker controls own (#1542).
+	 */
+	| "ROLE_NOT_EDITABLE"
+	/**
+	 * `edit_role_slots` was asked to remove a slot someone holds (#1542). The
+	 * tool never destroys an assignment: `assign_roles` clears it first.
+	 */
+	| "SLOT_HELD"
 	| "INVALID_PHONE"
 	/**
 	 * The meeting's agenda no longer accepts changes, in either of two states:

@@ -287,63 +287,82 @@ export async function applyAddRoleSlot(input: {
 	roleDefinitionId: string;
 	actorMemberId: string | null;
 }) {
-	return db.transaction(async (tx) => {
-		// THE LOCK COMES FIRST, and every gate below reads the row it returns
-		// (#803, review). Numbering was only half of what was racing here: two of
-		// the checks are themselves meeting-ROW reads, and both decide whether the
-		// insert may happen at all.
-		//
-		// `status` is the plain one — under READ COMMITTED a concurrent "complete
-		// meeting" commits between an unlocked read of it and this insert, and the
-		// slot lands on a completed meeting. `templateId` is the quieter one: it
-		// picks the meeting's declared SHAPE, and the shape is what decides whether
-		// this role is a paired speaker/evaluator role the "+ Add role" path must
-		// refuse. Converting a meeting to a template that calls this role a
-		// Contestant, committed in that same window, admits a slot the speaker
-		// controls own.
-		//
-		// The one read here the lock does NOT govern is `clubRoleDefs` — the club's
-		// role bank is club-scoped and no meeting row decides it. It runs on `tx`
-		// for one snapshot rather than because it needs the lock.
-		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
-		assertMeetingAccepts(meeting.status, "plan");
+	const { clubId } = await db.transaction((tx) => addRoleSlotCore(tx, input));
+	return { clubId };
+}
 
-		const defs = await clubRoleDefs(tx, meeting.clubId);
-		const role = defs.find((d) => d.id === input.roleDefinitionId);
-		if (!role) throw new Error("Role not found for this club.");
-		if (!role.enabled) throw new Error("This role is currently disabled.");
-		const shape = await loadMeetingShapeDefs(
-			tx,
-			meeting.clubId,
-			meeting.templateId,
-		);
-		if (pairedRoleIds(shape).has(role.id)) {
-			throw new Error("Add speakers with the speaker controls.");
-		}
+/** The body of `applyAddRoleSlot`, on the CALLER's transaction, so a caller that
+ *  already holds the meeting lock (the `edit_role_slots` MCP tool locks, re-plans,
+ *  compares its hash and writes in one transaction) does not open a second
+ *  connection that would wait on it. Takes the meeting lock itself; re-taking it
+ *  in the same transaction is a no-op. */
+export async function addRoleSlotCore(
+	tx: Tx,
+	input: {
+		meetingId: string;
+		roleDefinitionId: string;
+		actorMemberId: string | null;
+	},
+): Promise<{ clubId: string; slotId: string }> {
+	// THE LOCK COMES FIRST, and every gate below reads the row it returns
+	// (#803, review). Numbering was only half of what was racing here: two of
+	// the checks are themselves meeting-ROW reads, and both decide whether the
+	// insert may happen at all.
+	//
+	// `status` is the plain one — under READ COMMITTED a concurrent "complete
+	// meeting" commits between an unlocked read of it and this insert, and the
+	// slot lands on a completed meeting. `templateId` is the quieter one: it
+	// picks the meeting's declared SHAPE, and the shape is what decides whether
+	// this role is a paired speaker/evaluator role the "+ Add role" path must
+	// refuse. Converting a meeting to a template that calls this role a
+	// Contestant, committed in that same window, admits a slot the speaker
+	// controls own.
+	//
+	// The one read here the lock does NOT govern is `clubRoleDefs` — the club's
+	// role bank is club-scoped and no meeting row decides it. It runs on `tx`
+	// for one snapshot rather than because it needs the lock.
+	const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+	assertMeetingAccepts(meeting.status, "plan");
 
-		const slotIndex = await nextIndexUnderLock(
-			tx,
-			input.meetingId,
-			input.roleDefinitionId,
-		);
-		await tx.insert(roleSlots).values({
+	const defs = await clubRoleDefs(tx, meeting.clubId);
+	const role = defs.find((d) => d.id === input.roleDefinitionId);
+	if (!role) throw new Error("Role not found for this club.");
+	if (!role.enabled) throw new Error("This role is currently disabled.");
+	const shape = await loadMeetingShapeDefs(
+		tx,
+		meeting.clubId,
+		meeting.templateId,
+	);
+	if (pairedRoleIds(shape).has(role.id)) {
+		throw new Error("Add speakers with the speaker controls.");
+	}
+
+	const slotIndex = await nextIndexUnderLock(
+		tx,
+		input.meetingId,
+		input.roleDefinitionId,
+	);
+	const [created] = await tx
+		.insert(roleSlots)
+		.values({
 			meetingId: input.meetingId,
 			roleDefinitionId: input.roleDefinitionId,
 			slotIndex,
-		});
-		await logActivity(tx, {
-			clubId: meeting.clubId,
-			actorMemberId: input.actorMemberId,
-			action: "meeting_edit",
-			targetType: "meeting",
-			targetId: input.meetingId,
-			detail: {
-				change: "role_added",
-				roleDefinitionId: input.roleDefinitionId,
-			},
-		});
-		return { clubId: meeting.clubId };
+		})
+		.returning({ id: roleSlots.id });
+	if (!created) throw new Error("Role slot insert returned no row.");
+	await logActivity(tx, {
+		clubId: meeting.clubId,
+		actorMemberId: input.actorMemberId,
+		action: "meeting_edit",
+		targetType: "meeting",
+		targetId: input.meetingId,
+		detail: {
+			change: "role_added",
+			roleDefinitionId: input.roleDefinitionId,
+		},
 	});
+	return { clubId: meeting.clubId, slotId: created.id };
 }
 
 /** Remove one unclaimed, non-paired slot from a meeting. Rejects a claimed slot
@@ -360,50 +379,67 @@ export async function applyRemoveRoleSlot(input: {
 		.limit(1);
 	if (!target) throw new Error("Role not found.");
 
-	return db.transaction(async (tx) => {
-		const meeting = await lockMeetingForSlotEdit(tx, target.meetingId);
-		assertMeetingAccepts(meeting.status, "plan");
-		const [slot] = await tx
-			.select()
-			.from(roleSlots)
-			.where(
-				and(
-					eq(roleSlots.id, input.slotId),
-					eq(roleSlots.meetingId, meeting.id),
-				),
-			)
-			.for("update")
-			.limit(1);
-		if (!slot) throw new Error("Role not found.");
-		if (
-			slot.assignedMemberId ||
-			slot.assignedGuestId ||
-			slot.status !== "open"
-		) {
-			throw new Error("Release the role before removing it.");
-		}
-		const shape = await loadMeetingShapeDefs(
-			tx,
-			meeting.clubId,
-			meeting.templateId,
-		);
-		if (pairedRoleIds(shape).has(slot.roleDefinitionId)) {
-			throw new Error("Remove speakers with the speaker controls.");
-		}
-		await tx.delete(roleSlots).where(eq(roleSlots.id, input.slotId));
-		await logActivity(tx, {
-			clubId: meeting.clubId,
-			actorMemberId: input.actorMemberId,
-			action: "meeting_edit",
-			targetType: "meeting",
-			targetId: meeting.id,
-			detail: {
-				change: "role_removed",
-				roleDefinitionId: slot.roleDefinitionId,
-			},
-		});
-		return { clubId: meeting.clubId };
+	return db.transaction((tx) =>
+		removeRoleSlotCore(tx, { ...input, meetingId: target.meetingId }),
+	);
+}
+
+/** Whether a slot is held: seated with a member or guest, or in any status but
+ *  `open`. The ONE copy of the rule: `removeRoleSlotCore` refuses on it and the
+ *  `edit_role_slots` preview reads it, so the preview cannot promise a removal
+ *  the write refuses. */
+export function isSlotHeld(slot: {
+	status: string;
+	assignedMemberId: string | null;
+	assignedGuestId: string | null;
+}): boolean {
+	return Boolean(
+		slot.assignedMemberId || slot.assignedGuestId || slot.status !== "open",
+	);
+}
+
+/** The body of `applyRemoveRoleSlot` on the caller's transaction (see
+ *  `addRoleSlotCore`). `meetingId` is the meeting the slot was located on; a
+ *  slot that is not in it is "Role not found." */
+export async function removeRoleSlotCore(
+	tx: Tx,
+	input: { slotId: string; meetingId: string; actorMemberId: string | null },
+): Promise<{ clubId: string }> {
+	const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
+	assertMeetingAccepts(meeting.status, "plan");
+	const [slot] = await tx
+		.select()
+		.from(roleSlots)
+		.where(
+			and(eq(roleSlots.id, input.slotId), eq(roleSlots.meetingId, meeting.id)),
+		)
+		.for("update")
+		.limit(1);
+	if (!slot) throw new Error("Role not found.");
+	if (isSlotHeld(slot)) {
+		throw new Error("Release the role before removing it.");
+	}
+	const shape = await loadMeetingShapeDefs(
+		tx,
+		meeting.clubId,
+		meeting.templateId,
+	);
+	if (pairedRoleIds(shape).has(slot.roleDefinitionId)) {
+		throw new Error("Remove speakers with the speaker controls.");
+	}
+	await tx.delete(roleSlots).where(eq(roleSlots.id, input.slotId));
+	await logActivity(tx, {
+		clubId: meeting.clubId,
+		actorMemberId: input.actorMemberId,
+		action: "meeting_edit",
+		targetType: "meeting",
+		targetId: meeting.id,
+		detail: {
+			change: "role_removed",
+			roleDefinitionId: slot.roleDefinitionId,
+		},
 	});
+	return { clubId: meeting.clubId };
 }
 
 /** `detail.change` values `backfillMissingRoleSlots` can log — a plain `string`

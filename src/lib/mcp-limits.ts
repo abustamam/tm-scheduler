@@ -45,6 +45,23 @@ export const MAX_GUEST_BOOK_ENTRIES = 100;
 export const MAX_ROLE_ASSIGNMENTS = 100;
 
 /**
+ * How many operations one `edit_role_slots` call may carry (#1542). A meeting
+ * holds a few dozen slots, so 30 is "the whole agenda and then some".
+ */
+export const MAX_ROLE_SLOT_OPS = 30;
+
+/** How many places one `add` operation may create (#1542). */
+export const MAX_ROLE_SLOTS_PER_ADD = 20;
+
+/**
+ * How many places ALL the `add` operations of one `edit_role_slots` call may
+ * create between them (#1542). The two caps above alone allow 30 x 20 = 600
+ * inserts, each with its own activity row, under the meeting row lock; this is
+ * the one that bounds how long that lock is held.
+ */
+export const MAX_ROLE_SLOTS_TOTAL_ADDED = 20;
+
+/**
  * How many people one `find_people` call returns.
  *
  * A club's roster plus its live prospect list. The tool reports `truncated`

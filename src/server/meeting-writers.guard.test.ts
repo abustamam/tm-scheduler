@@ -125,7 +125,7 @@
  * Each of these was injected with `bun run mutate` against this file and
  * observed red, then restored. Counts are the number of tests that failed.
  *
- *  - **A plan writer loses its refusal:** `applyAddRoleSlot` drops its
+ *  - **A plan writer loses its refusal:** `addRoleSlotCore` drops its
  *    `assertMeetingAccepts` (2); asks `"record"` in code (2); the map says
  *    `record` (2).
  *  - **A new caller of a `refusedBy` writer:** `deleteAwardRow` gains a caller that
@@ -681,10 +681,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	},
 
 	// -- slots (#1135)
-	"src/server/slots-logic.ts#applyAddRoleSlot": { class: "plan" },
+	"src/server/slots-logic.ts#addRoleSlotCore": { class: "plan" },
 	"src/server/slots-logic.ts#applyAddSpeakerSlot": { class: "plan" },
 	"src/server/slots-logic.ts#applyMoveSlot": { class: "plan" },
-	"src/server/slots-logic.ts#applyRemoveRoleSlot": { class: "plan" },
+	"src/server/slots-logic.ts#removeRoleSlotCore": { class: "plan" },
 	"src/server/slots-logic.ts#applyRemoveSpeakerSlot": { class: "plan" },
 	"src/server/slots-logic.ts#attachSpeechToSlot": {
 		class: "plan",
