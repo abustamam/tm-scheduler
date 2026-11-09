@@ -109,6 +109,31 @@ jobs:
           DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
           DATABASE_URL=postgresql://test:test@localhost:5432/tm_migrate_runner node .output/migrate.mjs
 
+      # Loads the BUILT client bundle in Chrome (#1557): serves .output with
+      # `node .output/server/index.mjs` and import()s every client chunk, failing
+      # on any module-evaluation error (#1550's `Buffer is not defined`). The dev
+      # server the hydration job uses never bundles, so it cannot see this.
+      # BUILT_BUNDLE_GATE=1 turns a missing build, database or Chrome into a
+      # failure; the second step fails the job if the gate ran no tests or
+      # skipped any.
+      - name: Built bundle gate
+        run: bunx vitest run src/test/built-bundle.test.ts --reporter=default --reporter=json --outputFile=built-bundle-report.json
+        env:
+          BUILT_BUNDLE_GATE: "1"
+      - name: Built bundle gate ran (test count)
+        run: |
+          jq -r '"built bundle gate: \(.numTotalTests) total, \(.numPassedTests) passed, \(.numPendingTests) skipped"' built-bundle-report.json
+          jq -e '
+            .numTotalTests == 2
+            and .numPassedTests == .numTotalTests
+            and ([.testResults[].assertionResults[]
+                  | select(.title == "loads every client chunk without a module-evaluation error" and .status == "passed")]
+                 | length) == 1
+          ' built-bundle-report.json > /dev/null || {
+            echo "::error::The built bundle gate ran no tests, skipped some, or never loaded the chunks."
+            exit 1
+          }
+
   # The route hydration gate (#1000, src/routes/route-hydration.test.ts) and its
   # harness's teardown test, and nothing else (#1022). It needs what `check`'s
   # Test step needs: Postgres with the migrations applied, and Chrome, which
