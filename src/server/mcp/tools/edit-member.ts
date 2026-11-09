@@ -15,8 +15,13 @@
  * WHERE decides, and when it refuses the email the rest of the edit still saves
  * (`emailRefused` in the result).
  *
- * Authorization: listed for officers, then admin standing enforced here, as
- * `editMember` does with `requireClubRole(..., ["admin"])`.
+ * Authorization: `audience: "officer"` through `authorizeToken` is exactly the
+ * set `requireClubRole(..., ["admin"])` admits in the app: a club admin or an
+ * open-term officer (`isEffectiveAdmin`, #202). No further gate.
+ *
+ * The final input is parsed through `editSchema` (the app's own validator), in
+ * preview and apply, so a malformed email is a VALIDATION error with nothing
+ * written.
  */
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -29,8 +34,7 @@ import {
 	normalizeEmail,
 } from "#/server/account-link-logic";
 import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
-import { applyMemberEdit } from "#/server/members-logic";
-import { requireClubAdminStanding } from "../admin-only";
+import { applyMemberEdit, editSchema } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -90,6 +94,14 @@ interface Change {
 	after: string | null;
 }
 
+interface Cur {
+	name: string;
+	preferredName: string | null;
+	personId: string;
+	email: string | null;
+	phone: string | null;
+}
+
 interface Plan {
 	memberId: string;
 	/** Only fields whose value would differ. */
@@ -112,7 +124,7 @@ async function plan(
 		email?: string | null;
 		phone?: string | null;
 	},
-): Promise<Plan> {
+): Promise<{ plan: Plan; cur: Cur }> {
 	const [cur] = await db
 		.select({
 			name: members.name,
@@ -144,14 +156,16 @@ async function plan(
 	if (args.email !== undefined) {
 		const after = blankToNull(args.email);
 		if (after !== (cur.email ?? null)) {
-			changes.push({ field: "email", before: cur.email ?? null, after });
 			// The writer treats a case- or whitespace-only difference as the same
-			// address: never refused, never written to a bound Person.
-			if (normalizeEmail(after) !== normalizeEmail(cur.email)) {
-				const code = await emailWriteRefusalFor(cur.personId, clubId);
-				if (code) {
-					emailRefusal = { code, message: EMAIL_REFUSED_MESSAGES[code] };
-				}
+			// address: it writes it for a free person, never for a protected one
+			// (bound / multi_club). Predict exactly that.
+			const sameAddress = normalizeEmail(after) === normalizeEmail(cur.email);
+			const code = await emailWriteRefusalFor(cur.personId, clubId);
+			if (!sameAddress && code) {
+				emailRefusal = { code, message: EMAIL_REFUSED_MESSAGES[code] };
+			}
+			if (!(sameAddress && code)) {
+				changes.push({ field: "email", before: cur.email ?? null, after });
 			}
 		}
 	}
@@ -162,7 +176,7 @@ async function plan(
 			changes.push({ field: "phone", before: cur.phone ?? null, after });
 		}
 	}
-	return { memberId, changes, emailRefusal };
+	return { plan: { memberId, changes, emailRefusal }, cur };
 }
 
 export const editMemberTool: McpToolDefinition = {
@@ -178,7 +192,7 @@ export const editMemberTool: McpToolDefinition = {
 		title: "Edit a member",
 		description:
 			"Correct one member's name, goes-by name (preferredName), email or " +
-			"phone, as a club admin would on the member page. Admins only. Id from " +
+			"phone, as a club admin would on the member page. Id from " +
 			"find_people. Send only what changes: omitted fields are left as they " +
 			"are. Call once WITHOUT planHash to preview: it writes nothing and shows " +
 			"each field before and after, and says when an email cannot be changed " +
@@ -191,7 +205,6 @@ export const editMemberTool: McpToolDefinition = {
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
 		const { club, user } = await authorizeToken(ctx, args.clubId);
-		await requireClubAdminStanding(user.id, club);
 		if (
 			args.name === undefined &&
 			args.preferredName === undefined &&
@@ -211,7 +224,27 @@ export const editMemberTool: McpToolDefinition = {
 		const view = (p: Plan) => ({ clubId: club.clubId, ...p });
 
 		const memberId = args.memberId.toLowerCase();
-		const p = await plan(club.clubId, memberId, args);
+		const { plan: p, cur } = await plan(club.clubId, memberId, args);
+		// The app's own validator, on the input as it will be written.
+		const parsed = editSchema.safeParse({
+			clubId: club.clubId,
+			memberId,
+			name: args.name ?? cur.name,
+			preferredName:
+				args.preferredName === undefined
+					? cur.preferredName
+					: blankToNull(args.preferredName),
+			...(args.email !== undefined ? { email: args.email } : {}),
+			...(args.phone !== undefined ? { phone: blankToNull(args.phone) } : {}),
+		});
+		if (!parsed.success) {
+			throw new McpError(
+				"VALIDATION",
+				parsed.error.issues
+					.map((i) => `${i.path.join(".") || "input"}: ${i.message}`)
+					.join("; "),
+			);
+		}
 		if (!args.planHash) {
 			return { applied: false, plan: view(p), planHash: hashOf(p) };
 		}
@@ -225,23 +258,10 @@ export const editMemberTool: McpToolDefinition = {
 			return { applied: true, clubId: club.clubId, plan: view(p), changed: [] };
 		}
 
-		// The schema's trap: fill name and preferredName from the member's current
-		// values so an omitted one is kept, not cleared.
-		const [cur] = await db
-			.select({ name: members.name, preferredName: members.preferredName })
-			.from(members)
-			.where(and(eq(members.id, memberId), eq(members.clubId, club.clubId)));
-		if (!cur) throw new McpError("NOT_FOUND", NOT_ON_ROSTER_MESSAGE);
+		// `parsed.data` already carries name and preferredName filled from the
+		// member's current values (the schema's trap: omitting one clears it).
 		const result = await applyMemberEdit({
-			clubId: club.clubId,
-			memberId,
-			name: args.name ?? cur.name,
-			preferredName:
-				args.preferredName === undefined
-					? cur.preferredName
-					: blankToNull(args.preferredName),
-			...(args.email !== undefined ? { email: blankToNull(args.email) } : {}),
-			...(args.phone !== undefined ? { phone: blankToNull(args.phone) } : {}),
+			...parsed.data,
 			actorMemberId: club.membershipId,
 		});
 		const emailRefused = result.emailRefused;

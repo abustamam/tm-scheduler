@@ -13,8 +13,13 @@
  * `confirmNew`. The matcher is prefix/substring, not fuzzy ("John" and "John
  * Smith" collide, "Jon Smyth" does not), so the model must still ask the user.
  *
- * Authorization: the tool is listed for officers (`authorizeToken`) and then
- * enforces admin standing itself, as `bulkImportMembers` does.
+ * Authorization: `audience: "officer"` through `authorizeToken` is exactly the
+ * set `requireClubRole(..., ["admin"])` admits in the app: a club admin or an
+ * open-term officer (`isEffectiveAdmin`, #202). No further gate.
+ *
+ * "Ambiguous" is wider than the matcher: a row that shares any whole name word
+ * (length >= 2) with a roster member's name or goes-by name is ambiguous too, so
+ * "Jon Smith" next to "John Smith" is never a silent second Person.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -22,9 +27,10 @@ import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
 import { matchTier } from "#/lib/person-search";
+import { toStoredPhone } from "#/lib/phone";
 import { buildImportPreview } from "#/lib/roster-import";
+import { loadClubDefaultCountryCode } from "#/server/clubs-logic";
 import { applyBulkImport } from "#/server/members-logic";
-import { requireClubAdminStanding } from "../admin-only";
 import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
@@ -66,10 +72,10 @@ const inputSchema = {
 };
 
 export const PLAN_STALE_MESSAGE =
-	"The roster changed since you previewed this. Review the fresh plan and ask the user again.";
+	"The plan changed since you previewed this (the roster, or which names you confirmed in confirmNew). Preview again with the same input, show the fresh plan, and ask the user again.";
 
 type Verdict = "would_add" | "skipped" | "ambiguous";
-type SkipReason = "already_on_roster" | "blank_name" | "invalid_email";
+type SkipReason = "already_on_roster" | "invalid_email";
 
 interface PlanRow {
 	index: number;
@@ -86,8 +92,23 @@ interface PlanRow {
 
 const fold = (s: string) => s.trim().toLowerCase();
 
+/** Whole words of a name, case-folded, length >= 2. */
+const wordsOf = (s: string | null | undefined) =>
+	fold(s ?? "")
+		.split(/\s+/)
+		.filter((w) => w.length >= 2);
+
+function sharesWord(
+	name: string,
+	m: { name: string; preferredName: string | null },
+) {
+	const mine = new Set(wordsOf(name));
+	return [...wordsOf(m.name), ...wordsOf(m.preferredName)].some((w) =>
+		mine.has(w),
+	);
+}
+
 function skipReasonOf(issues: string[]): SkipReason {
-	if (issues.includes("blank-name")) return "blank_name";
 	if (issues.includes("invalid-email")) return "invalid_email";
 	return "already_on_roster";
 }
@@ -95,7 +116,6 @@ function skipReasonOf(issues: string[]): SkipReason {
 const SKIP_TEXT: Record<SkipReason, string> = {
 	already_on_roster:
 		"skipped: already on the roster (or repeated in this call)",
-	blank_name: "skipped: no name",
 	invalid_email: "skipped: the email address is not valid",
 };
 
@@ -114,6 +134,7 @@ async function planRows(
 		.from(members)
 		.innerJoin(people, eq(people.id, members.personId))
 		.where(eq(members.clubId, clubId));
+	const cc = await loadClubDefaultCountryCode(clubId);
 	const preview = buildImportPreview(
 		rows.map((r) => ({
 			name: r.name,
@@ -128,7 +149,8 @@ async function planRows(
 			index,
 			name: p.name.trim(),
 			email: p.email.trim() || null,
-			phone: p.phone.trim() || null,
+			// As it will be STORED, so a changed club country code makes a hash stale.
+			phone: toStoredPhone(p.phone, cc),
 			possibleMatches: [] as PlanRow["possibleMatches"],
 			confirmed: false,
 		};
@@ -145,7 +167,8 @@ async function planRows(
 			.filter(
 				(m) =>
 					matchTier(base.name, m) !== null ||
-					matchTier(m.name, { name: base.name }) !== null,
+					matchTier(m.name, { name: base.name }) !== null ||
+					sharesWord(base.name, m),
 			)
 			.slice(0, MAX_MATCHES);
 		if (close.length === 0) {
@@ -159,7 +182,7 @@ async function planRows(
 		return {
 			...base,
 			verdict: "ambiguous" as const,
-			reason: `ambiguous: possible match for ${close.map((m) => m.name).join(", ")}. Ask the user whether this is someone new; if so list the name in confirmNew.`,
+			reason: `ambiguous: possible match for ${close.map((m) => m.name).join(", ")}. Ask the user whether this is someone new; if so, PREVIEW AGAIN with the name in confirmNew, then apply with that new planHash.`,
 			skipReason: null,
 			possibleMatches: close.map((m) => ({ memberId: m.id, name: m.name })),
 			confirmed: confirmNew.has(fold(base.name)),
@@ -192,13 +215,17 @@ export const addMembersTool: McpToolDefinition = {
 		title: "Add members to the roster",
 		description:
 			"Add one or more new members (name, optional email and phone) as a club " +
-			"admin would with Roster -> Add member. Admins only. Call once WITHOUT " +
+			"admin would with Roster -> Add member. Call once WITHOUT " +
 			"planHash to preview: it writes nothing and lists, per row, would_add, " +
 			"skipped (already on the roster) or ambiguous (a possible match for an " +
 			"existing member), plus a planHash. An ambiguous row is NEVER added " +
 			"unless the user confirmed it is a new person and you list its name in " +
-			"confirmNew: ask the user, never guess. Show the plan in full; after " +
-			"they agree, call again with the same input plus the planHash. New " +
+			"confirmNew: ask the user, never guess. confirmNew is part of the plan, " +
+			"so after the user confirms a name, PREVIEW AGAIN (no planHash) with " +
+			"confirmNew filled, show that plan, and apply with THAT new planHash; " +
+			"an old planHash with confirmNew added is PLAN_STALE. Show the plan in " +
+			"full; after they agree, call again with the same input plus the " +
+			"planHash. New " +
 			"members are active with no office. Pass startOrientation true only if " +
 			"asked. GavelUp messages no one.",
 		inputSchema,
@@ -206,7 +233,6 @@ export const addMembersTool: McpToolDefinition = {
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
 		const { club, user } = await authorizeToken(ctx, args.clubId);
-		await requireClubAdminStanding(user.id, club);
 		const confirmNew = new Set((args.confirmNew ?? []).map(fold));
 
 		const hashOf = (rows: PlanRow[]) =>
@@ -258,6 +284,14 @@ export const addMembersTool: McpToolDefinition = {
 			added: result.inserted,
 			addedMemberIds: result.insertedIds,
 			notAdded: rows.filter((r) => !lands(r)),
+			// Planned but not inserted: a row became a duplicate between plan and write.
+			skippedAtWrite: toAdd.length - result.inserted,
+			...(toAdd.length > result.inserted
+				? {
+						skippedAtWriteNote:
+							"Some planned rows were not added because they became duplicates while writing. Preview again to see the roster as it is now.",
+					}
+				: {}),
 			note: "GavelUp tells no one. Let the new members know yourself.",
 		};
 	},

@@ -1,7 +1,7 @@
 /**
  * DB-backed tests for `add_members` and `edit_member` (#1563): preview writes
  * nothing, the apply goes through the roster's own writers, the officer-listed
- * tools refuse a non-admin, and a stale plan returns PLAN_STALE.
+ * tools admit an admin or open-term officer and refuse a plain member, and a stale plan returns PLAN_STALE.
  */
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	apiTokens,
+	clubs,
 	members,
 	officerTerms,
 	people,
@@ -29,7 +30,7 @@ const { addMembersTool } = await import("#/server/mcp/tools/add-members");
 const { editMemberTool } = await import("#/server/mcp/tools/edit-member");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { NOT_OFFICER_MESSAGE } = await import("#/server/mcp/authz-logic");
-const { ADMIN_ONLY_MESSAGE } = await import("#/server/mcp/admin-only");
+const membersLogic = await import("#/server/members-logic");
 const { EMAIL_REFUSED_MESSAGES } = await import(
 	"#/server/mcp/tools/edit-member"
 );
@@ -302,26 +303,178 @@ describe.skipIf(!hasTestDb)("add_members (#1563)", () => {
 		expect(await rosterCount(s.clubId)).toBe(before);
 	});
 
-	it("refuses an open-term non-admin officer and a plain member; admin succeeds", async () => {
+	it("admits an admin and an open-term officer (clubRole member), refuses a plain member", async () => {
 		const { s, adminToken } = await fixture();
-		const input = { clubId: s.clubId, rows: [{ name: "Zed Newcomer" }] };
-		expect(await outcome(run(addMembersTool, adminToken, input))).toMatchObject(
-			{ ok: true },
-		);
-		expect(
-			await outcome(run(addMembersTool, await officerToken(s.clubId), input)),
-		).toMatchObject({
-			ok: false,
-			code: "FORBIDDEN",
-			message: ADMIN_ONLY_MESSAGE,
+		const input = (name: string) => ({
+			clubId: s.clubId,
+			rows: [{ name }],
+		});
+		const applyAs = async (token: string, name: string) => {
+			const p = (await run(addMembersTool, token, input(name))) as AddPlan;
+			return outcome(
+				run(addMembersTool, token, { ...input(name), planHash: p.planHash }),
+			);
+		};
+		expect(await applyAs(adminToken, "Zed Newcomer")).toMatchObject({
+			ok: true,
+			value: { added: 1 },
 		});
 		expect(
-			await outcome(run(addMembersTool, await tokenFor(s.memberUserId), input)),
+			await applyAs(await officerToken(s.clubId), "Yara Officerpick"),
+		).toMatchObject({ ok: true, value: { added: 1 } });
+		expect(
+			await outcome(
+				run(
+					addMembersTool,
+					await tokenFor(s.memberUserId),
+					input("Xavier Nope"),
+				),
+			),
 		).toMatchObject({
 			ok: false,
 			code: "FORBIDDEN",
 			message: NOT_OFFICER_MESSAGE,
 		});
+	});
+
+	const logCount = async (clubId: string) =>
+		(
+			await testDb
+				.select({ id: activityLog.id })
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.clubId, clubId),
+						eq(activityLog.action, "member_add"),
+					),
+				)
+		).length;
+
+	it("an apply where nothing lands inserts no row and logs no member_add", async () => {
+		const { s, adminToken } = await fixture();
+		const input = { clubId: s.clubId, rows: [{ name: "John" }] };
+		const p = (await run(addMembersTool, adminToken, input)) as AddPlan;
+		const before = await rosterCount(s.clubId);
+		const logs = await logCount(s.clubId);
+		const res = (await run(addMembersTool, adminToken, {
+			...input,
+			planHash: p.planHash,
+		})) as { added: number; addedMemberIds: string[]; notAdded: unknown[] };
+		expect(res.added).toBe(0);
+		expect(res.addedMemberIds).toEqual([]);
+		expect(res.notAdded).toHaveLength(1);
+		expect(await rosterCount(s.clubId)).toBe(before);
+		expect(await logCount(s.clubId)).toBe(logs);
+	});
+
+	it("skips a row with an invalid email, in preview and apply", async () => {
+		const { s, adminToken } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			rows: [{ name: "Qux Person", email: "not-an-email" }],
+		};
+		const p = (await run(addMembersTool, adminToken, input)) as {
+			plan: { rows: { verdict: string; skipReason: string }[] };
+			planHash: string;
+		};
+		expect(p.plan.rows[0]).toMatchObject({
+			verdict: "skipped",
+			skipReason: "invalid_email",
+		});
+		const before = await rosterCount(s.clubId);
+		const res = (await run(addMembersTool, adminToken, {
+			...input,
+			planHash: p.planHash,
+		})) as { added: number };
+		expect(res.added).toBe(0);
+		expect(await rosterCount(s.clubId)).toBe(before);
+	});
+
+	it("marks a row sharing a whole name word with a member ambiguous (Jon vs John Smith)", async () => {
+		const { s, adminToken } = await fixture();
+		const out = (await run(addMembersTool, adminToken, {
+			clubId: s.clubId,
+			rows: [{ name: "Jon Smith" }, { name: "Zed Newcomer" }],
+		})) as AddPlan & {
+			plan: {
+				rows: { verdict: string; possibleMatches: { name: string }[] }[];
+			};
+		};
+		expect(out.plan.rows.map((r) => r.verdict)).toEqual([
+			"ambiguous",
+			"would_add",
+		]);
+		expect(out.plan.rows[0]?.possibleMatches.map((m) => m.name)).toEqual([
+			"John Smith",
+		]);
+	});
+
+	it("an old planHash with confirmNew added is PLAN_STALE, and the message names confirmNew", async () => {
+		const { s, adminToken } = await fixture();
+		const input = { clubId: s.clubId, rows: [{ name: "John" }] };
+		const p = (await run(addMembersTool, adminToken, input)) as AddPlan;
+		expect(p.plan.rows[0]?.reason).toContain("PREVIEW AGAIN");
+		const out = await outcome(
+			run(addMembersTool, adminToken, {
+				...input,
+				confirmNew: ["John"],
+				planHash: p.planHash,
+			}),
+		);
+		expect(out).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		expect((out as { message: string }).message).toContain("confirmNew");
+		expect(addMembersTool.config.description).toContain("PREVIEW AGAIN");
+	});
+
+	it("previews the phone as it will be stored, and a changed club country code makes the hash stale", async () => {
+		const { s, adminToken } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			rows: [{ name: "Zed Newcomer", phone: "(555) 000-3333" }],
+		};
+		const p = (await run(addMembersTool, adminToken, input)) as AddPlan & {
+			plan: { rows: { phone: string }[] };
+		};
+		expect(p.plan.rows[0]?.phone).toBe("+15550003333");
+		await testDb
+			.update(clubs)
+			.set({ defaultCountryCode: "+44" })
+			.where(eq(clubs.id, s.clubId));
+		const out = await outcome(
+			run(addMembersTool, adminToken, { ...input, planHash: p.planHash }),
+		);
+		expect(out).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		expect(
+			(out as { err: { detail: { plan: { rows: { phone: string }[] } } } }).err
+				.detail.plan.rows[0]?.phone,
+		).not.toBe("+15550003333");
+	});
+
+	it("reports a planned row the writer did not insert as skippedAtWrite", async () => {
+		const { s, adminToken } = await fixture();
+		const input = { clubId: s.clubId, rows: [{ name: "Zed Newcomer" }] };
+		const p = (await run(addMembersTool, adminToken, input)) as AddPlan;
+		const spy = vi.spyOn(membersLogic, "applyBulkImport").mockResolvedValue({
+			insertedIds: [],
+			inserted: 0,
+			skipped: 1,
+			skippedOfficerAssignments: 0,
+		});
+		try {
+			const res = (await run(addMembersTool, adminToken, {
+				...input,
+				planHash: p.planHash,
+			})) as {
+				added: number;
+				skippedAtWrite: number;
+				skippedAtWriteNote: string;
+			};
+			expect(res.added).toBe(0);
+			expect(res.skippedAtWrite).toBe(1);
+			expect(res.skippedAtWriteNote).toContain("duplicates");
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 
@@ -524,31 +677,150 @@ describe.skipIf(!hasTestDb)("edit_member (#1563)", () => {
 		).toMatchObject({ ok: false, code: "VALIDATION" });
 	});
 
-	it("refuses an open-term non-admin officer and a plain member; admin succeeds", async () => {
+	it("admits an admin and an open-term officer (clubRole member), refuses a plain member", async () => {
+		const { s, adminToken, target } = await fixture();
+		const input = (name: string) => ({
+			clubId: s.clubId,
+			memberId: target.memberId,
+			name,
+		});
+		const applyAs = async (token: string, name: string) => {
+			const p = (await run(editMemberTool, token, input(name))) as EditPlan;
+			return outcome(
+				run(editMemberTool, token, { ...input(name), planHash: p.planHash }),
+			);
+		};
+		expect(await applyAs(adminToken, "Robert Rowe")).toMatchObject({
+			ok: true,
+		});
+		expect(
+			await applyAs(await officerToken(s.clubId), "Robert Row"),
+		).toMatchObject({ ok: true });
+		expect((await memberOf(target.memberId))?.name).toBe("Robert Row");
+		expect(
+			await outcome(
+				run(editMemberTool, await tokenFor(s.memberUserId), input("Nope")),
+			),
+		).toMatchObject({
+			ok: false,
+			code: "FORBIDDEN",
+			message: NOT_OFFICER_MESSAGE,
+		});
+	});
+
+	it("a malformed email is VALIDATION in preview and apply, and nothing is written", async () => {
 		const { s, adminToken, target } = await fixture();
 		const input = {
 			clubId: s.clubId,
 			memberId: target.memberId,
 			name: "Robert Rowe",
+			email: "not-an-email",
 		};
 		expect(await outcome(run(editMemberTool, adminToken, input))).toMatchObject(
-			{
-				ok: true,
-			},
+			{ ok: false, code: "VALIDATION" },
 		);
 		expect(
-			await outcome(run(editMemberTool, await officerToken(s.clubId), input)),
-		).toMatchObject({
-			ok: false,
-			code: "FORBIDDEN",
-			message: ADMIN_ONLY_MESSAGE,
+			await outcome(
+				run(editMemberTool, adminToken, { ...input, planHash: "x" }),
+			),
+		).toMatchObject({ ok: false, code: "VALIDATION" });
+		expect((await memberOf(target.memberId))?.name).toBe("Robert Roe");
+		expect((await personOf(target.personId))?.email).toBe(
+			"robert@example.test",
+		);
+	});
+
+	it("a case-only email change is not a change for a signed-in person, but is for a free one", async () => {
+		const s = await club();
+		const adminToken = await tokenFor(s.adminUserId);
+		const userId = randomUUID();
+		await testDb.insert(user).values({
+			id: userId,
+			name: "Bound",
+			email: `bound-${userId}@test.example`,
+			emailVerified: true,
 		});
-		expect(
-			await outcome(run(editMemberTool, await tokenFor(s.memberUserId), input)),
-		).toMatchObject({
-			ok: false,
-			code: "FORBIDDEN",
-			message: NOT_OFFICER_MESSAGE,
+		extraUserIds.push(userId);
+		const bound = await addRoster(s.clubId, {
+			name: "Bea Bound",
+			email: "bea@example.test",
+			userId,
+		});
+		const free = await addRoster(s.clubId, {
+			name: "Fred Free",
+			email: "fred@example.test",
+		});
+		const boundPlan = (await run(editMemberTool, adminToken, {
+			clubId: s.clubId,
+			memberId: bound.memberId,
+			email: " BEA@Example.test ",
+		})) as EditPlan;
+		expect(boundPlan.plan.changes).toEqual([]);
+		expect(boundPlan.plan.emailRefusal).toBeNull();
+		const freeInput = {
+			clubId: s.clubId,
+			memberId: free.memberId,
+			email: "Fred@Example.test",
+		};
+		const freePlan = (await run(
+			editMemberTool,
+			adminToken,
+			freeInput,
+		)) as EditPlan;
+		expect(freePlan.plan.changes.map((c) => c.field)).toEqual(["email"]);
+		await run(editMemberTool, adminToken, {
+			...freeInput,
+			planHash: freePlan.planHash,
+		});
+		expect((await personOf(free.personId))?.email).toBe("Fred@Example.test");
+	});
+
+	it("an apply with no changes writes nothing and logs no member_edit", async () => {
+		const { s, adminToken, target } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			memberId: target.memberId,
+			name: "Robert Roe",
+		};
+		const p = (await run(editMemberTool, adminToken, input)) as EditPlan;
+		expect(p.plan.changes).toEqual([]);
+		const res = (await run(editMemberTool, adminToken, {
+			...input,
+			planHash: p.planHash,
+		})) as { applied: boolean; changed: unknown[] };
+		expect(res).toMatchObject({ applied: true, changed: [] });
+		const log = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, target.memberId),
+					eq(activityLog.action, "member_edit"),
+				),
+			);
+		expect(log).toHaveLength(0);
+	});
+
+	it("blank strings clear preferredName, email and phone", async () => {
+		const { s, adminToken, target } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			memberId: target.memberId,
+			preferredName: "",
+			email: "",
+			phone: "",
+		};
+		const p = (await run(editMemberTool, adminToken, input)) as EditPlan;
+		expect(p.plan.changes.map((c) => [c.field, c.after])).toEqual([
+			["preferredName", null],
+			["email", null],
+			["phone", null],
+		]);
+		await run(editMemberTool, adminToken, { ...input, planHash: p.planHash });
+		expect((await memberOf(target.memberId))?.preferredName).toBeNull();
+		expect(await personOf(target.personId)).toMatchObject({
+			email: null,
+			phone: null,
 		});
 	});
 });
