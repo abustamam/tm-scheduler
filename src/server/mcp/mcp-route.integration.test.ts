@@ -195,6 +195,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"edit_agenda",
+			"edit_role_slots",
 			"find_people",
 			"get_agenda",
 			"get_import_report",
@@ -626,6 +627,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("update_meeting_schedule", {
 				clubId: seed.clubId,
 				scheduleText: "Tuesdays 7 PM",
+			}),
+			// #1542. A preview only (no planHash): names holders and roles, never a
+			// guest row.
+			toolsCall("edit_role_slots", {
+				meetingId: seed.meetingId,
+				operations: [{ op: "add", role: "Timer" }],
 			}),
 			// #1543. A preview only (no planHash): names members, reads their
 			// contact detail to decide, and must never echo it.

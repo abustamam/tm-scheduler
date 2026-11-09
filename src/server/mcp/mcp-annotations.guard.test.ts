@@ -60,6 +60,7 @@ describe("MCP tool annotations", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"edit_agenda",
+			"edit_role_slots",
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",

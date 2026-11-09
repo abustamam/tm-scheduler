@@ -18,6 +18,7 @@ import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
 import { editAgendaTool } from "./edit-agenda";
+import { editRoleSlotsTool } from "./edit-role-slots";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
 import { getImportReportTool } from "./get-import-report";
@@ -53,6 +54,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	setAwardsTool,
 	upsertAgendasTool,
 	editAgendaTool,
+	editRoleSlotsTool,
 	cancelMeetingTool,
 	restoreMeetingTool,
 	rescheduleMeetingTool,
