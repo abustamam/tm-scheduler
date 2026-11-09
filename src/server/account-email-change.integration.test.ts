@@ -68,10 +68,26 @@ const mails = (): Sent[] =>
 		text: m.text,
 	}));
 
+// Better Auth keeps its rate-limit counts in a module-level in-process Map
+// (default `memory` storage; this repo sets no secondaryStorage or
+// customStorage), keyed `${ip}|${path}` on the full address from `x-real-ip`.
+// The Map is per module instance, i.e. per vitest file, so a counter is
+// collision-free for the whole run (#1545). Random bytes were not: ~10 draws
+// from ~65k addresses collided often enough to hand one test another's count.
+let ipCounter = 0;
 function freshIp(): string {
-	const [a, b] = randomBytes(2);
-	return `198.19.${a ?? 0}.${1 + ((b ?? 0) % 254)}`;
+	const n = ipCounter++;
+	if (n >= 254 * 254) throw new Error("freshIp: address space exhausted");
+	return `198.19.${1 + Math.floor(n / 254)}.${1 + (n % 254)}`;
 }
+
+describe("freshIp (#1545)", () => {
+	it("never repeats an address across many calls", () => {
+		const seen = new Set<string>();
+		for (let i = 0; i < 5000; i++) seen.add(freshIp());
+		expect(seen.size).toBe(5000);
+	});
+});
 
 describe.skipIf(!hasTestDb)("changing your own sign-in address (#1091)", () => {
 	const SUFFIX = randomBytes(4).toString("hex");
