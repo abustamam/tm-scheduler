@@ -14,10 +14,12 @@
  * ungated `getMeeting` with the guard green.
  */
 import type { McpToolDefinition } from "../tool";
+import { addMembersTool } from "./add-members";
 import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
 import { editAgendaTool } from "./edit-agenda";
+import { editMemberTool } from "./edit-member";
 import { editRoleSlotsTool } from "./edit-role-slots";
 import { findPeopleTool } from "./find-people";
 import { getAgendaTool } from "./get-agenda";
@@ -60,4 +62,6 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	rescheduleMeetingTool,
 	updateMeetingScheduleTool,
 	setContactPreferenceTool,
+	addMembersTool,
+	editMemberTool,
 ];

@@ -77,6 +77,10 @@ async function outcome(p: Promise<unknown>) {
 /** A valid-shaped input per officer tool for club `s` (previews, never applies). */
 function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 	return {
+		add_members: {
+			clubId: s.clubId,
+			rows: [{ name: "Zed Newcomer" }],
+		},
 		assign_roles: {
 			meetingId: s.meetingId,
 			assignments: [{ slotId: s.slotId, memberId: s.memberId }],
@@ -85,6 +89,11 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 		edit_agenda: {
 			meetingId: s.meetingId,
 			operations: [{ op: "add", label: "Break", minutes: 5 }],
+		},
+		edit_member: {
+			clubId: s.clubId,
+			memberId: s.memberId,
+			name: "Renamed Member",
 		},
 		edit_role_slots: {
 			meetingId: s.meetingId,
@@ -136,7 +145,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(17);
+		expect(OFFICER_TOOLS).toHaveLength(19);
 	});
 
 	it.each(

@@ -60,6 +60,7 @@ describe("MCP tool annotations", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"edit_agenda",
+			"edit_member",
 			"edit_role_slots",
 			"set_attendance",
 			"set_awards",
@@ -77,6 +78,7 @@ describe("MCP tool annotations", () => {
 			.sort();
 		expect(idempotent).toEqual([
 			"cancel_meeting",
+			"edit_member",
 			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",

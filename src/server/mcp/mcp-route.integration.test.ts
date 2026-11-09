@@ -191,10 +191,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			result: { tools: { name: string }[] };
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
+			"add_members",
 			"assign_roles",
 			"cancel_meeting",
 			"claim_open_role",
 			"edit_agenda",
+			"edit_member",
 			"edit_role_slots",
 			"find_people",
 			"get_agenda",
@@ -640,6 +642,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				clubId: seed.clubId,
 				memberIds: [seed.memberId],
 				method: "email",
+			}),
+			// #1563. Previews only: a new name, and a name-only edit (which shows
+			// only the changed field, never the contact detail).
+			toolsCall("add_members", {
+				clubId: seed.clubId,
+				rows: [{ name: "Zed Newcomer" }],
+			}),
+			toolsCall("edit_member", {
+				clubId: seed.clubId,
+				memberId: seed.memberId,
+				name: "Renamed Member",
 			}),
 		];
 		const rawByTool = new Map<string, string>();
