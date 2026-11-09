@@ -106,6 +106,11 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 			meetingId: s.meetingId,
 			awards: [{ category: "best_speaker", memberId: s.memberId }],
 		},
+		set_contact_preference: {
+			clubId: s.clubId,
+			memberIds: [s.memberId],
+			method: "none",
+		},
 		update_meeting_schedule: {
 			clubId: s.clubId,
 			scheduleText: "Tuesdays 7 PM",
@@ -127,7 +132,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(15);
+		expect(OFFICER_TOOLS).toHaveLength(16);
 	});
 
 	it.each(
