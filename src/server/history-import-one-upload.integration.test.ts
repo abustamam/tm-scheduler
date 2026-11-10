@@ -1747,5 +1747,53 @@ describe.skipIf(!hasTestDb)(
 				.where(eq(officerTerms.membershipId, pia?.id as string));
 			expect(term?.start?.toISOString()).toBe("2026-10-11T07:00:00.000Z");
 		});
+
+		// protects=a "New member" answer over a same-name link writes one new member, a "Yes, link" answer on a new member writes none, and the stored report names who was created (#1589);
+		// fails_when=the same-name person stays linked, the linked person is created anyway, or the report's names are missing or name the linked person;
+		// no_claim=the panel that sends these answers (component tests); the bundle is the extension's fixture rewritten.
+		it("applies a create over a same-name link and a link over a create, and names the created", async () => {
+			extraResolutions = {
+				[`es:${P(7)}`]: { action: "create" },
+				[`es:${P(4)}`]: { action: "member", memberId: adaMemberId },
+			};
+			const stored = await upload();
+			const shown = await preview(stored.importId);
+			const outcomeOf = (key: string) =>
+				shown.people.find((p) => p.key === `es:${key}`);
+			expect(outcomeOf(P(7))).toMatchObject({
+				status: "create",
+				membership: "former",
+			});
+			expect(outcomeOf(P(4))).toMatchObject({
+				status: "member",
+				via: "chosen",
+				memberId: adaMemberId,
+			});
+			expect(shown.canApply).toBe(true);
+			await apply(stored.importId, undefined, shown.planHash);
+
+			const adas = await testDb
+				.select({ id: members.id })
+				.from(members)
+				.where(
+					and(eq(members.clubId, seed.clubId), eq(members.name, "Ada Linked")),
+				);
+			expect(adas).toHaveLength(2);
+			const created = adas.find((m) => m.id !== adaMemberId);
+			expect(await refsFor(P(7))).toEqual([{ targetId: created?.id }]);
+			expect(await memberByName("Tom Pastmeeting")).toBeUndefined();
+			expect(await refsFor(P(4))).toEqual([{ targetId: adaMemberId }]);
+
+			const after = await preview(stored.importId);
+			const names = after.report?.created.people ?? [];
+			expect(names).toEqual(
+				expect.arrayContaining([
+					{ name: "Ada Linked", membership: "former", officer: false },
+					{ name: "Pia President", membership: "active", officer: true },
+					{ name: "Gia Guest", membership: "guest", officer: false },
+				]),
+			);
+			expect(names.map((p) => p.name)).not.toContain("Tom Pastmeeting");
+		});
 	},
 );

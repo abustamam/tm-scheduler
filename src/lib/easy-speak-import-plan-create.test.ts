@@ -514,3 +514,211 @@ describe("pasted contacts (#1240)", () => {
 		expect(plan.contactWarnings).toEqual([]);
 	});
 });
+
+describe("likely-duplicate suggestions on a new member (#1589)", () => {
+	const TISHIANA: PlanRosterMember = {
+		memberId: id(11),
+		name: "Tishiana Roe-Smith",
+	};
+	const TISH_KEY = "es:900201";
+	const tish = () =>
+		bundleWith({
+			holders: [{ role: "Timer", who: ref("900201", "Tish Roe") }],
+		});
+	const tishOf = (plan: ReturnType<typeof buildImportPlan>) =>
+		plan.people.find((p) => p.key === TISH_KEY);
+
+	// protects=a new member whose name is likely a roster member's carries that member as a suggestion, stays a create and blocks nothing;
+	// fails_when=the suggestion is missing, turns the person into a question, or holds Apply back;
+	// no_claim=the panel's rendering; a handmade bundle stands in for an export.
+	it("suggests the likely member, keeps the create and does not block", () => {
+		const plan = buildImportPlan(tish(), ctx({ roster: [ADA, TISHIANA] }));
+		const p = tishOf(plan);
+		expect(p?.outcome.status).toBe("create");
+		expect(p?.suggestions).toEqual([TISHIANA]);
+		expect(p && needsDecision(p)).toBe(false);
+		expect(plan.canApply).toBe(true);
+		expect(plan.unresolved).toEqual([]);
+	});
+
+	// protects=at most three suggestions, in name order;
+	// fails_when=a fourth likely member is listed, or the order is the roster's;
+	// no_claim=which three when more than three tie beyond name order.
+	it("caps the suggestions at three, by name", () => {
+		const roster = [
+			{ memberId: id(24), name: "Tina Roe" },
+			{ memberId: id(21), name: "Tara Roe" },
+			{ memberId: id(23), name: "Tess Roe" },
+			{ memberId: id(22), name: "Tanya Roe" },
+		];
+		const plan = buildImportPlan(tish(), ctx({ roster }));
+		expect(tishOf(plan)?.suggestions.map((m) => m.name)).toEqual([
+			"Tanya Roe",
+			"Tara Roe",
+			"Tess Roe",
+		]);
+	});
+
+	// protects=a person linked to a member gets no suggestions;
+	// fails_when=a linked person lists a likely member;
+	// no_claim=none beyond protects.
+	it("gives no suggestions to a linked member", () => {
+		const bundle = bundleWith({
+			holders: [{ role: "Timer", who: ref("900202", "Tishiana Roe-Smith") }],
+		});
+		const roster = [TISHIANA, { memberId: id(12), name: "Tish Roe-Smith" }];
+		const plan = buildImportPlan(bundle, ctx({ roster }));
+		const p = plan.people.find((x) => x.key === "es:900202");
+		expect(p?.outcome).toMatchObject({ status: "member", via: "exact" });
+		expect(p?.suggestions).toEqual([]);
+	});
+
+	// protects=a guest gets no suggestions, even with a likely member on the roster;
+	// fails_when=a guest lists a likely member;
+	// no_claim=a "Same person as" picker for guests (out of scope).
+	it("gives no suggestions to a guest", () => {
+		const bundle = bundleWith({
+			guests: [{ who: ref("900203", "Tish Roe"), category: "visitor" }],
+		});
+		const plan = buildImportPlan(bundle, ctx({ roster: [TISHIANA] }));
+		const p = plan.people.find((x) => x.key === "es:900203");
+		expect(p?.outcome.status).toBe("guest");
+		expect(p?.suggestions).toEqual([]);
+	});
+});
+
+describe('a saved "create" over an automatic link (#1589)', () => {
+	const LINKED_KEY = "es:900301";
+	const linkedBundle = (name: string, listed = true) =>
+		bundleWith({
+			people: listed
+				? [
+						{
+							esUserId: "900301",
+							name,
+							status: "Vice President Education",
+							joined: "2024-03-04",
+						},
+					]
+				: [],
+			holders: [{ role: "Timer", who: ref("900301", name) }],
+		});
+	const create = { [LINKED_KEY]: { action: "create" as const } };
+	const SET_ASIDE = (name: string) =>
+		`${name}: the saved answer "create" is set aside; they are matched automatically.`;
+	const of = (plan: ReturnType<typeof buildImportPlan>) =>
+		plan.people.find((p) => p.key === LINKED_KEY);
+
+	// protects=a saved create over a same-name link makes a new member from the member-list row;
+	// fails_when=the link stays, or the create ignores the row's membership, office or joined date;
+	// no_claim=the apply's write (the integration test's).
+	it("makes a new member over an exact-name link, from the member-list row", () => {
+		const auto = buildImportPlan(linkedBundle("Ada Linked"), ctx());
+		expect(of(auto)?.outcome).toMatchObject({ status: "member", via: "exact" });
+		const plan = buildImportPlan(
+			linkedBundle("Ada Linked"),
+			ctx({ resolutions: create }),
+		);
+		expect(of(plan)?.outcome).toEqual({
+			status: "create",
+			membership: "active",
+			position: "vp_education",
+			joinedAt: "2024-03-04",
+		});
+		expect(plan.notes).not.toContain(SET_ASIDE("Ada Linked"));
+	});
+
+	// protects=a saved create over a folded-name link with no member-list row makes a former member;
+	// fails_when=the link stays, or the create is made active;
+	// no_claim=none beyond protects.
+	it("makes a former member over a folded-name link with no list row", () => {
+		const bundle = linkedBundle("ADA  linked", false);
+		const auto = buildImportPlan(bundle, ctx());
+		expect(of(auto)?.outcome).toMatchObject({
+			status: "member",
+			via: "folded",
+		});
+		const plan = buildImportPlan(bundle, ctx({ resolutions: create }));
+		expect(of(plan)?.outcome).toEqual({
+			status: "create",
+			membership: "former",
+			position: null,
+			joinedAt: null,
+		});
+	});
+
+	// protects=a saved create over an email link makes a new member;
+	// fails_when=the email link stays;
+	// no_claim=the contact fill's destination; contactState stands in for the people table.
+	it("makes a new member over an email link", () => {
+		const bundle = linkedBundle("Ada Elsewhere");
+		const withEmail = (over: Partial<PlanContext> = {}) =>
+			ctx({
+				contacts: "Ada Elsewhere, ada@example.test, ",
+				contactState: {
+					members: new Map([
+						[
+							ADA.memberId,
+							{
+								personId: "person-ada",
+								email: "ada@example.test",
+								phone: null,
+								emailWritable: true,
+							},
+						],
+					]),
+					emailHolders: new Map([
+						["ada@example.test", new Set(["person-ada"])],
+					]),
+				},
+				...over,
+			});
+		const auto = buildImportPlan(bundle, withEmail());
+		expect(of(auto)?.outcome).toMatchObject({ status: "member", via: "email" });
+		const plan = buildImportPlan(bundle, withEmail({ resolutions: create }));
+		expect(of(plan)?.outcome).toMatchObject({
+			status: "create",
+			membership: "active",
+		});
+	});
+
+	// protects=an earlier import's link is never re-pointed by a saved create, and a list-only person is never created;
+	// fails_when=either becomes a create, or the set-aside note is missing;
+	// no_claim=merging members, the way to fix an earlier import's link.
+	it("sets the answer aside over an earlier import's ref and for a list-only person", () => {
+		const refPlan = buildImportPlan(
+			linkedBundle("Ada Linked"),
+			ctx({
+				resolutions: create,
+				refs: [
+					{ kind: "person", sourceId: LINKED_KEY, targetId: ADA.memberId },
+				],
+			}),
+		);
+		expect(of(refPlan)?.outcome).toEqual({
+			status: "member",
+			memberId: ADA.memberId,
+			via: "ref",
+		});
+		expect(refPlan.notes).toContain(SET_ASIDE("Ada Linked"));
+
+		const listOnly = bundleWith({
+			people: [
+				{
+					esUserId: "900301",
+					name: "Ada Linked",
+					status: "Member",
+					joined: null,
+				},
+			],
+		});
+		const listPlan = buildImportPlan(listOnly, ctx({ resolutions: create }));
+		expect(of(listPlan)?.listOnly).toBe(true);
+		expect(of(listPlan)?.outcome).toMatchObject({
+			status: "member",
+			memberId: ADA.memberId,
+			via: "exact",
+		});
+		expect(listPlan.notes).toContain(SET_ASIDE("Ada Linked"));
+	});
+});

@@ -139,6 +139,7 @@ import { type ImportRefKind, importRefKindSchema } from "#/lib/import-refs";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { localDateKey } from "#/lib/meeting-url";
 import { monthLabel } from "#/lib/month-label";
+import { OFFICER_POSITION_LABELS } from "#/lib/officers";
 import { officialRosterComplete } from "#/lib/onboarding-checklist";
 import { toStoredPhone } from "#/lib/phone";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
@@ -957,6 +958,14 @@ export interface ImportPreviewPerson {
 	listOnly: boolean;
 	/** Whether the apply waits for a human's answer on this person. */
 	needsDecision: boolean;
+	/** For a `create`: roster members whose name is likely the same (#1589). Shown, never blocking. */
+	suggestions: PlanRosterMember[];
+	/** For a `create`: the membership it makes; null otherwise. */
+	membership: "active" | "former" | null;
+	/** For a `create`: the office it opens, as its display label; null otherwise. */
+	officer: string | null;
+	/** The speeches the imported meetings give this person (#1589). */
+	speeches: number;
 }
 
 export interface ImportPreview {
@@ -998,7 +1007,28 @@ export interface ImportPreview {
 	officialRoster: { official: number; active: number; complete: boolean };
 }
 
-function previewPerson(p: PlanPerson): ImportPreviewPerson {
+/** Speeches per person key in the plan's meetings; a merged alias counts for its person. */
+function speechesByPerson(plan: ImportPlan): Map<string, number> {
+	const alias = new Map<string, string>();
+	for (const p of plan.people) {
+		if (p.outcome.status !== "create") continue;
+		for (const k of p.outcome.mergedKeys ?? []) alias.set(k, p.key);
+	}
+	const out = new Map<string, number>();
+	for (const m of plan.meetings) {
+		for (const sl of m.slots) {
+			if (!sl.speech || !sl.holderKey) continue;
+			const key = alias.get(sl.holderKey) ?? sl.holderKey;
+			out.set(key, (out.get(key) ?? 0) + 1);
+		}
+	}
+	return out;
+}
+
+function previewPerson(
+	p: PlanPerson,
+	speeches: ReadonlyMap<string, number>,
+): ImportPreviewPerson {
 	const o = p.outcome;
 	return {
 		key: p.key,
@@ -1017,6 +1047,13 @@ function previewPerson(p: PlanPerson): ImportPreviewPerson {
 		appearances: p.appearances,
 		listOnly: p.listOnly,
 		needsDecision: needsDecision(p),
+		suggestions: p.suggestions,
+		membership: o.status === "create" ? o.membership : null,
+		officer:
+			o.status === "create" && o.position
+				? OFFICER_POSITION_LABELS[o.position]
+				: null,
+		speeches: speeches.get(p.key) ?? 0,
 	};
 }
 
@@ -1185,7 +1222,10 @@ export async function previewEasySpeakImport(input: {
 		warnings,
 		range,
 		counts: plan.counts,
-		people: plan.people.map(previewPerson),
+		people: (() => {
+			const speeches = speechesByPerson(plan);
+			return plan.people.map((p) => previewPerson(p, speeches));
+		})(),
 		roleDefinitions: plan.roleDefinitions.map((d) => ({
 			planKey: d.planKey,
 			name: d.name,
@@ -1272,6 +1312,8 @@ interface Resolved {
 	newRoleDefinitions: string[];
 	/** Members this apply made (#1240), and the Person of each. */
 	newMembers: { active: number; former: number; officers: number };
+	/** Who this apply created, members and guests, by name (#1589). */
+	newPeople: NonNullable<ImportReport["created"]["people"]>;
 	personByNewMember: Map<string, string>;
 	/** Contact values left blank at write time, by row and person: never a value. */
 	contactNotes: string[];
@@ -1400,6 +1442,7 @@ export async function writePeopleAndRoles(
 			newGuests: 0,
 			newRoleDefinitions: [],
 			newMembers: { active: 0, former: 0, officers: 0 },
+			newPeople: [],
 			personByNewMember: new Map(),
 			contactNotes: [],
 		};
@@ -1544,6 +1587,11 @@ export async function writePeopleAndRoles(
 			}
 			if (o.membership === "active") out.newMembers.active++;
 			else out.newMembers.former++;
+			out.newPeople.push({
+				name: person.name.trim(),
+				membership: o.membership,
+				officer: o.position !== null,
+			});
 			out.members.set(person.key, created.id);
 			out.personByNewMember.set(created.id, created.personId);
 			await putRef(tx, clubId, "person", person.key, created.id);
@@ -1618,6 +1666,11 @@ export async function writePeopleAndRoles(
 				});
 				out.guests.set(person.key, created.id);
 				out.newGuests++;
+				out.newPeople.push({
+					name: person.name,
+					membership: "guest",
+					officer: false,
+				});
 				await putRef(tx, clubId, "guest", person.key, created.id);
 			}
 		}
@@ -3126,6 +3179,11 @@ async function applyUnderImportLock(input: {
 			guests: resolved.newGuests,
 			roleDefinitions: resolved.newRoleDefinitions,
 			members: resolved.newMembers,
+			// A name can carry a NUL or a lone surrogate: scrubbed like every stored note.
+			people: resolved.newPeople.map((p) => ({
+				...p,
+				name: scrubJsonbText(p.name),
+			})),
 		},
 		omissions,
 		includeUpcoming: plan.upcoming.included,

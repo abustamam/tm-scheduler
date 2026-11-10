@@ -27,6 +27,7 @@ import {
 	previewEasySpeakImport,
 	uploadEasySpeakBundle,
 } from "#/server/history-import";
+import { PeopleList } from "./import-people-list";
 
 /**
  * The Easy-Speak history import (#1051), on the superadmin club page and, for a
@@ -590,20 +591,29 @@ export function ImportHistoryPanel({
 						</p>
 					) : null}
 
-					<p className="text-sm" data-testid="import-people-summary">
-						Will link {data.counts.linkedMembers} existing{" "}
-						{data.counts.linkedMembers === 1 ? "member" : "members"}, create{" "}
-						{data.counts.newActiveMembers} active{" "}
-						{data.counts.newActiveMembers === 1 ? "member" : "members"} (
-						{data.counts.newOfficers}{" "}
-						{data.counts.newOfficers === 1 ? "officer" : "officers"}) and{" "}
-						{data.counts.newFormerMembers} former{" "}
-						{data.counts.newFormerMembers === 1 ? "member" : "members"}, add{" "}
-						{data.counts.newGuests}{" "}
-						{data.counts.newGuests === 1 ? "guest" : "guests"}, and skip{" "}
-						{data.counts.erasedAccounts} erased{" "}
-						{data.counts.erasedAccounts === 1 ? "account" : "accounts"}.
-					</p>
+					<PeopleList
+						people={data.people}
+						roster={data.roster}
+						changed={new Set(Object.keys(resolutions))}
+						onLink={(key, memberId) =>
+							setDrafts((prev) => ({
+								...prev,
+								[key]: { ...EMPTY_DRAFT, choice: "member", memberId },
+							}))
+						}
+						onCreate={(key) =>
+							setDrafts((prev) => ({
+								...prev,
+								[key]: { ...EMPTY_DRAFT, choice: "create" },
+							}))
+						}
+						onUndo={(key) =>
+							setDrafts((prev) => {
+								const { [key]: _undone, ...rest } = prev;
+								return rest;
+							})
+						}
+					/>
 					{data.contacts.warnings.length > 0 ? (
 						<ul
 							className="list-disc space-y-0.5 pl-5 text-sm text-warning-foreground"
@@ -1131,6 +1141,45 @@ function ReportCounts({ counts }: { counts: ImportReport["counts"] }) {
 	);
 }
 
+/** How many created names the report shows before folding the rest away. */
+const CREATED_INLINE = 10;
+
+/** Who the apply created, by name (#1589): the first ten inline, the rest folded. */
+function CreatedPeople({
+	people,
+}: {
+	people: NonNullable<ImportReport["created"]["people"]>;
+}) {
+	if (people.length === 0) return null;
+	const label = (p: (typeof people)[number]) =>
+		`${p.name} (${p.membership === "guest" ? "guest" : `${p.membership} member`}${p.officer ? ", officer" : ""})`;
+	const inline = people.slice(0, CREATED_INLINE);
+	const rest = people.slice(CREATED_INLINE);
+	return (
+		<div className="text-sm" data-testid="report-created-people">
+			<p className="font-semibold">Created</p>
+			<ul className="list-disc pl-5">
+				{inline.map((p, i) => (
+					// Two people may share a name: the position keeps the keys apart.
+					// biome-ignore lint/suspicious/noArrayIndexKey: a stored list that never reorders
+					<li key={`${i}-${p.name}`}>{label(p)}</li>
+				))}
+			</ul>
+			{rest.length > 0 ? (
+				<details>
+					<summary className="cursor-pointer">and {rest.length} more</summary>
+					<ul className="list-disc pl-5">
+						{rest.map((p, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: a stored list that never reorders
+							<li key={`${i}-${p.name}`}>{label(p)}</li>
+						))}
+					</ul>
+				</details>
+			) : null}
+		</div>
+	);
+}
+
 function ReportView({ report }: { report: ImportReport }) {
 	return (
 		<div className="space-y-3 border-t border-border pt-3">
@@ -1182,6 +1231,9 @@ function ReportView({ report }: { report: ImportReport }) {
 						))}
 					</ul>
 				</div>
+			) : null}
+			{report.created.people ? (
+				<CreatedPeople people={report.created.people} />
 			) : null}
 			<p className="text-sm text-muted-foreground">
 				Created {report.created.guests} guests

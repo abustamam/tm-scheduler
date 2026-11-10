@@ -474,6 +474,7 @@ describe.skipIf(!hasTestDb)(
 					guestId: null,
 				},
 				rejectedChoice: null,
+				suggestions: [],
 			});
 			const plan: ImportPlan = {
 				people: [
