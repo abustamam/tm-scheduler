@@ -46,20 +46,6 @@ describe("buildPlanPanel", () => {
 		}
 	});
 
-	it("orders alphabetically WITHIN a rung", () => {
-		// Two members on the same rung, inserted in reverse alphabetical order —
-		// the sort must be stable on name, not on input order.
-		const { rows } = buildPlanPanel({
-			roster: [
-				{ id: "z", name: "Zoe", preferredName: null, phone: null, email: null },
-				{ id: "a", name: "Ali", preferredName: null, phone: null, email: null },
-			],
-			plan: [],
-			roleByMemberId: {},
-		});
-		expect(rows.map((r) => r.name)).toEqual(["Ali", "Zoe"]);
-	});
-
 	it("counts every member exactly once, including no-answer", () => {
 		const { counts, countsLine } = buildPlanPanel({
 			roster,

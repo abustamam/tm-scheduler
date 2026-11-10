@@ -972,7 +972,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 describe("plan filter chips (#1581)", () => {
 	afterEach(() => cleanup());
 
-	const names = ["Abdul-Rasheed Bustamam", "Ayesha Khan", "Bo Lin"];
+	const alphabetical = ["Abdul-Rasheed Bustamam", "Ayesha Khan", "Bo Lin"];
 	const chipRow = () =>
 		screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
 	const chip = (label: string) =>
@@ -983,9 +983,8 @@ describe("plan filter chips (#1581)", () => {
 	const order = () =>
 		screen
 			.getAllByRole("listitem")
-			.map((li) => names.find((n) => li.textContent?.includes(n)))
+			.map((li) => alphabetical.find((n) => li.textContent?.includes(n)))
 			.filter(Boolean);
-	const alphabetical = ["Abdul-Rasheed Bustamam", "Ayesha Khan", "Bo Lin"];
 
 	function mount(over: Parameters<typeof renderPanel>[0] = {}) {
 		const r = renderPanel(over);
@@ -1043,7 +1042,8 @@ describe("plan filter chips (#1581)", () => {
 
 	it("a zero chip is disabled; the selected chip never is", () => {
 		// protects=disabled rule; fails_when=a zero chip is tappable, or the
-		// selected chip locks itself out after its count reaches 0.
+		// selected chip locks itself out after its count reaches 0;
+		// no_claim=the chip's styling.
 		const { again } = mount();
 		expect(chip("Coming").hasAttribute("disabled")).toBe(true);
 		expect(chip("All").hasAttribute("disabled")).toBe(false);
@@ -1056,19 +1056,29 @@ describe("plan filter chips (#1581)", () => {
 		expect(chip("No answer").getAttribute("aria-pressed")).toBe("true");
 	});
 
-	it("a different meeting resets the filter to All", () => {
-		// protects=snapshot retaken on meeting change; fails_when=the old
-		// snapshot survives; no_claim=route-level remounting.
-		const { again } = mount({ plan: [{ memberId: "m1", status: "coming" }] });
-		fireEvent.click(chip("Coming"));
-		expect(order()).toEqual(["Ayesha Khan"]);
-		again({ meetingDate: "Tue 26 Aug" });
-		expect(chip("All").getAttribute("aria-pressed")).toBe("true");
-		expect(order()).toEqual(alphabetical);
+	it("tapping another chip retakes the snapshot", () => {
+		// protects=criterion 5 across chips; fails_when=the new chip lists the
+		// old chip's members; no_claim=re-tapping the same chip (its own test).
+		const { again } = mount();
+		fireEvent.click(chip("No answer"));
+		again({ rungOverride: { m2: "reached_out" } });
+		fireEvent.click(chip("Asked"));
+		expect(order()).toEqual(["Bo Lin"]);
+		fireEvent.click(chip("No answer"));
+		expect(order()).toEqual(["Abdul-Rasheed Bustamam", "Ayesha Khan"]);
+	});
+
+	it("the chips sit in a labelled group", () => {
+		// protects=AT grouping of the chips; fails_when=the group or its name is
+		// dropped; no_claim=how a screen reader announces it.
+		renderPanel();
+		const g = screen.getByRole("group", { name: "Filter by answer" });
+		expect(g.querySelectorAll("button[aria-pressed]")).toHaveLength(5);
 	});
 
 	it("roll mode renders no chips", () => {
-		// protects=roll mode unchanged; no_claim=roll ordering (existing tests).
+		// protects=roll mode unchanged; fails_when=chips leak into roll mode;
+		// no_claim=roll ordering (existing tests).
 		renderPanel({ mode: "roll", attendance: [], guests: [] });
 		expect(chipRow()).toHaveLength(0);
 	});

@@ -58,6 +58,19 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
 /** The plan list's filter chips (#1581), in their fixed order. */
 type PlanFilterKey = "all" | "none" | PlanStatus;
 
+/** Each chip's count, read off the panel. A `Record`, so a new rung is a type
+ *  error here until its chip is handled. */
+const PLAN_FILTER_COUNT: Record<
+	PlanFilterKey,
+	(p: ReturnType<typeof buildPlanPanel>) => number
+> = {
+	all: (p) => p.rows.length,
+	none: (p) => p.counts.noAnswer,
+	reached_out: (p) => p.counts.reachedOut,
+	coming: (p) => p.counts.coming,
+	not_coming: (p) => p.counts.notComing,
+};
+
 const PLAN_FILTERS: { key: PlanFilterKey; label: string }[] = [
 	{ key: "all", label: "All" },
 	{ key: "none", label: "No answer" },
@@ -1267,16 +1280,13 @@ export function MeetingAttendancePanel({
 
 	// Plan-mode filter chips (#1581). Selecting a chip SNAPSHOTS the member ids
 	// that match at that moment, so marking someone does not drop their row from
-	// the filtered list; only a chip tap (or a different meeting) retakes it.
-	// `All` carries no snapshot: it lists the live roster.
+	// the filtered list; only a chip tap retakes it. `All` carries no snapshot:
+	// it lists the live roster. A different meeting resets it by remounting the
+	// panel (`key={meeting.id}` on the route).
 	const [planFilter, setPlanFilter] = useState<{
 		key: PlanFilterKey;
 		ids: ReadonlySet<string> | null;
-		meeting: string;
-	}>({ key: "all", ids: null, meeting: meetingDate });
-	if (planFilter.meeting !== meetingDate) {
-		setPlanFilter({ key: "all", ids: null, meeting: meetingDate });
-	}
+	}>({ key: "all", ids: null });
 
 	// Mobile collapse (spec D4): below `lg` PLAN mode starts collapsed to its
 	// counts line so a big roster does not push the agenda off screen; at `lg`
@@ -1313,9 +1323,8 @@ export function MeetingAttendancePanel({
 	const planByMember = new Map(plan.map((p) => [p.memberId, p.status]));
 
 	// Apply the override BEFORE calling buildPlanPanel, so the sort and the
-	// counts reflect the optimistic state too — otherwise a chip jumps to a new
-	// bucket a beat after it is tapped, and the counts line disagrees with the
-	// chips. `!== undefined` (not `??`) because a key present with value `null`
+	// counts and the filter chips reflect the optimistic state too — otherwise
+	// the counts line and chips lag a beat behind a tap. `!== undefined` (not `??`) because a key present with value `null`
 	// means "optimistically cleared", distinct from the key being absent — and
 	// collapsing it into `??` alongside the Map above would silently turn an
 	// optimistic CLEAR back into the server's old rung.
@@ -1356,8 +1365,7 @@ export function MeetingAttendancePanel({
 			});
 	const countsLine = rollPanel?.countsLine ?? planPanel?.countsLine ?? "";
 
-	const activeFilter =
-		planFilter.meeting === meetingDate ? planFilter.key : "all";
+	const activeFilter = planFilter.key;
 	const planRows = (planPanel?.rows ?? []).filter(
 		(m) => activeFilter === "all" || (planFilter.ids?.has(m.id) ?? false),
 	);
@@ -1372,7 +1380,6 @@ export function MeetingAttendancePanel({
 								.filter((m) => matchesPlanFilter(key, m.status))
 								.map((m) => m.id),
 						),
-			meeting: meetingDate,
 		});
 	}
 
@@ -1524,18 +1531,12 @@ export function MeetingAttendancePanel({
 					{/* Plan mode only. Wraps onto a second line on a narrow screen; it
 					 *  never scrolls sideways. A zero chip is disabled unless selected. */}
 					{!roll && planPanel ? (
-						<div className="mb-3 flex flex-wrap gap-2">
+						<fieldset
+							aria-label="Filter by answer"
+							className="mb-3 flex min-w-0 flex-wrap gap-2"
+						>
 							{PLAN_FILTERS.map(({ key, label }) => {
-								const count =
-									key === "all"
-										? planPanel.rows.length
-										: key === "none"
-											? planPanel.counts.noAnswer
-											: key === "reached_out"
-												? planPanel.counts.reachedOut
-												: key === "coming"
-													? planPanel.counts.coming
-													: planPanel.counts.notComing;
+								const count = PLAN_FILTER_COUNT[key](planPanel);
 								const selected = activeFilter === key;
 								return (
 									<Button
@@ -1543,15 +1544,16 @@ export function MeetingAttendancePanel({
 										type="button"
 										size="sm"
 										variant={selected ? "default" : "outline"}
+										className="rounded-full"
 										aria-pressed={selected}
 										disabled={count === 0 && !selected}
 										onClick={() => selectPlanFilter(key)}
 									>
-										{label} {count}
+										{label} <span className="tabular-nums">{count}</span>
 									</Button>
 								);
 							})}
-						</div>
+						</fieldset>
 					) : null}
 					{/* A LIST, not forty sibling divs: without it an AT user gets no set
 					 *  size and no position within it, on the one surface whose job is

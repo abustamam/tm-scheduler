@@ -253,8 +253,9 @@ export interface PanelMember {
 	/** The EFFECTIVE preferred contact (#1093). Absent on a caller with no contact. */
 	preferredContact?: ContactMethod | null;
 	/** The EFFECTIVE rung after the precedence rule below — not necessarily the
-	 *  stored one. Counts and sort both read this, which is what makes an assumed
-	 *  Coming a real Coming everywhere without a second code path. */
+	 *  stored one. Counts and the filter chips read this, which is what makes an
+	 *  assumed Coming a real Coming everywhere without a second code path. Row
+	 *  order does not (#1581: A to Z). */
 	status: PlanStatus | null;
 	/** The rung this member's plan row carries, as supplied in `plan`, before
 	 *  precedence is applied. This function has no database view — it reports
@@ -264,7 +265,7 @@ export interface PanelMember {
 	 *  this reflects the override rather than the committed row — which is the
 	 *  intended value for the use below, the same reason the override is
 	 *  applied before `buildPlanPanel` at all. `status` is the EFFECTIVE rung
-	 *  and is what sort and counts read; this field is what a caller needs to
+	 *  and is what counts and the filter chips read; this field is what a caller needs to
 	 *  answer "is there a row to clear?". An assumed Coming can sit on top of a
 	 *  stored `reached_out` — the officer messaged a confirmed Toastmaster —
 	 *  and clearing that is a real write with a real activity-log entry even
