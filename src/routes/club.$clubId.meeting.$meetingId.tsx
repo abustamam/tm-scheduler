@@ -1678,6 +1678,8 @@ function MeetingView() {
 						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col xl:w-96"
 					>
 						<MeetingAttendancePanel
+							// Remounts per meeting: the panel's chip filter is plain state, so a new meeting id resets it to All.
+							key={meeting.id}
 							// `upcoming` → the outreach ladder; meeting day and after → the
 							// record of who turned up. One derivation, off the route's frozen
 							// clock, so this cannot disagree with the agenda beside it.

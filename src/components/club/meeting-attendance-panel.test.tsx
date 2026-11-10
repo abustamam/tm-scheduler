@@ -969,6 +969,121 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 	});
 });
 
+describe("plan filter chips (#1581)", () => {
+	afterEach(() => cleanup());
+
+	const alphabetical = ["Abdul-Rasheed Bustamam", "Ayesha Khan", "Bo Lin"];
+	const chipRow = () =>
+		screen.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
+	const chip = (label: string) =>
+		chipRow().find((b) =>
+			b.textContent?.startsWith(`${label} `),
+		) as HTMLElement;
+	/** Visible row order: the member names in document order. */
+	const order = () =>
+		screen
+			.getAllByRole("listitem")
+			.map((li) => alphabetical.find((n) => li.textContent?.includes(n)))
+			.filter(Boolean);
+
+	function mount(over: Parameters<typeof renderPanel>[0] = {}) {
+		const r = renderPanel(over);
+		const again = (next: Parameters<typeof renderPanel>[0]) =>
+			r.rerender(<MeetingAttendancePanel {...r.props} {...next} />);
+		return { ...r, again };
+	}
+
+	it("renders the five chips in order with live counts, and counts follow a mark", () => {
+		// protects=chip order, labels and counts; fails_when=chips reordered, a
+		// count static after a mark; no_claim=chip styling.
+		const { again } = mount();
+		expect(chipRow().map((b) => b.textContent)).toEqual([
+			"All 3",
+			"No answer 3",
+			"Asked 0",
+			"Coming 0",
+			"Not coming 0",
+		]);
+		again({ rungOverride: { m2: "reached_out" } });
+		expect(chipRow().map((b) => b.textContent)).toEqual([
+			"All 3",
+			"No answer 2",
+			"Asked 1",
+			"Coming 0",
+			"Not coming 0",
+		]);
+	});
+
+	it("marking a row under All never moves any row", () => {
+		// protects=positions under All; fails_when=a status sort returns;
+		// no_claim=the write itself.
+		const { again } = mount();
+		expect(order()).toEqual(alphabetical);
+		for (const rung of ["reached_out", "coming", "not_coming"] as const) {
+			again({ rungOverride: { m1: rung } });
+			expect(order()).toEqual(alphabetical);
+		}
+	});
+
+	it("a filtered row stays put when marked; counts move; a re-tap retakes the snapshot", () => {
+		// protects=snapshot semantics (criteria 4 and 5); fails_when=the row drops
+		// the instant it is marked, or the re-tap keeps a stale snapshot;
+		// no_claim=another chip's retake (covered by the same code path).
+		const { again } = mount();
+		fireEvent.click(chip("No answer"));
+		expect(order()).toEqual(alphabetical);
+		again({ rungOverride: { m2: "reached_out" } });
+		expect(order()).toEqual(alphabetical);
+		expect(chip("No answer").textContent).toBe("No answer 2");
+		expect(chip("Asked").textContent).toBe("Asked 1");
+		fireEvent.click(chip("No answer"));
+		expect(order()).toEqual(["Abdul-Rasheed Bustamam", "Ayesha Khan"]);
+	});
+
+	it("a zero chip is disabled; the selected chip never is", () => {
+		// protects=disabled rule; fails_when=a zero chip is tappable, or the
+		// selected chip locks itself out after its count reaches 0;
+		// no_claim=the chip's styling.
+		const { again } = mount();
+		expect(chip("Coming").hasAttribute("disabled")).toBe(true);
+		expect(chip("All").hasAttribute("disabled")).toBe(false);
+		fireEvent.click(chip("No answer"));
+		again({
+			rungOverride: { m1: "coming", m2: "coming", m3: "coming" },
+		});
+		expect(chip("No answer").textContent).toBe("No answer 0");
+		expect(chip("No answer").hasAttribute("disabled")).toBe(false);
+		expect(chip("No answer").getAttribute("aria-pressed")).toBe("true");
+	});
+
+	it("tapping another chip retakes the snapshot", () => {
+		// protects=criterion 5 across chips; fails_when=the new chip lists the
+		// old chip's members; no_claim=re-tapping the same chip (its own test).
+		const { again } = mount();
+		fireEvent.click(chip("No answer"));
+		again({ rungOverride: { m2: "reached_out" } });
+		fireEvent.click(chip("Asked"));
+		expect(order()).toEqual(["Bo Lin"]);
+		fireEvent.click(chip("No answer"));
+		expect(order()).toEqual(["Abdul-Rasheed Bustamam", "Ayesha Khan"]);
+	});
+
+	it("the chips sit in a labelled group", () => {
+		// protects=AT grouping of the chips; fails_when=the group or its name is
+		// dropped; no_claim=how a screen reader announces it.
+		renderPanel();
+		const g = screen.getByRole("group", { name: "Filter by answer" });
+		expect(g.querySelectorAll("button[aria-pressed]")).toHaveLength(5);
+	});
+
+	it("roll mode renders no chips", () => {
+		// protects=roll mode unchanged; fails_when=chips leak into roll mode;
+		// no_claim=roll ordering (existing tests).
+		renderPanel({ mode: "roll", attendance: [], guests: [] });
+		expect(chipRow()).toHaveLength(0);
+	});
+});
+
 describe("roll mode", () => {
 	// The brief's snippet omitted this, unlike the plan-mode block above; without
 	// it renders leak across `it`s (no global auto-cleanup is configured — see
