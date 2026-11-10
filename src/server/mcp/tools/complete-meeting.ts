@@ -7,28 +7,31 @@
  * `completed`, closes every open ballot in the same transaction, logs
  * `meeting_edit`, and freezes the meeting number. Nothing is sent.
  *
- * `errors.ts` forbids mapping a refusal by message text, and the seam's
- * "date has not arrived" refusal has no exported constant, so the cancelled,
- * already-completed and too-early cases are decided HERE from the row this tool
- * loaded (the same predicates the seam uses); the seam stays the writer, and a
- * race past these checks surfaces as its own error.
+ * The tool's early checks (cancelled, completed, too early) are friendly
+ * previews from the row it loaded. The SEAM is the authority: it re-decides all
+ * of them under the meeting lock, so two concurrent calls cannot both complete
+ * (the loser gets `alreadyCompleted` and is refused as `LOCKED`), a meeting
+ * rescheduled into the future between the preview and the write gets the seam's
+ * "on or after" sentence mapped to `VALIDATION` by identity (an exported
+ * constant, not message text), and the closed-ballot count is the seam's own.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { clubs, meetings, meetingVoteSessions } from "#/db/schema";
+import { clubs, meetings } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
-import { applyCompleteMeeting } from "#/server/meetings-logic";
-import { sessionOpenNow } from "#/server/voting-logic";
+import {
+	applyCompleteMeeting,
+	COMPLETE_NOT_YET_MESSAGE,
+} from "#/server/meetings-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 
 const inputSchema = { meetingId: z.string().uuid() };
 
-export const NOT_YET_MESSAGE =
-	"You can only complete a meeting on or after its scheduled date.";
+export const NOT_YET_MESSAGE = COMPLETE_NOT_YET_MESSAGE;
 export const ALREADY_COMPLETED_MESSAGE = "This meeting is already completed.";
 
 export const completeMeetingTool: McpToolDefinition = {
@@ -76,19 +79,9 @@ export const completeMeetingTool: McpToolDefinition = {
 			throw new McpError("VALIDATION", NOT_YET_MESSAGE);
 		}
 
-		const [open] = await db
-			.select({ n: sql<number>`count(*)::int` })
-			.from(meetingVoteSessions)
-			.where(
-				and(
-					eq(meetingVoteSessions.meetingId, args.meetingId),
-					sessionOpenNow(),
-				),
-			);
-		const closedVotes = open?.n ?? 0;
-
+		let result: Awaited<ReturnType<typeof applyCompleteMeeting>>;
 		try {
-			await applyCompleteMeeting({
+			result = await applyCompleteMeeting({
 				meetingId: args.meetingId,
 				actorMemberId: club.membershipId,
 			});
@@ -96,14 +89,20 @@ export const completeMeetingTool: McpToolDefinition = {
 			if (err instanceof Error && err.message === MEETING_CANCELLED_MESSAGE) {
 				throw new McpError("VALIDATION", err.message);
 			}
+			if (err instanceof Error && err.message === COMPLETE_NOT_YET_MESSAGE) {
+				throw new McpError("VALIDATION", NOT_YET_MESSAGE);
+			}
 			throw err;
+		}
+		if (result.alreadyCompleted) {
+			throw new McpError("LOCKED", ALREADY_COMPLETED_MESSAGE);
 		}
 
 		return {
 			meetingId: args.meetingId,
 			clubId: club.clubId,
 			status: "completed" as const,
-			closedVotes,
+			closedVotes: result.closedVotes,
 		};
 	},
 };

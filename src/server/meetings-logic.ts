@@ -6,6 +6,7 @@ import { db } from "#/db";
 import {
 	clubs,
 	meetings,
+	meetingVoteSessions,
 	members,
 	roleDefinitions,
 	roleSlots,
@@ -59,7 +60,7 @@ import {
 } from "./meeting-url-key-logic";
 import { meetingRowAccepts } from "./meeting-write-gate";
 import { loadPublicClubRoster } from "./members-logic";
-import { closeAllVotesTx } from "./voting-logic";
+import { closeAllVotesTx, sessionOpenNow } from "./voting-logic";
 
 /**
  * A connection: the pool, or a transaction handle (mirrors
@@ -942,6 +943,10 @@ export async function applyMeetingDigitalVoting(input: {
  * So a cancelled meeting is refused FIRST, ahead of the date rule, with the
  * sentence every other write on it says; Restore is the way back.
  */
+/** The date rule's sentence, exported so the MCP tool can map it by identity. */
+export const COMPLETE_NOT_YET_MESSAGE =
+	"You can only complete a meeting on or after its scheduled date.";
+
 export async function applyCompleteMeeting(input: {
 	meetingId: string;
 	actorMemberId: string | null;
@@ -957,14 +962,29 @@ export async function applyCompleteMeeting(input: {
 			throw new Error(MEETING_CANCELLED_MESSAGE);
 		}
 		if (!meetingDateReached(locked.scheduledAt, club.timezone)) {
-			throw new Error(
-				"You can only complete a meeting on or after its scheduled date.",
-			);
+			throw new Error(COMPLETE_NOT_YET_MESSAGE);
+		}
+		// Already completed, decided on the LOCKED row: the second of two
+		// concurrent calls lands here and writes, logs and closes nothing. A
+		// no-op (not a throw) so a double click in the app stays harmless;
+		// the MCP tool turns the flag into its refusal.
+		if (locked.status === "completed") {
+			return { locked, alreadyCompleted: true, closedVotes: 0 };
 		}
 		await tx
 			.update(meetings)
 			.set({ status: "completed" })
 			.where(eq(meetings.id, input.meetingId));
+		const [open] = await tx
+			.select({ n: sql<number>`count(*)::int` })
+			.from(meetingVoteSessions)
+			.where(
+				and(
+					eq(meetingVoteSessions.meetingId, input.meetingId),
+					sessionOpenNow(),
+				),
+			);
+		const closedVotes = open?.n ?? 0;
 		// Digital voting (#510): a meeting that has been closed out cannot still be
 		// voted on from the parking lot. In the SAME transaction as the status
 		// change, or a ballot slips through the gap. Deliberately not routed through
@@ -978,16 +998,22 @@ export async function applyCompleteMeeting(input: {
 			targetId: input.meetingId,
 			detail: { change: "completed" },
 		});
-		return locked;
+		return { locked, alreadyCompleted: false, closedVotes };
 	});
 
 	// The meeting is history now, so its number stops being provisional and is
 	// frozen onto the row (#358) — becoming the anchor the next meetings count
 	// from. Deliberately AFTER the commit and non-fatal: if it fails, the number
 	// simply stays derived, which still displays correctly.
-	await freezeMeetingNumber(input.meetingId);
+	if (!meeting.alreadyCompleted) await freezeMeetingNumber(input.meetingId);
 
-	return { clubId: meeting.clubId };
+	return {
+		clubId: meeting.locked.clubId,
+		/** True when the locked row was already completed: nothing was written. */
+		alreadyCompleted: meeting.alreadyCompleted,
+		/** The open ballots this call closed. */
+		closedVotes: meeting.closedVotes,
+	};
 }
 
 /**

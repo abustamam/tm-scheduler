@@ -14,6 +14,10 @@ import {
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import {
+	MEETING_CANCELLED_MESSAGE,
+	MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
+} from "#/lib/meeting-cancellation-notice";
+import {
 	cleanup,
 	hasTestDb,
 	type SeededClub,
@@ -23,12 +27,31 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// Runs once just before the real seam, to move state after the tool's own
+// early checks have passed.
+const beforeSeam = vi.hoisted(() => ({
+	run: null as null | (() => Promise<void>),
+}));
+vi.mock("#/server/meetings-logic", async (importOriginal) => {
+	const orig = await importOriginal<typeof import("#/server/meetings-logic")>();
+	return {
+		...orig,
+		applyCompleteMeeting: async (
+			...args: Parameters<typeof orig.applyCompleteMeeting>
+		) => {
+			const hook = beforeSeam.run;
+			beforeSeam.run = null;
+			if (hook) await hook();
+			return orig.applyCompleteMeeting(...args);
+		},
+	};
+});
+
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { McpError } = await import("#/server/mcp/errors");
 
-const { completeMeetingTool } = await import(
-	"#/server/mcp/tools/complete-meeting"
-);
+const { completeMeetingTool, NOT_YET_MESSAGE, ALREADY_COMPLETED_MESSAGE } =
+	await import("#/server/mcp/tools/complete-meeting");
 const { reopenMeetingTool } = await import("#/server/mcp/tools/reopen-meeting");
 const { cancelMeetingTool } = await import("#/server/mcp/tools/cancel-meeting");
 
@@ -82,6 +105,7 @@ describe.skipIf(!hasTestDb)("complete_meeting / reopen_meeting (#1572)", () => {
 		memberToken = await mintToken(seed.memberUserId);
 	});
 	afterEach(async () => {
+		beforeSeam.run = null;
 		await testDb
 			.delete(apiTokens)
 			.where(inArray(apiTokens.userId, [seed.adminUserId, seed.memberUserId]));
@@ -120,24 +144,115 @@ describe.skipIf(!hasTestDb)("complete_meeting / reopen_meeting (#1572)", () => {
 		);
 	});
 
-	it("refuses a meeting before its date, a cancelled one and a completed one", async () => {
-		await expectMcpError(complete(adminToken), "VALIDATION");
+	it("refuses a meeting before its date, a cancelled one and a completed one, each with its own sentence", async () => {
+		await expectMcpError(complete(adminToken), "VALIDATION", NOT_YET_MESSAGE);
 		expect(await status()).toBe("scheduled");
-		await setDate(new Date(Date.now() + 86_400_000));
+		// PAST date, so the cancelled case cannot pass through the not-yet branch.
+		await setDate(past());
 		await testDb
 			.update(meetings)
 			.set({ status: "cancelled" })
 			.where(eq(meetings.id, seed.meetingId));
-		await expectMcpError(complete(adminToken), "VALIDATION");
+		await expectMcpError(
+			complete(adminToken),
+			"VALIDATION",
+			MEETING_CANCELLED_MESSAGE,
+		);
+		expect(await status()).toBe("cancelled");
 		await testDb
 			.update(meetings)
 			.set({ status: "completed" })
 			.where(eq(meetings.id, seed.meetingId));
-		await expectMcpError(complete(adminToken), "LOCKED");
+		await expectMcpError(
+			complete(adminToken),
+			"LOCKED",
+			ALREADY_COMPLETED_MESSAGE,
+		);
+	});
+
+	it("two concurrent completes: exactly one wins, the other is LOCKED, one log row", async () => {
+		await setDate(past());
+		const results = await Promise.allSettled([
+			complete(adminToken),
+			complete(adminToken),
+		]);
+		expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+		const lost = results.find((r) => r.status === "rejected") as
+			| PromiseRejectedResult
+			| undefined;
+		expect(lost?.reason).toBeInstanceOf(McpError);
+		expect((lost?.reason as InstanceType<typeof McpError>).code).toBe("LOCKED");
+		const logs = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.targetId, seed.meetingId),
+					eq(activityLog.action, "meeting_edit"),
+				),
+			);
+		expect(logs).toHaveLength(1);
+	});
+
+	it("a meeting completed or cancelled after the tool's early checks is refused by the seam, mapped to LOCKED / VALIDATION, and nothing is written", async () => {
+		await setDate(past());
+		beforeSeam.run = async () => {
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, seed.meetingId));
+		};
+		await expectMcpError(
+			complete(adminToken),
+			"LOCKED",
+			ALREADY_COMPLETED_MESSAGE,
+		);
+		const logsOf = () =>
+			testDb
+				.select()
+				.from(activityLog)
+				.where(
+					and(
+						eq(activityLog.targetId, seed.meetingId),
+						eq(activityLog.action, "meeting_edit"),
+					),
+				);
+		expect(await logsOf()).toHaveLength(0);
+
+		await testDb
+			.update(meetings)
+			.set({ status: "scheduled" })
+			.where(eq(meetings.id, seed.meetingId));
+		beforeSeam.run = async () => {
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, seed.meetingId));
+		};
+		await expectMcpError(
+			complete(adminToken),
+			"VALIDATION",
+			MEETING_CANCELLED_MESSAGE,
+		);
+		expect(await status()).toBe("cancelled");
+	});
+
+	it("the seam's own refusal is mapped: a meeting rescheduled into the future after the tool's check is VALIDATION, not a 500", async () => {
+		await setDate(past());
+		// Between the tool's early read and the seam's locked read the date moves.
+		beforeSeam.run = async () => {
+			await setDate(new Date(Date.now() + 3 * 86_400_000));
+		};
+		await expectMcpError(complete(adminToken), "VALIDATION", NOT_YET_MESSAGE);
+		expect(await status()).toBe("scheduled");
 	});
 
 	it("reopen returns a completed meeting to scheduled and refuses scheduled or cancelled", async () => {
-		await expectMcpError(reopen(adminToken), "VALIDATION");
+		await expectMcpError(
+			reopen(adminToken),
+			"VALIDATION",
+			MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
+		);
 		await setDate(past());
 		await complete(adminToken);
 		expect(await reopen(adminToken)).toEqual({
@@ -151,7 +266,11 @@ describe.skipIf(!hasTestDb)("complete_meeting / reopen_meeting (#1572)", () => {
 			{ meetingId: seed.meetingId },
 			{ rawToken: adminToken },
 		);
-		await expectMcpError(reopen(adminToken), "VALIDATION");
+		await expectMcpError(
+			reopen(adminToken),
+			"VALIDATION",
+			MEETING_REOPEN_NOT_COMPLETED_MESSAGE,
+		);
 		expect(await status()).toBe("cancelled");
 	});
 

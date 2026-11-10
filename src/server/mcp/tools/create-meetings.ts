@@ -12,13 +12,17 @@
  *
  * ## The write is `applyBatchCreateMeetings` and nothing else
  *
- * One date is the same call with one entry; there is no second create path. The
- * batch returns counts, not ids, and logs nothing, so this tool reads back the
- * rows it created (by the instants it asked for) and logs one `meeting_create`
- * per row crediting the calling officer, the way `agenda-plan-apply.ts` does.
- * What the app's own create paths log is deliberately untouched.
+ * One date is the same call with one entry; there is no second create path. It
+ * runs INSIDE this tool's transaction (its optional `tx`), so the club write
+ * lock, the inserts and the `meeting_create` log rows commit or roll back
+ * together. The batch returns the ids it really inserted (the insert is
+ * `ON CONFLICT DO NOTHING`, so a row a concurrent writer put at the same
+ * instant is not among them): one `meeting_create` per inserted row credits the
+ * calling officer, the way `agenda-plan-apply.ts` does, and a planned date
+ * that was neither inserted nor already skipped is reported as skipped, never
+ * dropped. What the app's own create paths log is deliberately untouched.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
@@ -231,7 +235,11 @@ export const createMeetingsTool: McpToolDefinition = {
 		const expected = args.planHash;
 		type Outcome =
 			| { stale: CreatePlan }
-			| { plan: CreatePlan; created: { meetingId: string; date: string }[] };
+			| {
+					plan: CreatePlan;
+					created: { meetingId: string; date: string }[];
+					lost: PlanLine[];
+			  };
 		const outcome = await db.transaction(async (tx): Promise<Outcome> => {
 			await lockClubForWrite(tx, club.clubId);
 			const plan = await buildPlan(
@@ -243,48 +251,42 @@ export const createMeetingsTool: McpToolDefinition = {
 			);
 			if (hashOf(plan) !== expected) return { stale: plan };
 			if (plan.blocking.length > 0) {
-				throw new McpError("VALIDATION", BLOCKED_MESSAGE, { plan });
+				throw new McpError("BLOCKED", BLOCKED_MESSAGE, {
+					blocking: plan.blocking,
+					plan,
+				});
 			}
 			const wanted = plan.lines.filter((l) => l.status === "would_create");
-			if (wanted.length === 0) return { plan, created: [] };
+			if (wanted.length === 0) return { plan, created: [], lost: [] };
 
 			const walls = wanted.map((l) => `${l.date}T${l.time}`);
-			await applyBatchCreateMeetings({
+			const batch = await applyBatchCreateMeetings({
 				clubId: club.clubId,
 				wallTimes: walls,
 				location,
+				tx,
 			});
-			// The batch returns counts only: read back the rows at the instants it
-			// was asked for (the club lock and the plan's own check mean none of
-			// them predates this call).
-			const instants = walls.map((w) => zonedWallTimeToUtc(w, club.timezone));
-			const rows = await tx
-				.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
-				.from(meetings)
-				.where(
-					and(
-						eq(meetings.clubId, club.clubId),
-						inArray(meetings.scheduledAt, instants),
-					),
-				);
-			const created: { meetingId: string; date: string }[] = [];
-			for (const row of rows) {
-				const date = utcToZonedWallTime(row.scheduledAt, club.timezone).slice(
-					0,
-					10,
-				);
-				created.push({ meetingId: row.id, date });
+			const created = batch.created;
+			for (const row of created) {
 				await logActivity(tx, {
 					clubId: club.clubId,
 					actorMemberId: club.membershipId,
 					action: "meeting_create",
 					targetType: "meeting",
-					targetId: row.id,
-					detail: { meetingId: row.id, date, via: "mcp-create-meetings" },
+					targetId: row.meetingId,
+					detail: {
+						meetingId: row.meetingId,
+						date: row.date,
+						via: "mcp-create-meetings",
+					},
 				});
 			}
+			// Planned to create, but not inserted: a concurrent writer took the
+			// instant. Reported as skipped so no date is silently dropped.
+			const got = new Set(created.map((c) => c.date));
+			const lost = wanted.filter((l) => !got.has(l.date));
 			created.sort((a, b) => a.date.localeCompare(b.date));
-			return { plan, created };
+			return { plan, created, lost };
 		});
 
 		if ("stale" in outcome) {
@@ -299,7 +301,15 @@ export const createMeetingsTool: McpToolDefinition = {
 			clubId: club.clubId,
 			summary: `Created ${outcome.created.length} meeting${outcome.created.length === 1 ? "" : "s"}.`,
 			created: outcome.created,
-			skipped: outcome.plan.lines.filter((l) => l.status === "skipped"),
+			skipped: [
+				...outcome.plan.lines.filter((l) => l.status === "skipped"),
+				...outcome.lost.map((l) => ({
+					date: l.date,
+					time: l.time,
+					status: "skipped" as const,
+					reason: "a meeting was created at that time by someone else",
+				})),
+			],
 		};
 	},
 };

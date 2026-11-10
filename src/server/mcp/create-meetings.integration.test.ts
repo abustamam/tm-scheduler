@@ -5,7 +5,7 @@
  * is `PLAN_STALE`, and the role gate and archive gate hold.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -25,10 +25,43 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// A hook the collision test arms: runs once, just before the first real insert,
+// to put a competing row at the same instant (a concurrent writer winning).
+const beforeInsert = vi.hoisted(() => ({
+	run: null as null | ((m: { scheduledAt: Date }) => Promise<void>),
+}));
+// Armed by the atomicity test: makes the first activity-log write fail.
+const failLog = vi.hoisted(() => ({ armed: false }));
+vi.mock("#/server/activity", async (importOriginal) => {
+	const orig = await importOriginal<typeof import("#/server/activity")>();
+	return {
+		...orig,
+		logActivity: async (...args: Parameters<typeof orig.logActivity>) => {
+			if (failLog.armed) throw new Error("log write failed");
+			return orig.logActivity(...args);
+		},
+	};
+});
+vi.mock("#/server/meeting-create-logic", async (importOriginal) => {
+	const orig =
+		await importOriginal<typeof import("#/server/meeting-create-logic")>();
+	return {
+		...orig,
+		insertMeetingWithSlots: async (
+			...args: Parameters<typeof orig.insertMeetingWithSlots>
+		) => {
+			const hook = beforeInsert.run;
+			beforeInsert.run = null;
+			if (hook) await hook(args[1]);
+			return orig.insertMeetingWithSlots(...args);
+		},
+	};
+});
+
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { McpError } = await import("#/server/mcp/errors");
 
-const { createMeetingsTool } = await import(
+const { createMeetingsTool, BLOCKED_MESSAGE } = await import(
 	"#/server/mcp/tools/create-meetings"
 );
 
@@ -92,6 +125,8 @@ describe.skipIf(!hasTestDb)("create_meetings (#1572)", () => {
 		memberToken = await mintToken(seed.memberUserId);
 	});
 	afterEach(async () => {
+		beforeInsert.run = null;
+		failLog.armed = false;
 		await testDb
 			.delete(apiTokens)
 			.where(inArray(apiTokens.userId, [seed.adminUserId, seed.memberUserId]));
@@ -148,9 +183,20 @@ describe.skipIf(!hasTestDb)("create_meetings (#1572)", () => {
 					eq(activityLog.action, "meeting_create"),
 				),
 			);
-		expect(logs.map((l) => l.targetId).sort()).toEqual(
-			r.created.map((c) => c.meetingId).sort(),
-		);
+		// Compared with the ids the DATABASE holds, not the tool's own output.
+		const dbIds = (
+			await testDb
+				.select({ id: meetings.id })
+				.from(meetings)
+				.where(
+					and(
+						eq(meetings.clubId, seed.clubId),
+						gte(meetings.scheduledAt, new Date("2031-01-01T00:00:00Z")),
+					),
+				)
+		).map((m) => m.id);
+		expect(dbIds).toHaveLength(2);
+		expect(logs.map((l) => l.targetId).sort()).toEqual(dbIds.sort());
 		for (const l of logs) expect(l.actorMemberId).toBe(seed.adminMemberId);
 	});
 
@@ -205,8 +251,57 @@ describe.skipIf(!hasTestDb)("create_meetings (#1572)", () => {
 		expect(p.plan.blocking).toHaveLength(1);
 		await expectMcpError(
 			run(adminToken, { ...input, planHash: p.planHash }),
-			"VALIDATION",
+			"BLOCKED",
+			BLOCKED_MESSAGE,
 		);
+	});
+
+	it("a row a concurrent writer puts at the same instant is not credited to the caller, and its date is reported skipped", async () => {
+		const input = { dates: ["2031-05-01T19:00", "2031-05-08T19:00"] };
+		const p = (await run(adminToken, input)) as Preview;
+		let rival = "";
+		beforeInsert.run = async (m) => {
+			// Only the first insert: the rival takes that instant.
+			const [row] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: m.scheduledAt,
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			rival = row?.id ?? "";
+		};
+		const r = (await run(adminToken, {
+			...input,
+			planHash: p.planHash,
+		})) as Applied;
+		expect(rival).not.toBe("");
+		expect(r.created.map((c) => c.date)).toEqual(["2031-05-08"]);
+		expect(r.skipped.map((s) => s.date)).toEqual(["2031-05-01"]);
+		const logs = await testDb
+			.select()
+			.from(activityLog)
+			.where(
+				and(
+					eq(activityLog.clubId, seed.clubId),
+					eq(activityLog.action, "meeting_create"),
+				),
+			);
+		expect(logs.map((l) => l.targetId)).toEqual([r.created[0]?.meetingId]);
+		expect(logs.map((l) => l.targetId)).not.toContain(rival);
+	});
+
+	it("is atomic: a failure after the inserts rolls the meetings back too", async () => {
+		const input = { dates: ["2031-06-05T19:00", "2031-06-12T19:00"] };
+		const p = (await run(adminToken, input)) as Preview;
+		const before = await count();
+		failLog.armed = true;
+		await expect(
+			run(adminToken, { ...input, planHash: p.planHash }),
+		).rejects.toThrow();
+		failLog.armed = false;
+		expect(await count()).toBe(before);
 	});
 
 	it("53 dates is refused at the schema", async () => {

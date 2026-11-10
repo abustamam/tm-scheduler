@@ -18,6 +18,10 @@ import {
 import { insertMeetingWithSlots } from "./meeting-create-logic";
 import { getRecurrenceRule } from "./recurrence-rule-logic";
 
+type DbOrTx =
+	| typeof db
+	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
 export interface BatchCreateInput {
 	clubId: string;
 	/**
@@ -26,10 +30,21 @@ export interface BatchCreateInput {
 	 */
 	wallTimes: string[];
 	location?: string | null;
+	/**
+	 * Run inside the caller's transaction instead of opening one. The caller
+	 * then owns the commit (and any club write lock it already holds), so the
+	 * batch and whatever the caller logs beside it are one all-or-nothing unit.
+	 */
+	tx?: DbOrTx;
 }
 
 export interface BatchCreateResult {
 	createdCount: number;
+	/**
+	 * The rows this call really inserted (a date a concurrent writer took at
+	 * the same instant is NOT here). `date` is the club-local YYYY-MM-DD.
+	 */
+	created: { meetingId: string; date: string }[];
 	/** Local calendar dates (YYYY-MM-DD) skipped because one already existed. */
 	skippedDates: string[];
 }
@@ -48,13 +63,15 @@ function localDate(wall: string): string {
 export async function applyBatchCreateMeetings(
 	input: BatchCreateInput,
 ): Promise<BatchCreateResult> {
-	const club = await db.query.clubs.findFirst({
-		where: eq(clubs.id, input.clubId),
-	});
+	const conn: DbOrTx = input.tx ?? db;
+	const [club] = await conn
+		.select()
+		.from(clubs)
+		.where(eq(clubs.id, input.clubId));
 	if (!club) throw new Error("Club not found.");
 
 	// Fetch the role template ONCE and reuse it across every meeting in the batch.
-	const defs = await db
+	const defs = await conn
 		.select()
 		.from(roleDefinitions)
 		// The club's whole BANK, and `standing` is what keeps a contest role off an
@@ -73,7 +90,7 @@ export async function applyBatchCreateMeetings(
 		.orderBy(asc(roleDefinitions.sortOrder));
 
 	// Existing meetings' local dates (any status) occupy their calendar date.
-	const existing = await db
+	const existing = await conn
 		.select({ scheduledAt: meetings.scheduledAt })
 		.from(meetings)
 		.where(eq(meetings.clubId, input.clubId));
@@ -86,7 +103,7 @@ export async function applyBatchCreateMeetings(
 	// De-dupe within the batch too, and skip any date already taken.
 	const location = input.location?.trim() || null;
 	const skippedDates: string[] = [];
-	const toCreate: { scheduledAt: Date }[] = [];
+	const toCreate: { scheduledAt: Date; date: string }[] = [];
 	const seen = new Set<string>();
 	for (const wall of input.wallTimes) {
 		const date = localDate(wall);
@@ -96,18 +113,21 @@ export async function applyBatchCreateMeetings(
 			skippedDates.push(date);
 			continue;
 		}
-		toCreate.push({ scheduledAt: zonedWallTimeToUtc(wall, club.timezone) });
+		toCreate.push({
+			scheduledAt: zonedWallTimeToUtc(wall, club.timezone),
+			date,
+		});
 	}
 
 	if (toCreate.length === 0) {
-		return { createdCount: 0, skippedDates };
+		return { createdCount: 0, created: [], skippedDates };
 	}
 
-	let createdCount = 0;
-	await db.transaction(async (tx) => {
-		for (const { scheduledAt } of toCreate) {
+	const created: { meetingId: string; date: string }[] = [];
+	const run = async (conn: DbOrTx) => {
+		for (const { scheduledAt, date } of toCreate) {
 			const id = await insertMeetingWithSlots(
-				tx,
+				conn,
 				{
 					clubId: input.clubId,
 					scheduledAt,
@@ -117,11 +137,13 @@ export async function applyBatchCreateMeetings(
 				},
 				defs,
 			);
-			if (id) createdCount += 1;
+			if (id) created.push({ meetingId: id, date });
 		}
-	});
+	};
+	if (input.tx) await run(input.tx);
+	else await db.transaction((tx) => run(tx));
 
-	return { createdCount, skippedDates };
+	return { createdCount: created.length, created, skippedDates };
 }
 
 /**
