@@ -402,6 +402,176 @@ describe.skipIf(!hasTestDb)("record_attendance (#1573)", () => {
 		expect(p.plan.guests[0]?.verdict).toBe("ambiguous");
 	});
 
+	it("two newGuest lines sharing an email or phone are one person: DUPLICATE_PERSON", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const byEmail = await preview(token, {
+			meetingId: s.meetingId,
+			guests: [
+				{ newGuest: { name: "Alpha Zed", email: "shared@test.example" } },
+				{ newGuest: { name: "Beta Quux", email: "SHARED@test.example" } },
+			],
+		});
+		expect(byEmail.blocking).toMatchObject([
+			{ code: "DUPLICATE_PERSON", entryIndex: 1 },
+		]);
+		const byPhone = await preview(token, {
+			meetingId: s.meetingId,
+			guests: [
+				{ newGuest: { name: "Alpha Zed", phone: "(415) 555-0123" } },
+				{ newGuest: { name: "Beta Quux", phone: "+1 415 555 0123" } },
+			],
+		});
+		expect(byPhone.blocking).toMatchObject([
+			{ code: "DUPLICATE_PERSON", entryIndex: 1 },
+		]);
+		await expectMcpError(
+			call(token, {
+				meetingId: s.meetingId,
+				guests: [
+					{ newGuest: { name: "Alpha Zed", email: "shared@test.example" } },
+					{ newGuest: { name: "Beta Quux", email: "SHARED@test.example" } },
+				],
+				planHash: byEmail.planHash,
+			}),
+			"BLOCKED",
+		);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+		).toHaveLength(0);
+	});
+
+	it("a confirmed contact-less newGuest is not re-created by a replay, even past three older matches", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		for (const n of ["Sam Lee", "Sam Lees", "Sam Leigh"]) await newGuest(s, n);
+		const args = {
+			meetingId: s.meetingId,
+			guests: [{ newGuest: { name: "Sam Lee" } }],
+			confirmNew: [0],
+		};
+		const p = await preview(token, args);
+		expect(p.plan.guests[0]?.verdict).toBe("ambiguous");
+		await call(token, { ...args, planHash: p.planHash });
+		await expectMcpError(
+			call(token, { ...args, planHash: p.planHash }),
+			"PLAN_STALE",
+		);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+		).toHaveLength(4);
+	});
+
+	it("a newGuest carrying a member's email or phone is ambiguous, skipped unless confirmed", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const [m] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, s.memberId));
+		await testDb
+			.update(people)
+			.set({ email: "member-contact@test.example", phone: "+14155550199" })
+			.where(eq(people.id, m?.personId as string));
+		for (const contact of [
+			{ email: "Member-Contact@test.example" },
+			{ phone: "(415) 555-0199" },
+		]) {
+			const args = {
+				meetingId: s.meetingId,
+				guests: [{ newGuest: { name: "Zzyzx Unrelated", ...contact } }],
+			};
+			const p = await preview(token, args);
+			expect(p.plan.guests[0]?.verdict).toBe("ambiguous");
+			expect(p.plan.guests[0]?.possibleMatches).toEqual([
+				{ kind: "member", id: s.memberId, name: expect.any(String) },
+			]);
+			const r = await call(token, { ...args, planHash: p.planHash });
+			expect((r as Applied).skipped).toHaveLength(1);
+			expect(
+				await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+			).toHaveLength(0);
+		}
+		const confirmed = {
+			meetingId: s.meetingId,
+			guests: [
+				{
+					newGuest: {
+						name: "Zzyzx Unrelated",
+						email: "member-contact@test.example",
+					},
+				},
+			],
+			confirmNew: [0],
+		};
+		const r = await apply(token, confirmed);
+		expect(r.written).toHaveLength(1);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+		).toHaveLength(1);
+	});
+
+	it("a newGuest whose email or phone matches a club guest reuses that guest", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const g = await createGuestRecord(testDb, {
+			clubId: s.clubId,
+			name: "Pat Rowan",
+			email: "pat@test.example",
+			phone: "+14155550123",
+		});
+		for (const contact of [
+			// A phone matches only with an agreeing name (the guest book's rule).
+			{ name: "Patricia R", email: "PAT@test.example" },
+			{ name: "Pat Rowan", phone: "(415) 555-0123" },
+		]) {
+			const args = {
+				meetingId: s.meetingId,
+				guests: [{ newGuest: contact }],
+			};
+			const p = await preview(token, args);
+			expect(p.blocking).toEqual([]);
+			expect(p.plan.guests[0]).toMatchObject({
+				verdict: expect.stringMatching(/^(add|already_recorded)$/),
+				guestId: g.id,
+				matchedByContact: true,
+			});
+		}
+		const r = await apply(token, {
+			meetingId: s.meetingId,
+			guests: [{ newGuest: { name: "Pat Rowan", phone: "(415) 555-0123" } }],
+		});
+		expect(r.written).toEqual([{ index: 0, guestId: g.id }]);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+		).toHaveLength(1);
+	});
+
+	it("a guest of ANOTHER club is NOT_A_GUEST in guests and in removeGuests, and nothing is written", async () => {
+		const s = await club();
+		const other = await club();
+		const token = await tokenFor(s.adminUserId);
+		const foreign = await newGuest(other, "Foreign Visitor");
+		const args = {
+			meetingId: s.meetingId,
+			guests: [{ guestId: foreign }],
+			removeGuests: [foreign],
+		};
+		const p = await preview(token, args);
+		expect(p.blocking.map((b) => b.code).sort()).toEqual([
+			"NOT_A_GUEST",
+			"NOT_A_GUEST",
+		]);
+		await expectMcpError(
+			call(token, { ...args, planHash: p.planHash }),
+			"BLOCKED",
+		);
+		expect(await roll(s)).toHaveLength(0);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, other.clubId)),
+		).toHaveLength(1);
+	});
+
 	it("confirmNew must point at a newGuest entry", async () => {
 		const s = await club();
 		const token = await tokenFor(s.adminUserId);

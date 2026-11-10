@@ -46,7 +46,7 @@
  * Blocking codes here are local to this tool (strings, as the member attendance
  * tools' are) rather than members of the officer tools' `McpBlockingCode` union.
  */
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetingAttendance, members, officerTerms, people } from "#/db/schema";
@@ -209,6 +209,8 @@ interface GuestLine {
 	before: { present: boolean; mode: Mode | null };
 	after: { present: boolean; mode: Mode | null };
 	possibleMatches: { kind: "member" | "guest"; id: string; name: string }[];
+	/** Every close match, not just the displayed ones: it is in the hash. */
+	matchCount: number;
 	confirmed: boolean;
 	/** The input mode, which decides whether an existing row's mode is replaced. */
 	mode: Mode | null;
@@ -356,9 +358,14 @@ async function compute(
 			id: members.id,
 			name: members.name,
 			preferredName: members.preferredName,
+			email: people.email,
+			phone: people.phone,
 		})
 		.from(members)
-		.where(eq(members.clubId, facts.clubId));
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(members.clubId, facts.clubId))
+		// A stable order: the candidate list feeds the hashed plan.
+		.orderBy(asc(members.name), asc(members.id));
 	const memberById = new Map(memberRows.map((m) => [m.id.toLowerCase(), m]));
 	const guestCandidates = await loadGuestMatchCandidates(conn, facts.clubId);
 	const guestById = new Map(
@@ -462,6 +469,11 @@ async function compute(
 		const phone = g.newGuest.phone?.trim()
 			? toStoredPhone(g.newGuest.phone.trim(), defaultCountryCode)
 			: null;
+		// The writer resolves a newGuest by contact, so two lines sharing a
+		// normalised email or phone are one person however they are named: the
+		// plan must not promise two creates the apply collapses into one.
+		if (email) claim(`email:${email.toLowerCase()}`, "guests", index, name);
+		if (phone) claim(`phone:${phone}`, "guests", index, name);
 		// What the roll writer would resolve to by contact: the same call.
 		const byContact = await findGuestForContact(conn, facts.clubId, {
 			name,
@@ -482,16 +494,27 @@ async function compute(
 				continue;
 			}
 		}
-		const close = [
+		// A member who already holds this email or phone is the existing person,
+		// whatever the name says; `findGuestForContact` searches guests only.
+		const sharesContact = (m: (typeof memberRows)[number]) =>
+			(email !== null && fold(m.email) === email.toLowerCase()) ||
+			(phone !== null &&
+				m.phone !== null &&
+				toStoredPhone(m.phone, defaultCountryCode) === phone);
+		// The FULL match list decides ambiguity and is what the hash tracks (by
+		// count); only the display is truncated, so a guest created by a confirmed
+		// apply changes the hash even when three older matches already exist.
+		const allClose = [
 			...guestCandidates
 				.filter((c) => closeTo(name, c))
 				.map((c) => ({ kind: "guest" as const, id: c.id, name: c.name })),
 			...memberRows
-				.filter((m) => closeTo(name, m))
+				.filter((m) => closeTo(name, m) || sharesContact(m))
 				.map((m) => ({ kind: "member" as const, id: m.id, name: m.name })),
-		].slice(0, MAX_MATCHES);
+		];
+		const close = allClose.slice(0, MAX_MATCHES);
 		claim(`new:${fold(name)}`, "guests", index, name);
-		const ambiguous = close.length > 0;
+		const ambiguous = allClose.length > 0;
 		guestLines.push({
 			index,
 			guestId: null,
@@ -503,6 +526,7 @@ async function compute(
 			before: { present: false, mode: null },
 			after: { present: true, mode },
 			possibleMatches: close,
+			matchCount: allClose.length,
 			confirmed: ambiguous && confirmNew.has(index),
 			mode,
 		});
@@ -592,6 +616,7 @@ function blankGuestLine(
 		before: { present: false, mode: null },
 		after: { present: true, mode },
 		possibleMatches: [],
+		matchCount: 0,
 		confirmed: false,
 		mode,
 	};
@@ -626,6 +651,7 @@ function existingGuestLine(
 		before: { present, mode: beforeMode },
 		after: { present: true, mode: afterMode },
 		possibleMatches: [],
+		matchCount: 0,
 		confirmed: false,
 		mode,
 	};
@@ -724,9 +750,10 @@ export const recordAttendanceTool: McpToolDefinition = {
 				.map((l) => l.memberId);
 			if (memberIds.length > 0)
 				await lockMembershipsAgainstMerge(tx, memberIds);
-			// Then the meeting row, the order `set_awards` takes (club, merge,
-			// meeting): a cancel holds it, so the status read below cannot change
-			// before the writes commit.
+			// Then the meeting row: this tool takes the club lock, then the merge
+			// locks, then the meeting (`set_awards` takes merge then meeting, with no
+			// club lock). A cancel holds the meeting row, so the status read below
+			// cannot change before the writes commit.
 			await lockMeetingForSlotEdit(tx, args.meetingId);
 			const c = await compute(tx, args, who, args.meetingId, confirmNew);
 			if (c.planHash !== hash) {
