@@ -1322,9 +1322,10 @@ export function MeetingAttendancePanel({
 	// scale. Same idiom `buildPlanPanel` reaches for one call later.
 	const planByMember = new Map(plan.map((p) => [p.memberId, p.status]));
 
-	// Apply the override BEFORE calling buildPlanPanel, so the sort and the
-	// counts and the filter chips reflect the optimistic state too — otherwise
-	// the counts line and chips lag a beat behind a tap. `!== undefined` (not `??`) because a key present with value `null`
+	// Apply the override BEFORE calling buildPlanPanel, so the counts and the
+	// filter chips reflect the optimistic state too — otherwise the counts line
+	// and chips lag a beat behind a tap. `!== undefined` (not `??`) because a
+	// key present with value `null`
 	// means "optimistically cleared", distinct from the key being absent — and
 	// collapsing it into `??` alongside the Map above would silently turn an
 	// optimistic CLEAR back into the server's old rung.
