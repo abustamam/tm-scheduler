@@ -3543,7 +3543,7 @@ describe.skipIf(!hasTestDb)("loadConsoleTally awards (#1580)", () => {
 			kind: "member",
 			id: seed.memberId,
 		});
-		expect(awards.best_speaker?.name).toBeTruthy();
+		expect(awards.best_speaker?.name).toBe("Member User");
 		expect(awards.best_evaluator).toBeNull();
 		expect(awards.best_table_topics).toBeNull();
 	});

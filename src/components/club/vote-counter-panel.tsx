@@ -26,6 +26,10 @@ const CATEGORY_LABELS: Record<AwardCategory, string> = {
 };
 const CATEGORIES = Object.keys(CATEGORY_LABELS) as AwardCategory[];
 
+/** The one react-query key for a meeting's console tally (#1580). */
+export const voteTallyKey = (meetingId: string) =>
+	["vote-tally", meetingId] as const;
+
 /** One entry in a category's candidate list, as the tally reports it. Derived
  *  off the server payload rather than re-declared, so the console cannot
  *  disagree with what `loadTally` actually sends. */
@@ -197,7 +201,7 @@ export function VoteCounterPanel({
 		canManageClub || (sessionMemberId !== null && !rulingExcluded);
 	const qc = useQueryClient();
 	const tally = useQuery({
-		queryKey: ["vote-tally", meetingId],
+		queryKey: voteTallyKey(meetingId),
 		queryFn: () => getVoteTally({ data: { meetingId, selfMemberId } }),
 		refetchInterval: 5000,
 	});
@@ -212,7 +216,7 @@ export function VoteCounterPanel({
 						data: { meetingId, category: v.category, selfMemberId },
 					}),
 		onSuccess: () =>
-			qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] }),
+			qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) }),
 	});
 
 	/** Which candidate's reason form is open, as `${category}:${kind}:${id}`.
@@ -251,7 +255,7 @@ export function VoteCounterPanel({
 			}),
 		onSuccess: () => {
 			setReasonFor(null);
-			return qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] });
+			return qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) });
 		},
 	});
 
@@ -286,7 +290,7 @@ export function VoteCounterPanel({
 				},
 			}),
 		onSuccess: () =>
-			qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] }),
+			qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) }),
 	});
 
 	return (
@@ -551,7 +555,7 @@ export function VoteCounterPanel({
 									candidateRow(
 										r,
 										isWinnerRow(r) ? (
-											<span className="rounded-md bg-success/15 px-2 py-1 text-xs font-semibold">
+											<span className="rounded-full bg-success/15 px-2 py-1 text-xs font-semibold">
 												Winner
 											</span>
 										) : total > 0 ? (

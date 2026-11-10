@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMeetingVotes } from "./use-meeting-votes";
@@ -20,21 +20,26 @@ vi.mock("#/server/minutes", () => ({
 	setMinutesAward: (a: unknown) => setMinutesAward(a),
 	clearMinutesAward: (a: unknown) => clearMinutesAward(a),
 }));
+const getVoteTally = vi.fn(async (_a: unknown) => ({
+	tableTopicsSpeakers: [],
+}));
 vi.mock("#/server/voting", () => ({
-	getVoteTally: vi.fn(async () => ({ tableTopicsSpeakers: [] })),
+	getVoteTally: (a: unknown) => getVoteTally(a),
+	closeVoteFn: vi.fn(),
+	disqualifyCandidateFn: vi.fn(),
+	openVoteFn: vi.fn(),
+	undoDisqualificationFn: vi.fn(),
 }));
 
 // #1580. protects=the console's winner box refreshes right after a set or
 // clear instead of waiting for the 5s poll; fails_when=a success does not
-// invalidate the ["vote-tally", meetingId] key, or a refused write does;
+// refetch the tally, or a refused write does;
 // no_claim=that the refetch returns the new award (server read test).
 describe("useMeetingVotes winner refetch (#1580)", () => {
-	let spy: ReturnType<typeof vi.spyOn>;
 	function setup() {
 		const qc = new QueryClient({
 			defaultOptions: { queries: { retry: false } },
 		});
-		spy = vi.spyOn(qc, "invalidateQueries");
 		const wrapper = ({ children }: { children: ReactNode }) => (
 			<QueryClientProvider client={qc}>{children}</QueryClientProvider>
 		);
@@ -43,7 +48,7 @@ describe("useMeetingVotes winner refetch (#1580)", () => {
 				useMeetingVotes({
 					meetingId: "m1",
 					myId: "me",
-					isVoteCounter: false,
+					isVoteCounter: true,
 					effectiveCanManage: false,
 					minutes: { canEdit: false, data: null } as never,
 				}),
@@ -53,29 +58,44 @@ describe("useMeetingVotes winner refetch (#1580)", () => {
 	beforeEach(() => vi.clearAllMocks());
 	afterEach(cleanup);
 
-	it("invalidates the tally after a successful set and clear", async () => {
+	const member = { kind: "member" as const, id: "p1" };
+
+	// The observable: with the tally query enabled, a refetch is a second
+	// getVoteTally call. Settle the mount fetch first, then count.
+	async function settled(result: { current: unknown }) {
+		await waitFor(() => expect(getVoteTally).toHaveBeenCalledTimes(1));
+		expect(result.current).toBeTruthy();
+	}
+
+	it("refetches the tally after a successful set", async () => {
 		const { result } = setup();
-		await act(() =>
-			result.current.handleSetVoteWinner("best_speaker", {
-				kind: "member",
-				id: "p1",
-			}),
-		);
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["vote-tally", "m1"] });
-		spy.mockClear();
-		await act(() => result.current.handleClearVoteWinner("best_speaker"));
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["vote-tally", "m1"] });
+		await settled(result);
+		await act(() => result.current.handleSetVoteWinner("best_speaker", member));
+		await waitFor(() => expect(getVoteTally).toHaveBeenCalledTimes(2));
 	});
 
-	it("does not invalidate when the write is refused", async () => {
+	it("refetches the tally after a successful clear", async () => {
+		const { result } = setup();
+		await settled(result);
+		await act(() => result.current.handleClearVoteWinner("best_speaker"));
+		await waitFor(() => expect(getVoteTally).toHaveBeenCalledTimes(2));
+	});
+
+	it("does not refetch when a set is refused", async () => {
 		setMinutesAward.mockRejectedValueOnce(new Error("no"));
 		const { result } = setup();
-		await act(() =>
-			result.current.handleSetVoteWinner("best_speaker", {
-				kind: "member",
-				id: "p1",
-			}),
-		);
-		expect(spy).not.toHaveBeenCalled();
+		await settled(result);
+		await act(() => result.current.handleSetVoteWinner("best_speaker", member));
+		expect(setMinutesAward).toHaveBeenCalledTimes(1);
+		expect(getVoteTally).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not refetch when a clear is refused", async () => {
+		clearMinutesAward.mockRejectedValueOnce(new Error("no"));
+		const { result } = setup();
+		await settled(result);
+		await act(() => result.current.handleClearVoteWinner("best_speaker"));
+		expect(clearMinutesAward).toHaveBeenCalledTimes(1);
+		expect(getVoteTally).toHaveBeenCalledTimes(1);
 	});
 });

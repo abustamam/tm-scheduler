@@ -13,6 +13,7 @@ import {
 } from "#/server/minutes";
 import type { AwardCategory } from "#/server/minutes-logic";
 import { getVoteTally } from "#/server/voting";
+import { voteTallyKey } from "./vote-counter-panel";
 
 /**
  * Plain error text, used by the five Ballot Counter console handlers and the
@@ -65,7 +66,7 @@ export function useMeetingVotes(args: {
 	// minutes. Shares its query key with `VoteCounterPanel`'s own poll — mounting
 	// both costs one request, not two.
 	const { data: voteTally } = useQuery({
-		queryKey: ["vote-tally", meetingId],
+		queryKey: voteTallyKey(meetingId),
 		queryFn: () => getVoteTally({ data: { meetingId, selfMemberId: myId } }),
 		enabled: isVoteCounter || effectiveCanManage,
 		refetchInterval: 5000,
@@ -166,6 +167,13 @@ export function useMeetingVotes(args: {
 		}
 	}
 
+	// The console's winner box reads the tally; do not make it wait for the
+	// next 5s poll (#1580).
+	async function refreshAfterWinnerWrite() {
+		await queryClient.invalidateQueries({ queryKey: voteTallyKey(meetingId) });
+		await router.invalidate();
+	}
+
 	async function handleSetVoteWinner(
 		category: AwardCategory,
 		winner:
@@ -184,12 +192,7 @@ export function useMeetingVotes(args: {
 				},
 			});
 			toast.success("Winner set.");
-			// The console's winner box reads the tally; do not make it wait for
-			// the next 5s poll (#1580).
-			await queryClient.invalidateQueries({
-				queryKey: ["vote-tally", meetingId],
-			});
-			await router.invalidate();
+			await refreshAfterWinnerWrite();
 		} catch (err) {
 			toast.error(errMessage(err));
 		}
@@ -201,12 +204,7 @@ export function useMeetingVotes(args: {
 				data: { meetingId, category, selfMemberId: myId },
 			});
 			toast.success("Winner cleared.");
-			// The console's winner box reads the tally; do not make it wait for
-			// the next 5s poll (#1580).
-			await queryClient.invalidateQueries({
-				queryKey: ["vote-tally", meetingId],
-			});
-			await router.invalidate();
+			await refreshAfterWinnerWrite();
 		} catch (err) {
 			toast.error(errMessage(err));
 		}

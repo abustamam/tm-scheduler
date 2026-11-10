@@ -2071,7 +2071,8 @@ function joinInTransaction(
  * meeting's Table Topics speakers and each category's stored winner, composed
  * here so a test can call it (`voting.ts` may export only server functions).
  *
- * The winner comes from `loadAwardRows`, the one `meeting_awards` reader, so a
+ * The winner comes from `loadAwardRows`, the shared reader the Minutes card and
+ * `get_agenda` use (the club export and guest pipeline read the table too), so a
  * winner set from the Minutes card reads here on the next poll and names itself
  * exactly as the Awards list does. The three reads share one `Promise.all`: this
  * is polled every 5 seconds per open console.

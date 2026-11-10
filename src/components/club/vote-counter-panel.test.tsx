@@ -31,6 +31,7 @@ vi.mock("#/server/voting", () => ({
 }));
 
 import { formatVoteTime } from "#/lib/vote-window";
+import type { AwardWinner } from "#/server/minutes-logic";
 import { VoteCounterPanel } from "./vote-counter-panel";
 
 const MEETING_ID = "11111111-1111-4111-8111-111111111111";
@@ -64,12 +65,7 @@ function category(over: {
 /** Every category empty and closed; override the ones a test cares about. */
 function tally(
 	over: Partial<Record<string, ReturnType<typeof category>>>,
-	awards: Partial<
-		Record<
-			string,
-			{ kind: Entry["kind"]; id: string | null; name: string } | null
-		>
-	> = {},
+	awards: Partial<Record<string, AwardWinner | null>> = {},
 ) {
 	return {
 		awards: {
@@ -887,6 +883,27 @@ describe("VoteCounterPanel current winner (#1580)", () => {
 		expect(await speaker.findByText("Not set")).toBeTruthy();
 		expect(speaker.queryByRole("button", { name: "Clear winner" })).toBeNull();
 		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+	});
+
+	it("shows the winner box and Clear winner on an OPEN category too", async () => {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{
+					best_speaker: category({
+						isOpen: true,
+						results: [member("m-1", "Ana", 4)],
+					}),
+				},
+				{ best_speaker: { kind: "member", id: "m-1", name: "Ana" } },
+			),
+		);
+		renderPanel();
+		const speaker = card("Best Speaker");
+		expect(
+			await speaker.findByRole("button", { name: "Clear winner" }),
+		).toBeTruthy();
+		expect(speaker.getByRole("button", { name: /Close voting/ })).toBeTruthy();
+		expect(speaker.getByText("Winner")).toBeTruthy();
 	});
 
 	it("shows the name, badges the matching row and offers Clear winner", async () => {
