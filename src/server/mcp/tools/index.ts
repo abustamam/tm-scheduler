@@ -36,6 +36,7 @@ import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setContactPreferenceTool } from "./set-contact-preference";
 import { setMyAttendanceTool } from "./set-my-attendance";
+import { setMySpeechDetailsTool } from "./set-my-speech-details";
 import { updateMeetingScheduleTool } from "./update-meeting-schedule";
 import { upsertAgendasTool } from "./upsert-agendas";
 import { whoamiTool } from "./whoami";
@@ -66,4 +67,5 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	setContactPreferenceTool,
 	addMembersTool,
 	editMemberTool,
+	setMySpeechDetailsTool,
 ];

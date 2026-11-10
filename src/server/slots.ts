@@ -24,12 +24,10 @@ import {
 	applyRemoveSpeakerSlot,
 	claimSlotCore,
 	confirmSlotCore,
-	editSlotSpeech,
-	lockSpeakerSlotForDetails,
 	reassignSlotCore,
 	releaseSlotCore,
+	saveSpeakerDetailsCore,
 	speakerDetailsOwnerOrThrow,
-	writeSpeakerDetails,
 } from "./slots-logic";
 import {
 	speakerDetailsSchema,
@@ -378,33 +376,15 @@ export const updateSpeakerDetails = createServerFn({ method: "POST" })
 		// put it right either.
 		assertMeetingAccepts(slot.meetingStatus, "plan");
 		speakerDetailsOwnerOrThrow(slot);
-		await db.transaction(async (tx) => {
-			// The meeting lock, then the slot FOR UPDATE: a concurrent reassign,
-			// release, guest convert/link or cancel serializes against this save,
-			// and the speech goes to whoever holds the slot as of the lock.
-			const locked = await lockSpeakerSlotForDetails(tx, {
+		await db.transaction((tx) =>
+			saveSpeakerDetailsCore(tx, {
 				meetingId: slot.meetingId,
 				slotId: data.slotId,
-			});
-			assertMeetingAccepts(locked.meetingStatus, "plan");
-			// The archive gate again, against tx, as `applySpeechLogEdit` does.
-			await assertClubNotArchived(locked.clubId, tx);
-			const owner = speakerDetailsOwnerOrThrow(locked);
-			await writeSpeakerDetails(tx, {
-				clubId: locked.clubId,
+				details: data.speakerDetails,
 				actorMemberId,
-				meetingId: locked.meetingId,
-				slotId: data.slotId,
-				currentSpeechId: locked.speechId,
-				write: () =>
-					editSlotSpeech(tx, {
-						slotId: data.slotId,
-						...owner,
-						currentSpeechId: locked.speechId,
-						input: data.speakerDetails,
-					}),
-			});
-		});
+				proof: "session",
+			}),
+		);
 
 		return { ok: true as const };
 	});

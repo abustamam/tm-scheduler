@@ -487,7 +487,11 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("slots", "confirmSlot", "member", { gap: true }),
 	row("slots", "unconfirmSlot", "admin", { gap: true }),
 	row("slots", "reassignSlot", "member", { gap: true }),
-	row("slots", "updateSpeakerDetails", "member", { gap: true }),
+	// Own-slot-only: the tool writes a speaker slot the caller holds. Editing
+	// another member's or a guest's speech stays in the app (#1571).
+	row("slots", "updateSpeakerDetails", "member", {
+		tool: "set_my_speech_details",
+	}),
 	row("slots", "addSpeakerSlot", "member", { gap: true }),
 	row("slots", "removeSpeakerSlot", "member", { gap: true }),
 	row("slots", "moveSpeakerSlot", "member", { gap: true }),

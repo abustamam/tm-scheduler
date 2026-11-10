@@ -1371,7 +1371,7 @@ export function normalizeSpeech(input?: SpeechInput): {
  * working with no change, and the fallback text can never drift from the linked
  * project. A speech with no picked project is left exactly as typed.
  */
-async function applyProjectDisplay(
+export async function applyProjectDisplay(
 	conn: DbOrTx,
 	content: SpeechContent,
 ): Promise<SpeechContent> {
@@ -1468,6 +1468,38 @@ export async function lockSpeakerSlotForDetails(
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
 	return { meetingStatus: meeting.status, ...slot };
+}
+
+/**
+ * Take the locks a connector save needs BEFORE it reads the speech it will
+ * merge omitted fields from (#1571): the meeting's slot-edit lock, then every
+ * speaker slot on the meeting FOR UPDATE, in id order. Every speaker slot, not
+ * only the ones the caller holds now: a slot released and reclaimed between
+ * this lock and the read would otherwise be written unlocked. The app's
+ * `updateSpeakerDetails` takes the same two in the same order (meeting, then
+ * slot), so the two paths cannot deadlock, and a save that committed first is
+ * visible to the read that follows.
+ */
+export async function lockMeetingSpeakerSlots(
+	tx: Tx,
+	args: { meetingId: string },
+): Promise<void> {
+	await lockMeetingForSlotEdit(tx, args.meetingId);
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleDefinitions.isSpeakerRole, true),
+			),
+		)
+		.orderBy(roleSlots.id)
+		.for("update", { of: roleSlots });
 }
 
 /**
@@ -2631,6 +2663,8 @@ export async function writeSpeakerDetails(
 		slotId: string;
 		currentSpeechId: string | null;
 		write: () => Promise<void>;
+		/** How the actor was established; the session arm when omitted. */
+		proof?: WriteProof;
 	},
 ): Promise<void> {
 	const before = await speechDetails(conn, args.currentSpeechId);
@@ -2653,10 +2687,65 @@ export async function writeSpeakerDetails(
 			speechId: afterSpeechId ?? args.currentSpeechId,
 			before,
 			after: await speechDetails(conn, afterSpeechId),
-			proof: "session",
+			proof: args.proof ?? "session",
+			...(args.proof === "connector" ? { via: "connector" as const } : {}),
 		},
 	});
 }
+
+/**
+ * The locked save of a speaker slot's speech details, shared by
+ * `updateSpeakerDetails` (the app, `proof: "session"`) and `set_my_speech_details`
+ * (the connector, `proof: "connector"`, #1571). Runs in the caller's transaction:
+ * the meeting lock then the slot FOR UPDATE, the meeting-status and archive
+ * asserts against the locked rows, the owner from the locked slot, then the write
+ * and its `meeting_edit` log. `onlyHeldBy` refuses a slot whose holder is not
+ * that member, read from the LOCKED slot, so a reassign between a connector
+ * preview and its apply never writes the new holder's speech.
+ *
+ * Lives here, not in `slots.ts` (#1550): see `lockSpeakerSlotForDetails`.
+ */
+export async function saveSpeakerDetailsCore(
+	tx: Tx,
+	args: {
+		meetingId: string;
+		slotId: string;
+		details: SpeechInput;
+		actorMemberId: string | null;
+		proof: WriteProof;
+		onlyHeldBy?: string;
+	},
+): Promise<void> {
+	const locked = await lockSpeakerSlotForDetails(tx, {
+		meetingId: args.meetingId,
+		slotId: args.slotId,
+	});
+	assertMeetingAccepts(locked.meetingStatus, "plan");
+	// The archive gate again, against tx, as `applySpeechLogEdit` does.
+	await assertClubNotArchived(locked.clubId, tx);
+	const owner = speakerDetailsOwnerOrThrow(locked);
+	if (args.onlyHeldBy && locked.assignedMemberId !== args.onlyHeldBy) {
+		throw new Error(SPEAKER_SLOT_NOT_YOURS_MESSAGE);
+	}
+	await writeSpeakerDetails(tx, {
+		clubId: locked.clubId,
+		actorMemberId: args.actorMemberId,
+		meetingId: locked.meetingId,
+		slotId: args.slotId,
+		currentSpeechId: locked.speechId,
+		proof: args.proof,
+		write: () =>
+			editSlotSpeech(tx, {
+				slotId: args.slotId,
+				...owner,
+				currentSpeechId: locked.speechId,
+				input: args.details,
+			}),
+	});
+}
+
+export const SPEAKER_SLOT_NOT_YOURS_MESSAGE =
+	"You can only set the speech details of a speaker slot you hold.";
 
 /**
  * After a clear unlinked `speechId` (#1533): delete it when a GUEST owns it

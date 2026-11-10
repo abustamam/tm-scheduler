@@ -242,6 +242,16 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		await expect(call("get_my_schedule", token, {})).resolves.toEqual({
 			meetings: [expect.objectContaining({ meetingId: s.meetingId })],
 		});
+		// A member tool past the audience check: the seeded member holds no
+		// speaker slot, so the preview answers with a blocking item (#1571).
+		await expect(
+			call("set_my_speech_details", token, {
+				meetingId: s.meetingId,
+				speechTitle: "Hello",
+			}),
+		).resolves.toMatchObject({
+			blocking: [expect.objectContaining({ code: "NO_SPEAKER_SLOT" })],
+		});
 	});
 
 	/**
