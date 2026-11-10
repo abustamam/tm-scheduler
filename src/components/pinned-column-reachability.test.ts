@@ -27,10 +27,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL = resolve(HERE, "app-shell.tsx");
 const PANEL = resolve(HERE, "club/meeting-attendance-panel.tsx");
 const BUTTON = resolve(HERE, "ui/button.tsx");
-const MEETING_ROUTE = resolve(
-	HERE,
-	"../routes/club.$clubId.meeting.$meetingId.tsx",
-);
+const MEETING_TABS = resolve(HERE, "club/meeting-tabs.tsx");
 
 /**
  * Both readers are comment-blind. Every one of these elements carries a long
@@ -143,22 +140,23 @@ describe.skipIf(!hasChrome)(
 				<div class="${cls.footer}" data-chrome>Sign out</div>
 			</div>`;
 
-		/** The meeting rail: pinned aside → capped card → header + scrolling body. */
-		const railHtml = (body = cls.cardBody) =>
-			`<div class="flex gap-6">
-				<div class="min-w-0 flex-1" style="height:2400px">agenda</div>
-				<aside class="${cls.rail}">
-					<div class="${cls.card} flex flex-col gap-6 rounded-xl border py-6">
-						<div class="${cls.cardHeader} px-6" data-chrome>Planned attendance</div>
-						<div class="${body} px-6" data-scroller>
-							${Array.from(
-								{ length: 40 },
-								(_, i) =>
-									`<div class="py-4 text-sm"${i === 39 ? " data-tail" : ""}>Member ${i + 1}</div>`,
-							).join("")}
-						</div>
+		/**
+		 * The Attendance tab (amendment 7: the rail is gone): the tab panel, at
+		 * the page's content width, holding the panel card. Nothing is pinned and
+		 * nothing scrolls inside the card; the list flows with the page.
+		 */
+		const panelHtml = (body = cls.cardBody) =>
+			`<div class="${cls.tabPanel}" data-state="active">
+				<div class="${cls.card} flex flex-col gap-6 rounded-xl border py-6">
+					<div class="${cls.cardHeader} px-6" data-chrome>Planned attendance</div>
+					<div class="${body} px-6" data-body>
+						${Array.from(
+							{ length: 40 },
+							(_, i) =>
+								`<div class="py-4 text-sm"${i === 39 ? " data-tail" : ""}>Member ${i + 1}</div>`,
+						).join("")}
 					</div>
-				</aside>
+				</div>
 			</div>`;
 
 		const probe = (bodyHtml: string) =>
@@ -176,13 +174,21 @@ describe.skipIf(!hasChrome)(
 			cls.navBand = classContaining(SHELL, "min-h-0 flex-1 flex-col");
 			cls.footer = classContaining(SHELL, "rounded-xl border border-border");
 			cls.drawer = classAfterTag(SHELL, "<SheetContent");
-			cls.rail = classAfterTag(MEETING_ROUTE, "<aside");
-			cls.card = classAfterTag(PANEL, "<Card ");
+			cls.tabPanel = classAfterTag(MEETING_TABS, "<TabsContent");
+			// The panel's card and body carry NO className now (the rail's cap and
+			// scroller classes went with the rail). Read the tag bare, so a class
+			// added back is a failure to look at rather than a silent skip.
+			const panelSrc = readSource(PANEL);
+			expect(panelSrc, "<Card> gained a className").toContain("<Card>");
+			expect(panelSrc, "<CardContent> gained a className").toContain(
+				"<CardContent>",
+			);
+			cls.card = "";
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
-			cls.cardBody = classAfterTag(PANEL, "<CardContent");
+			cls.cardBody = "";
 			cls.list = classAfterTag(PANEL, '<ul role="list"');
 			css = await buildAppCss(
-				candidatesIn(`${shellHtml()}${railHtml()}${drawerHtml()}`),
+				candidatesIn(`${shellHtml()}${panelHtml()}${drawerHtml()}`),
 			);
 		});
 
@@ -260,34 +266,28 @@ describe.skipIf(!hasChrome)(
 			});
 		});
 
-		describe("meeting attendance rail", () => {
-			it("reaches the last member row and keeps the card header in view", () => {
-				const p = probe(railHtml());
-				expect(p.overflowY).toBe("auto");
-				expect(p.overflows, "40 member rows should exceed the cap").toBe(true);
-				expect(p.scrolledBy).toBeGreaterThan(0);
-				expect(p.tailVisibleAfterScroll).toBe(true);
-				// v1.19.0.0 made row 40 reachable but scrolled the title, the counts
-				// line and the sync status away with it. This is that half.
-				expect(p.chromeVisibleAfterScroll).toBe(true);
+		describe("meeting attendance tab", () => {
+			it("has no inner scroller and no pinned or capped ancestor: the list flows with the page", () => {
+				// Amendment 7 of #1582. The rail's `lg:overflow-y-auto` scroller, its
+				// `lg:max-h-[...]` cap and its `lg:sticky` pin are gone; an inner
+				// scroller with no bounded parent would be a dead scroll box. Read
+				// from the shipped classes, so putting any of them back fails here.
+				for (const [what, cls_] of [
+					["the card body", cls.cardBody],
+					["the card", cls.card],
+					["the card header", cls.cardHeader],
+					["the tab panel", cls.tabPanel],
+				] as const) {
+					expect(cls_, what).not.toMatch(
+						/overflow-y-auto|overflow-auto|overflow-y-scroll|\bsticky\b|lg:sticky|max-h-|lg:max-h-/,
+					);
+				}
 			});
 
-			it("is not rescued by the page scroll (what made it a bug)", () => {
-				expect(probe(railHtml()).tailReachableByPageScroll).toBe(false);
-			});
-
-			it("loses the tail again with the scroller removed (mutation control)", () => {
-				const p = probe(
-					railHtml(cls.cardBody.replace(/lg:overflow-y-auto|lg:min-h-0/g, "")),
-				);
-				expect(p.tailVisibleAfterScroll).toBe(false);
-				expect(p.tailReachableByPageScroll).toBe(false);
-			});
-
-			it("a roll row stays on ONE line under a forced scrollbar: a long name clamps at two lines, the status track and the one contact-menu icon do not (#1309)", async () => {
-				// This is the RAIL (1280px viewport, `lg` on): the phone restack of
-				// #1420 (`max-lg:@max-md:flex-col` on the main line) must NOT reach it,
-				// so the row still measures `oneLine`. The phone side, where the controls
+			it("a roll row stays on ONE line in the full-width Attendance tab: a long name clamps at two lines, the status track and the one contact-menu icon do not (#1309)", async () => {
+				// This is the full-width Attendance TAB (1280px viewport, `lg` on): the
+				// phone restack of #1420 (`max-lg:@max-md:flex-col` on the main line)
+				// must NOT reach it, so the row still measures `oneLine`. The phone side, where the controls
 				// drop under the name instead, is held by `roll-row-geometry.test.ts`.
 				// Classes come from the real source: the main line, the identity name
 				// box, the action line, the icon size and the status trigger's width.
@@ -307,18 +307,18 @@ describe.skipIf(!hasChrome)(
 				const chip = /"(w-36)[^"]* (@md:w-44)[^"]*"/.exec(readSource(PANEL));
 				expect(chip, "status trigger widths not found").not.toBeNull();
 				const chipClass = `${chip?.[1]} ${chip?.[2]}`;
-				const longName = "Bartholomew Montgomery-Featherstonehaugh ".repeat(3);
+				const longName = "Bartholomew Montgomery-Featherstonehaugh ".repeat(12);
 				// Inside the panel's own `@container` list: the track's `@md:` arm is
 				// measured against it, and without it the arm matches nothing.
 				const row = `<div class="${cls.list}"><div class="${mainLine}" data-line><div class="${identity}"><span class="${nameBox}" data-name>${longName}</span><span class="shrink-0" data-role>VPE</span></div><div class="${line}"><div class="${chipClass}" data-chip></div><a class="inline-flex shrink-0 ${icon}" data-icon></a></div></div></div>`;
-				const html = railHtml().replace(
+				const html = panelHtml().replace(
 					/<div class="py-4 text-sm"[^>]*>Member 1<\/div>/,
 					row,
 				);
 				const script = `<script>
 					var q = function (s) { return document.querySelector(s).getBoundingClientRect(); };
 					var chip = q("[data-chip]"), icon = q("[data-icon]"), nm = q("[data-name]");
-					var body = document.querySelector("[data-scroller]");
+					var body = document.querySelector("[data-body]");
 					var br = body.getBoundingClientRect();
 					var cs = getComputedStyle(body);
 					var inner = br.right - parseFloat(cs.paddingRight);
@@ -330,45 +330,29 @@ describe.skipIf(!hasChrome)(
 						nameEl.scrollHeight > nameEl.clientHeight ? "clamped" : "notClamped",
 						body.scrollWidth <= body.clientWidth ? "noscroll" : "hscroll",
 						Math.round(chip.width),
-						Math.round(document.querySelector("aside").getBoundingClientRect().width),
+						Math.round(document.querySelector("[data-body]").getBoundingClientRect().width),
 					].join(",");
 				</script>`;
-				const rowCss =
-					(await buildAppCss(candidatesIn(html))) +
-					"\n[data-scroller]::-webkit-scrollbar{width:15px}";
+				const rowCss = await buildAppCss(candidatesIn(html));
 				const title = renderAndReadTitle({
 					bodyHtml: html,
 					css: rowCss,
 					script,
 					viewport: VIEWPORT,
 				});
-				// 1280px is the `xl` rail: 384px (`xl:w-96`; it was `lg:w-[340px]`), so
-				// its list is 350px, under the 28rem the `@md:w-44` arm needs: the
-				// track is the 144px `w-36`. It was 176px when `md:w-44` followed the
-				// viewport.
-				expect(title).toBe(
-					"oneLine,inside,nameYields,clamped,noscroll,144,384",
-				);
-			});
-
-			it("loses the header if the scroller moves back out to the <aside>", () => {
-				// The v1.19.0.0 layout, reconstructed: the whole column scrolls, so
-				// row 40 IS reachable and the card header is gone by the time you get
-				// there. This is the half the reachability assertions cannot see —
-				// without it, moving the scroller back out would fail nothing.
-				const p = probeColumn({
-					bodyHtml: railHtml("px-6").replace(
-						`class="${cls.rail}"`,
-						`class="${cls.rail.replace("lg:flex-col", "lg:overflow-y-auto")}" data-scroller`,
-					),
-					css,
-					scrollerSelector: "[data-scroller]",
-					tailSelector: "[data-tail]",
-					chromeSelector: "[data-chrome]",
-					viewport: VIEWPORT,
-				});
-				expect(p.tailVisibleAfterScroll).toBe(true);
-				expect(p.chromeVisibleAfterScroll).toBe(false);
+				// Full width: the list is far past the 28rem the `@md:w-44` arm needs,
+				// so the track is the 176px `w-44`, and the body is the panel's width.
+				const [lines, inside, yields, clamp, scroll, chipW, bodyW] =
+					title.split(",");
+				expect([lines, inside, yields, clamp, scroll, chipW]).toEqual([
+					"oneLine",
+					"inside",
+					"nameYields",
+					"clamped",
+					"noscroll",
+					"176",
+				]);
+				expect(Number(bodyW)).toBeGreaterThan(28 * 16);
 			});
 		});
 	},

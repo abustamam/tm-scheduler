@@ -44,8 +44,10 @@ describe("Toastmaster vote console wiring (#1472)", () => {
 	//   server refuses; fails_when=the prop is dropped or widened;
 	// no_claim=the server refusal (vote-counter-capability.integration.test.ts)
 	it("excludes only a Toastmaster-only viewer from the ruling controls", () => {
-		expect(src).toContain(
-			"rulingExcluded={isTmod && !isSlotVoteCounter && !canManage}",
+		// Whitespace-blind: the console now sits inside a tab panel, so the
+		// formatter wraps the prop at a deeper indent (#1582); the prop is unchanged.
+		expect(src.replace(/\s+/g, "")).toContain(
+			"rulingExcluded={isTmod&&!isSlotVoteCounter&&!canManage}",
 		);
 	});
 });

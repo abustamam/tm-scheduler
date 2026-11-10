@@ -147,8 +147,10 @@ describe("duty-aware nudge route wiring (#667)", () => {
 	it("hands the agenda the link base, gated like its share link", () => {
 		// <MeetingAgenda> renders for plain members too, so this follows
 		// `shareUrl` rather than the rail's bare form.
-		expect(agendaProps).toContain(
-			"personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}",
+		// Whitespace-blind: the agenda now sits inside a tab panel, so the
+		// formatter wraps the prop at a deeper indent (#1582); the prop is unchanged.
+		expect(agendaProps.replace(/\s+/g, "")).toContain(
+			"personalNudgeBase={effectiveCanManage?nudgePersonalBase:null}",
 		);
 	});
 });

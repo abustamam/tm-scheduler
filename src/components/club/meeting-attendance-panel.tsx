@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, ChevronUp } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import {
 	AttendanceExpectedGuests,
 	type ExpectedGuest,
@@ -146,10 +146,6 @@ const ROLL_MENU: { label: string; status: AttendanceStatus }[] = [
 	{ label: "Present", status: "present" },
 	{ label: "Absent", status: "absent" },
 ];
-
-/** Tailwind's `lg` breakpoint (`min-width: 1024px`) — kept as one literal so the
- *  CSS class below and the JS desktop check can't drift apart. */
-const LG_BREAKPOINT_PX = 1024;
 
 /**
  * The rail's row, SHARED by both modes — three components rather than one, so
@@ -1288,33 +1284,6 @@ export function MeetingAttendancePanel({
 		ids: ReadonlySet<string> | null;
 	}>({ key: "all", ids: null });
 
-	// Mobile collapse (spec D4): below `lg` PLAN mode starts collapsed to its
-	// counts line so a big roster does not push the agenda off screen; at `lg`
-	// and up it is always shown. Starting `false` (rather than reading `window`
-	// during render) keeps the server render and the client's first render in
-	// agreement — same guard `NudgeButtons` uses, for the same reason: a value
-	// computed before hydration makes the two disagree and React has to
-	// reconcile a mismatch.
-	//
-	// SUBSCRIBED, not sampled. This must track the SAME breakpoint the toggle
-	// button's `lg:hidden` tracks, and CSS re-evaluates that on every resize. A
-	// one-shot `window.innerWidth` read froze at mount, so rotating a tablet
-	// from portrait to landscape hid the toggle (CSS, live) while `isDesktop`
-	// stayed `false` (JS, stale) — leaving a header with no rows and no visible
-	// control to reveal them, on exactly the device a VPE runs the rail on.
-	const [isDesktop, setIsDesktop] = useState(false);
-	useEffect(() => {
-		const mq = window.matchMedia(`(min-width: ${LG_BREAKPOINT_PX}px)`);
-		const sync = () => setIsDesktop(mq.matches);
-		sync();
-		mq.addEventListener("change", sync);
-		return () => mq.removeEventListener("change", sync);
-	}, []);
-	const [expanded, setExpanded] = useState(false);
-	// ROLL mode opens by default, even on mobile — it IS the task on meeting
-	// day, unlike plan mode, which stays collapsed until asked.
-	const showRows = roll || expanded || isDesktop;
-
 	// Hoisted out of the `roster.map` below, where it was a `plan.find` per row —
 	// the one super-linear term on this render path, and recomputed every render:
 	// 0.015ms at n=40, 2.535ms at n=1000, 50.420ms at n=5000. Clean quadratic.
@@ -1471,17 +1440,11 @@ export function MeetingAttendancePanel({
 	// which would read as "no contact on file" for a member who has one.
 	const hideContact = roll && phaseCompleted;
 
-	// At `lg` this card is the pinned rail (`club.$clubId.meeting.$meetingId`),
-	// which caps its height — so the card fills that cap and its BODY scrolls,
-	// leaving the header (title, counts, sync status) in place above the rows.
-	// Below `lg` the card is a normal block in the page flow and none of it
-	// applies: the page scrolls, so a scroller here would be a box inside a box.
-	// The `lg:` prefixes are the coupling to that one caller, which is also the
-	// only caller. `lg:px-4` is one of them: the rail is 340px (384px at `xl`),
-	// so its card gives the row 16px back on each side instead of the default 24.
+	// The card renders at the content width of the Attendance tab (#1582) and
+	// flows with the page: no height cap and no inner scroller.
 	return (
-		<Card className="lg:min-h-0 lg:flex-1">
-			<CardHeader className="shrink-0 lg:px-4">
+		<Card>
+			<CardHeader className="shrink-0">
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>
@@ -1496,163 +1459,132 @@ export function MeetingAttendancePanel({
 						 *  no empty row on the normal path. */}
 						{roll && sync ? <SyncStatus {...sync} /> : null}
 					</div>
-					{/* Toggle only exists in PLAN mode. Below `lg` it flips the
-					 *  collapse; roll mode is always expanded there (see `showRows`),
-					 *  so the control would have nothing to do. At `lg` and up plan
-					 *  mode's roster is always shown regardless, which is why the
-					 *  button there is CSS-hidden rather than removed — still one DOM
-					 *  node either way. */}
-					{roll ? null : (
-						<Button
-							variant="ghost"
-							size="sm"
-							className="lg:hidden"
-							onClick={() => setExpanded((v) => !v)}
-						>
-							{expanded ? (
-								<>
-									Hide
-									<ChevronUp className="size-4" aria-hidden />
-								</>
-							) : (
-								<>
-									Show
-									<ChevronDown className="size-4" aria-hidden />
-								</>
-							)}
-						</Button>
-					)}
 				</div>
 			</CardHeader>
-			{/* The rows are absent from the DOM entirely when collapsed — not
-			 *  merely CSS-hidden, which would still expose every member's name to a
-			 *  screen reader (and make the collapse untestable). */}
-			{showRows ? (
-				<CardContent className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:px-4">
-					{/* Plan mode only. Wraps onto a second line on a narrow screen; it
-					 *  never scrolls sideways. A zero chip is disabled unless selected. */}
-					{!roll && planPanel ? (
-						<fieldset
-							aria-label="Filter by answer"
-							className="mb-3 flex min-w-0 flex-wrap gap-2"
-						>
-							{PLAN_FILTERS.map(({ key, label }) => {
-								const count = PLAN_FILTER_COUNT[key](planPanel);
-								const selected = activeFilter === key;
-								return (
-									<Button
-										key={key}
-										type="button"
-										size="sm"
-										variant={selected ? "default" : "outline"}
-										className="rounded-full"
-										aria-pressed={selected}
-										disabled={count === 0 && !selected}
-										onClick={() => selectPlanFilter(key)}
-									>
-										{label} <span className="tabular-nums">{count}</span>
-									</Button>
-								);
-							})}
-						</fieldset>
-					) : null}
-					{/* A LIST, not forty sibling divs: without it an AT user gets no set
-					 *  size and no position within it, on the one surface whose job is
-					 *  "how many of us are there and where am I in the chase".
+			<CardContent>
+				{/* Plan mode only. Wraps onto a second line on a narrow screen; it
+				 *  never scrolls sideways. A zero chip is disabled unless selected. */}
+				{!roll && planPanel ? (
+					<fieldset
+						aria-label="Filter by answer"
+						className="mb-3 flex min-w-0 flex-wrap gap-2"
+					>
+						{PLAN_FILTERS.map(({ key, label }) => {
+							const count = PLAN_FILTER_COUNT[key](planPanel);
+							const selected = activeFilter === key;
+							return (
+								<Button
+									key={key}
+									type="button"
+									size="sm"
+									variant={selected ? "default" : "outline"}
+									className="rounded-full"
+									aria-pressed={selected}
+									disabled={count === 0 && !selected}
+									onClick={() => selectPlanFilter(key)}
+								>
+									{label} <span className="tabular-nums">{count}</span>
+								</Button>
+							);
+						})}
+					</fieldset>
+				) : null}
+				{/* A LIST, not forty sibling divs: without it an AT user gets no set
+				 *  size and no position within it, on the one surface whose job is
+				 *  "how many of us are there and where am I in the chase".
+				 *
+				 *  `role="list"` is NOT redundant with the implicit one. Tailwind's
+				 *  preflight sets `list-style: none` on every `ul`, and WebKit drops
+				 *  the implicit list role when list styling is removed — so on the
+				 *  iPad this rail is actually run from, VoiceOver would announce no
+				 *  list at all, losing the set size above at exactly the place it was
+				 *  added to help. Both suppressions below are that same point: the
+				 *  role is redundant to a STATIC reader and load-bearing to a real
+				 *  one.
+				 *
+				 *  `@container` is the other job: this list's inline size IS every
+				 *  row's, so it is what the status track's `@md:` classes measure. */}
+				{/* biome-ignore lint/a11y/noRedundantRoles: not redundant in practice — preflight's `list-style: none` makes WebKit drop the implicit role */}
+				{/* biome-ignore lint/a11y/useSemanticElements: this already IS a <ul>; the rule misfires when the explicit role matches the element */}
+				<ul role="list" className="@container">
+					{roll
+						? (rollPanel?.rows ?? []).map((row) => (
+								<RollAttendanceRow
+									key={row.id}
+									row={row}
+									locked={writesLocked}
+									meetingDate={meetingDate}
+									shareUrl={shareUrl}
+									hideContact={hideContact}
+									linkIdentity={canViewMemberDetail}
+									pending={pendingId === row.id}
+									busy={busy}
+									onSetAttendance={setAttendance}
+									onSetMode={onSetMode ? setMode : undefined}
+								/>
+							))
+						: planRows.map((m) => (
+								<AttendanceRow
+									key={m.id}
+									m={m}
+									locked={writesLocked}
+									meetingDate={meetingDate}
+									shareUrl={shareUrl}
+									duties={dutiesByMemberId.get(m.id)}
+									evaluating={evaluatingByMemberId.get(m.id)}
+									personalNudgeBase={personalNudgeBase}
+									rsvpUrl={rsvpUrl}
+									rsvpWeekday={rsvpWeekday}
+									clubName={clubName}
+									linkIdentity={canViewMemberDetail}
+									canClearRung={canClearRung}
+									pending={pendingId === m.id}
+									onWriteRung={writeRung}
+									onContacted={contacted}
+								/>
+							))}
+				</ul>
+				{/* Before the meeting: who to look out for. */}
+				{!roll && expectedGuests ? (
+					<AttendanceExpectedGuests guests={expectedGuests} />
+				) : null}
+				{/* On the roll: the RSVP'd guests not yet marked. They are NOT
+				 *  present and NOT a visit until Here (#1444, D7). */}
+				{roll && guests && expectedGuests ? (
+					<AttendanceExpectedGuests
+						guests={pendingExpectedGuests(expectedGuests, guests)}
+						locked={writesLocked || busy}
+						onHere={onGuestHere}
+					/>
+				) : null}
+				{roll && guests ? (
+					/* `writesLocked` here too, and for the same reason as the chips:
+					 *  this group only ever renders in roll mode, the guest writes
+					 *  behind it (`addMinutesGuest` / `removeMinutesGuest`) gate only
+					 *  on `assertAttendanceRecordable`, and the `AttendanceSection`
+					 *  this replaces let an officer add a missed guest to a completed
+					 *  meeting. Leaving it on raw `locked` would fix the member chips
+					 *  and leave the guest list dead on exactly the meeting whose
+					 *  record is being corrected.
 					 *
-					 *  `role="list"` is NOT redundant with the implicit one. Tailwind's
-					 *  preflight sets `list-style: none` on every `ul`, and WebKit drops
-					 *  the implicit list role when list styling is removed — so on the
-					 *  iPad this rail is actually run from, VoiceOver would announce no
-					 *  list at all, losing the set size above at exactly the place it was
-					 *  added to help. Both suppressions below are that same point: the
-					 *  role is redundant to a STATIC reader and load-bearing to a real
-					 *  one.
-					 *
-					 *  `@container` is the other job: this list's inline size IS every
-					 *  row's, so it is what the status track's `@md:` classes measure. */}
-					{/* biome-ignore lint/a11y/noRedundantRoles: not redundant in practice — preflight's `list-style: none` makes WebKit drop the implicit role */}
-					{/* biome-ignore lint/a11y/useSemanticElements: this already IS a <ul>; the rule misfires when the explicit role matches the element */}
-					<ul role="list" className="@container">
-						{roll
-							? (rollPanel?.rows ?? []).map((row) => (
-									<RollAttendanceRow
-										key={row.id}
-										row={row}
-										locked={writesLocked}
-										meetingDate={meetingDate}
-										shareUrl={shareUrl}
-										hideContact={hideContact}
-										linkIdentity={canViewMemberDetail}
-										pending={pendingId === row.id}
-										busy={busy}
-										onSetAttendance={setAttendance}
-										onSetMode={onSetMode ? setMode : undefined}
-									/>
-								))
-							: planRows.map((m) => (
-									<AttendanceRow
-										key={m.id}
-										m={m}
-										locked={writesLocked}
-										meetingDate={meetingDate}
-										shareUrl={shareUrl}
-										duties={dutiesByMemberId.get(m.id)}
-										evaluating={evaluatingByMemberId.get(m.id)}
-										personalNudgeBase={personalNudgeBase}
-										rsvpUrl={rsvpUrl}
-										rsvpWeekday={rsvpWeekday}
-										clubName={clubName}
-										linkIdentity={canViewMemberDetail}
-										canClearRung={canClearRung}
-										pending={pendingId === m.id}
-										onWriteRung={writeRung}
-										onContacted={contacted}
-									/>
-								))}
-					</ul>
-					{/* Before the meeting: who to look out for. */}
-					{!roll && expectedGuests ? (
-						<AttendanceExpectedGuests guests={expectedGuests} />
-					) : null}
-					{/* On the roll: the RSVP'd guests not yet marked. They are NOT
-					 *  present and NOT a visit until Here (#1444, D7). */}
-					{roll && guests && expectedGuests ? (
-						<AttendanceExpectedGuests
-							guests={pendingExpectedGuests(expectedGuests, guests)}
-							locked={writesLocked || busy}
-							onHere={onGuestHere}
-						/>
-					) : null}
-					{roll && guests ? (
-						/* `writesLocked` here too, and for the same reason as the chips:
-						 *  this group only ever renders in roll mode, the guest writes
-						 *  behind it (`addMinutesGuest` / `removeMinutesGuest`) gate only
-						 *  on `assertAttendanceRecordable`, and the `AttendanceSection`
-						 *  this replaces let an officer add a missed guest to a completed
-						 *  meeting. Leaving it on raw `locked` would fix the member chips
-						 *  and leave the guest list dead on exactly the meeting whose
-						 *  record is being corrected.
-						 *
-						 *  `|| busy` because this group's `locked` is documented as "disables
-						 *  controls", not as the meeting's lifecycle, and it is the only
-						 *  channel it has: with the lifecycle gate off in roll mode its
-						 *  controls were disabled by NOTHING during a write, and it closes
-						 *  its popover unconditionally after `onAddGuest` — so a guest add
-						 *  the queue silently refused looked like it had succeeded. Same
-						 *  global signal as the chips, for the same reason. */
-						<AttendanceGuestsGroup
-							guests={guests}
-							clubGuests={clubGuests ?? []}
-							locked={writesLocked || busy}
-							guestEdit={guestEdit}
-							onAddGuest={onAddGuest ?? (() => {})}
-							onRemoveGuest={onRemoveGuest ?? (() => {})}
-							onSetGuestMode={onSetGuestMode}
-						/>
-					) : null}
-				</CardContent>
-			) : null}
+					 *  `|| busy` because this group's `locked` is documented as "disables
+					 *  controls", not as the meeting's lifecycle, and it is the only
+					 *  channel it has: with the lifecycle gate off in roll mode its
+					 *  controls were disabled by NOTHING during a write, and it closes
+					 *  its popover unconditionally after `onAddGuest` — so a guest add
+					 *  the queue silently refused looked like it had succeeded. Same
+					 *  global signal as the chips, for the same reason. */
+					<AttendanceGuestsGroup
+						guests={guests}
+						clubGuests={clubGuests ?? []}
+						locked={writesLocked || busy}
+						guestEdit={guestEdit}
+						onAddGuest={onAddGuest ?? (() => {})}
+						onRemoveGuest={onRemoveGuest ?? (() => {})}
+						onSetGuestMode={onSetGuestMode}
+					/>
+				) : null}
+			</CardContent>
 		</Card>
 	);
 }
