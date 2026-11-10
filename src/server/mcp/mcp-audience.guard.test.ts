@@ -13,7 +13,7 @@ vi.mock("#/db", () => ({ db: {} }));
 const { MCP_TOOLS } = await import("#/server/mcp/tools");
 
 describe("MCP tool audiences (#1281)", () => {
-	it("exactly the five member tools", () => {
+	it("exactly the six member tools", () => {
 		expect(
 			MCP_TOOLS.filter((t) => t.audience === "member")
 				.map((t) => t.name)
@@ -23,6 +23,7 @@ describe("MCP tool audiences (#1281)", () => {
 			"get_my_feedback",
 			"get_my_schedule",
 			"set_my_attendance",
+			"set_my_speech_details",
 			"whoami",
 		]);
 	});

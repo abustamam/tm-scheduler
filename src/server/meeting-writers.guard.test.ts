@@ -699,7 +699,7 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "plan",
 		refusedBy: [
 			"src/server/slots-logic.ts#claimSlotCore",
-			"src/server/slots.ts#updateSpeakerDetails",
+			"src/server/slots-logic.ts#saveSpeakerDetailsCore",
 			"src/server/speech-log-edit-logic.ts#applySpeechLogEdit",
 		],
 		overrides: {
@@ -751,7 +751,7 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		class: "plan",
 		refusedBy: [
 			"src/server/slots-logic.ts#reassignSlotCore",
-			"src/server/slots.ts#updateSpeakerDetails",
+			"src/server/slots-logic.ts#saveSpeakerDetailsCore",
 		],
 	},
 	"src/server/slots.ts#unconfirmSlot": {
