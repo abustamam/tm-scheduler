@@ -35,6 +35,22 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+const hooks = vi.hoisted(() => ({
+	beforeClubLock: null as null | (() => Promise<void>),
+}));
+vi.mock("#/server/club-write-lock", async (orig) => {
+	const m = await orig<typeof import("#/server/club-write-lock")>();
+	return {
+		...m,
+		lockClubForWrite: async (...a: Parameters<typeof m.lockClubForWrite>) => {
+			const run = hooks.beforeClubLock;
+			hooks.beforeClubLock = null;
+			if (run) await run();
+			return m.lockClubForWrite(...a);
+		},
+	};
+});
+
 const { recordAttendanceTool } = await import(
 	"#/server/mcp/tools/record-attendance"
 );
@@ -42,10 +58,13 @@ const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { NOT_OFFICER_MESSAGE } = await import("#/server/mcp/authz-logic");
 const { McpError } = await import("#/server/mcp/errors");
 const { createGuestRecord } = await import("#/server/guests-logic");
+const minutesLogic = await import("#/server/minutes-logic");
 
 const seeded: SeededClub[] = [];
 const extraUsers: string[] = [];
 afterEach(async () => {
+	hooks.beforeClubLock = null;
+	vi.restoreAllMocks();
 	for (const s of seeded.splice(0).reverse()) {
 		await cleanup(s.clubId, [s.adminUserId, s.memberUserId]);
 	}
@@ -394,6 +413,113 @@ describe.skipIf(!hasTestDb)("record_attendance (#1573)", () => {
 			}),
 			"VALIDATION",
 		);
+	});
+
+	it("re-sending a guests call (existing and new) changes nothing", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const known = await newGuest(s, "Zorro Visitor");
+		const args = {
+			meetingId: s.meetingId,
+			guests: [
+				{ guestId: known, mode: "online" },
+				{ newGuest: { name: "Qwerty Plinth", email: "qp@example.com" } },
+			],
+		};
+		await apply(token, args);
+		const rows = await roll(s);
+		expect(rows).toHaveLength(2);
+		const guestRows = await testDb
+			.select({ id: guests.id })
+			.from(guests)
+			.where(eq(guests.clubId, s.clubId));
+		const again = await preview(token, args);
+		expect(again.plan.guests.map((l) => l.verdict)).toEqual([
+			"already_recorded",
+			"already_recorded",
+		]);
+		await call(token, { ...args, planHash: again.planHash });
+		expect(await roll(s)).toEqual(rows);
+		expect(
+			await testDb
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.clubId, s.clubId)),
+		).toEqual(guestRows);
+	});
+
+	it("re-sending a removeGuests call changes nothing", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const g = await newGuest(s, "Rollo Visitor");
+		await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId: s.meetingId, guestId: g, status: "present" });
+		const args = { meetingId: s.meetingId, removeGuests: [g] };
+		await apply(token, args);
+		const again = await preview(token, args);
+		expect(again.plan.removeGuests.map((l) => l.verdict)).toEqual([
+			"already_recorded",
+		]);
+		await call(token, { ...args, planHash: again.planHash });
+		expect(await roll(s)).toHaveLength(0);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.id, g)),
+		).toHaveLength(1);
+	});
+
+	// Card: protects=an apply whose token owner was demoted after the preview
+	// writes nothing; fails_when=the apply trusts the preview-time standing;
+	// no_claim=the demotion lands right before the club lock, after the
+	// dispatcher's own authorization.
+	it("refuses an apply whose token owner was demoted after the preview, and writes nothing", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const args = {
+			meetingId: s.meetingId,
+			members: [{ memberId: s.memberId, status: "present" }],
+		};
+		const p = await preview(token, args);
+		hooks.beforeClubLock = async () => {
+			await testDb
+				.update(members)
+				.set({ clubRole: "member" })
+				.where(eq(members.id, s.adminMemberId));
+		};
+		const err = await expectMcpError(
+			call(token, { ...args, planHash: p.planHash }),
+			"FORBIDDEN",
+		);
+		expect(err.message).toBe(NOT_OFFICER_MESSAGE);
+		expect(await roll(s)).toHaveLength(0);
+	});
+
+	// Card: protects=the whole apply is ONE transaction; fails_when=a write that
+	// lands before a later failure survives it (a writer given no tx opens its
+	// own and commits); no_claim=the failure is injected after the real write.
+	it("rolls back every earlier write when a later one fails", async () => {
+		const s = await club();
+		const token = await tokenFor(s.adminUserId);
+		const real = minutesLogic.addGuestPresent;
+		vi.spyOn(minutesLogic, "addGuestPresent").mockImplementation(
+			async (...a) => {
+				await real(...a);
+				throw new Error("injected failure after the guest was written");
+			},
+		);
+		const args = {
+			meetingId: s.meetingId,
+			members: [{ memberId: s.memberId, status: "present" }],
+			guests: [{ newGuest: { name: "Qwerty Plinth" } }],
+		};
+		const p = await preview(token, args);
+		await expect(
+			call(token, { ...args, planHash: p.planHash }),
+		).rejects.toThrow("injected failure");
+		expect(await roll(s)).toHaveLength(0);
+		expect(
+			await testDb.select().from(guests).where(eq(guests.clubId, s.clubId)),
+		).toHaveLength(0);
 	});
 
 	it("removeGuests deletes the roll row and leaves the club guest", async () => {

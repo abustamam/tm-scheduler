@@ -764,7 +764,7 @@ async function resolveGuestId(
 		const name = input.newGuest.name.trim();
 		if (!name) throw new Error("A guest name is required.");
 		// Standardize the guest phone to E.164 on write (#295).
-		const cc = await loadClubDefaultCountryCode(clubId);
+		const cc = await loadClubDefaultCountryCode(clubId, tx);
 		const email = input.newGuest.email?.trim() || null;
 		const phone = toStoredPhone(input.newGuest.phone, cc);
 
@@ -968,12 +968,12 @@ export async function addGuestPresent(
 	},
 	/** The caller's transaction (#1573: the connector's roll commits as one).
 	 *  Omitted ⇒ this opens its own, as ever. */
-	outer?: DbOrTx,
+	tx?: DbOrTx,
 ): Promise<{ guestId: string }> {
-	const clubId = await getMeetingClubId(input.meetingId, outer ?? db);
-	const run = async (tx: DbOrTx) => {
-		const guestId = await resolveGuestId(tx, clubId, input, input.id);
-		const insert = tx.insert(meetingAttendance).values({
+	const clubId = await getMeetingClubId(input.meetingId, tx ?? db);
+	const run = async (conn: DbOrTx) => {
+		const guestId = await resolveGuestId(conn, clubId, input, input.id);
+		const insert = conn.insert(meetingAttendance).values({
 			meetingId: input.meetingId,
 			guestId,
 			status: "present",
@@ -990,7 +990,7 @@ export async function addGuestPresent(
 		}
 		return { guestId };
 	};
-	return outer ? run(outer) : db.transaction(run);
+	return tx ? run(tx) : db.transaction(run);
 }
 
 /** Remove a present guest's attendance row (does not delete the club guest). */

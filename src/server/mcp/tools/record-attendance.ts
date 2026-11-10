@@ -46,10 +46,10 @@
  * Blocking codes here are local to this tool (strings, as the member attendance
  * tools' are) rather than members of the officer tools' `McpBlockingCode` union.
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { meetingAttendance, members } from "#/db/schema";
+import { meetingAttendance, members, officerTerms, people } from "#/db/schema";
 import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { planHash } from "#/lib/mcp-plan";
 import {
@@ -66,13 +66,14 @@ import {
 	findGuestForContact,
 	loadGuestMatchCandidates,
 } from "#/server/guest-pipeline-logic";
+import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
 import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import {
 	addGuestPresent,
 	removeGuestPresent,
 	setMemberPresence,
 } from "#/server/minutes-logic";
-import { authorizeTokenForMeeting } from "../authz-logic";
+import { authorizeTokenForMeeting, NOT_OFFICER_MESSAGE } from "../authz-logic";
 import { McpError } from "../errors";
 import {
 	type DbOrTx,
@@ -243,6 +244,43 @@ interface Computed {
 	facts: MeetingFacts;
 }
 
+const internal = (what: string) =>
+	new McpError("INTERNAL", `record_attendance: ${what}.`);
+
+/**
+ * The officer's standing in this club right now, read through the apply's own
+ * transaction after the club lock (same rule as `set_attendance`'s
+ * `standingNow`, which is private to that file): an active membership of this
+ * user, then a stored admin role or an open officer term.
+ */
+async function standingNow(
+	tx: DbOrTx,
+	who: { clubId: string; userId: string; membershipId: string },
+): Promise<"admin" | "officer" | "member" | null> {
+	const rows = await tx
+		.select({ clubRole: members.clubRole, officerTermId: officerTerms.id })
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.leftJoin(
+			officerTerms,
+			and(
+				eq(officerTerms.membershipId, members.id),
+				isNull(officerTerms.termEnd),
+			),
+		)
+		.where(
+			and(
+				eq(members.id, who.membershipId),
+				eq(members.clubId, who.clubId),
+				eq(members.status, "active"),
+				eq(people.userId, who.userId),
+			),
+		);
+	if (rows.length === 0) return null;
+	if (rows.some((r) => r.clubRole === "admin")) return "admin";
+	return rows.some((r) => r.officerTermId !== null) ? "officer" : "member";
+}
+
 const fold = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 
 const wordsOf = (s: string | null | undefined) =>
@@ -328,7 +366,10 @@ async function compute(
 	);
 
 	// One person, one line. Keys are canonical ids (or a folded new name).
-	const seen = new Map<string, string>();
+	const seen = new Map<
+		string,
+		{ list: RollBlockingItem["list"]; index: number }
+	>();
 	const claim = (
 		key: string,
 		list: RollBlockingItem["list"],
@@ -344,7 +385,7 @@ async function compute(
 			});
 			return false;
 		}
-		seen.set(key, `${list}:${index}`);
+		seen.set(key, { list, index });
 		return true;
 	};
 
@@ -387,7 +428,10 @@ async function compute(
 		};
 	});
 
-	const cc = await loadClubDefaultCountryCode(facts.clubId);
+	const defaultCountryCode = await loadClubDefaultCountryCode(
+		facts.clubId,
+		conn,
+	);
 	const guestLines: GuestLine[] = [];
 	for (const [index, g] of guestArgs.entries()) {
 		const mode = g.mode ?? null;
@@ -416,7 +460,7 @@ async function compute(
 		const name = g.newGuest.name.trim();
 		const email = g.newGuest.email?.trim() || null;
 		const phone = g.newGuest.phone?.trim()
-			? toStoredPhone(g.newGuest.phone.trim(), cc)
+			? toStoredPhone(g.newGuest.phone.trim(), defaultCountryCode)
 			: null;
 		// What the roll writer would resolve to by contact: the same call.
 		const byContact = await findGuestForContact(conn, facts.clubId, {
@@ -476,7 +520,7 @@ async function compute(
 			return { index, guestId: id, name: null, verdict: "blocked" as const };
 		}
 		const added = seen.get(`guest:${row.id}`);
-		if (added?.startsWith("guests:")) {
+		if (added?.list === "guests") {
 			blocking.push({
 				code: "CONFLICTING_GUEST_ENTRIES",
 				list: "removeGuests",
@@ -616,7 +660,9 @@ export const recordAttendanceTool: McpToolDefinition = {
 			"SKIPPED unless its position in `guests` is in confirmNew: ask the user " +
 			"whether it is someone new (if it is the existing person, use their " +
 			"guestId or memberId instead); confirmNew is part of the plan, so " +
-			"preview again after filling it. This never frees a member's roles, and " +
+			"preview again after filling it. Confirming a newGuest with no email or " +
+			"phone creates a NEW guest each time it is applied, so confirm it only once. " +
+			"This never frees a member's roles, and " +
 			"GavelUp tells no one.",
 		inputSchema,
 	},
@@ -659,6 +705,17 @@ export const recordAttendanceTool: McpToolDefinition = {
 		const hash = args.planHash;
 		return db.transaction(async (tx) => {
 			await lockClubForWrite(tx, who.clubId);
+			// The standing the apply rests on, read again after the club lock (as
+			// `set_attendance`'s `underLock` does): a token whose owner was demoted
+			// since the preview writes nothing.
+			const standing = await standingNow(tx, {
+				clubId: who.clubId,
+				userId: who.userId,
+				membershipId: club.membershipId,
+			});
+			if (!standing || standing === "member") {
+				throw new McpError("FORBIDDEN", NOT_OFFICER_MESSAGE);
+			}
 			const c0 = await compute(tx, args, who, args.meetingId, confirmNew);
 			// Every member of this club the call names, locked against a merge
 			// before any write (#1035), after the club lock as set_attendance does.
@@ -667,9 +724,11 @@ export const recordAttendanceTool: McpToolDefinition = {
 				.map((l) => l.memberId);
 			if (memberIds.length > 0)
 				await lockMembershipsAgainstMerge(tx, memberIds);
-			const c = memberIds.length
-				? await compute(tx, args, who, args.meetingId, confirmNew)
-				: c0;
+			// Then the meeting row, the order `set_awards` takes (club, merge,
+			// meeting): a cancel holds it, so the status read below cannot change
+			// before the writes commit.
+			await lockMeetingForSlotEdit(tx, args.meetingId);
+			const c = await compute(tx, args, who, args.meetingId, confirmNew);
 			if (c.planHash !== hash) {
 				throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE, {
 					plan: c.plan,
@@ -684,11 +743,11 @@ export const recordAttendanceTool: McpToolDefinition = {
 				});
 			}
 
-			// The enforcement, apart from the blocking item above: it throws for
-			// any status the "record" class refuses, so a refusal the blocking
-			// item missed still stops the call before a write. It is the call
-			// `meeting-writers.guard.test.ts` reads as this tool's "record"
-			// refusal. With `blocking` empty it cannot throw.
+			// The refusal `meeting-writers.guard.test.ts` reads as this tool's
+			// "record" refusal. The blocking item above has already stopped any status
+			// the class refuses, so this is a backstop that throws only if the two
+			// ever disagree; the meeting lock above is what keeps the status from
+			// changing after the read.
 			assertMeetingAccepts(c.facts.status, "record");
 
 			const meetingId = c.facts.meetingId;
@@ -710,9 +769,10 @@ export const recordAttendanceTool: McpToolDefinition = {
 			const written: { index: number; guestId: string }[] = [];
 			for (const l of c.plan.guests) {
 				const arg = args.guests?.[l.index];
-				if (!arg) continue;
+				if (!arg) throw internal(`guest line ${l.index} has no input entry`);
 				if (l.verdict === "add" || l.verdict === "change_mode") {
-					if (!l.guestId) continue;
+					if (!l.guestId)
+						throw internal(`guest line ${l.index} has no guestId`);
 					const r = await addGuestPresent(
 						{
 							meetingId,
@@ -726,7 +786,9 @@ export const recordAttendanceTool: McpToolDefinition = {
 					l.verdict === "would_create" ||
 					(l.verdict === "ambiguous" && l.confirmed)
 				) {
-					if (!("newGuest" in arg)) continue;
+					if (!("newGuest" in arg)) {
+						throw internal(`guest line ${l.index} is not a newGuest`);
+					}
 					const r = await addGuestPresent(
 						{
 							meetingId,
