@@ -32,7 +32,7 @@
  * These are record writes: a cancelled meeting is refused, a completed one is
  * accepted (minutes are written after the meeting). `throwIfLocked` is not used.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, guests, members } from "#/db/schema";
@@ -50,6 +50,7 @@ import {
 } from "#/server/minutes-logic";
 import { authorizeDelegateForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
+import type { DbOrTx } from "../member-meeting";
 import type { McpToolDefinition } from "../tool";
 import { recordRefusalItem } from "./set-awards";
 
@@ -57,8 +58,6 @@ export const RECORD_TABLE_TOPICS_TOOL = "record_table_topics";
 
 const MAX_ENTRIES = 50;
 const MAX_MATCHES = 3;
-
-type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 
 const PLAN_STALE_MESSAGE =
 	"This meeting's table topics list (or what you confirmed in confirmNew) changed since that preview. Show the user the fresh plan and ask again.";
@@ -103,7 +102,8 @@ const inputSchema = {
 		.max(MAX_ENTRIES)
 		.optional()
 		.describe(
-			"Speaker row ids to remove (tableTopicsSpeakers[].id from get_agenda).",
+			"Speaker row ids to remove: plan.before[].id in a preview (an officer " +
+				"also has get_agenda's tableTopicsSpeakers[].id).",
 		),
 	move: z
 		.array(moveSchema)
@@ -155,6 +155,11 @@ type AddRow = {
 	verdict: "would_add" | "ambiguous";
 	/** Ambiguous only: the call listed this entry in `confirmNew`. */
 	confirmed: boolean;
+	/** How many guests and members of the club this newGuest is close to. */
+	matchCount: number;
+	/** Names of those matches. Managers only: a non-manager delegate gets the
+	 *  count above and an empty list, so the preview cannot be used to probe the
+	 *  club's visitors (the web shows guest names to managers only). */
 	possibleMatches: { name: string }[];
 };
 
@@ -211,18 +216,17 @@ const asLine = (r: {
 	topic: r.topic,
 });
 
-async function readList(tx: Tx, meetingId: string) {
-	return loadTableTopicsList(tx, meetingId);
-}
-
 /**
  * Run the request's steps on `tx` and describe the result. Writes whatever the
  * steps write: the caller either commits (apply) or rolls back (preview).
  */
 async function runSteps(
-	tx: Tx,
+	tx: DbOrTx,
 	meeting: MeetingRow,
 	args: Args,
+	/** An officer or admin: sees the names of matches. A Ballot Counter or
+	 *  Toastmaster does not (see `AddRow.possibleMatches`). */
+	manager: boolean,
 ): Promise<Plan> {
 	const request: Plan["request"] = {
 		remove: args.remove ?? [],
@@ -230,7 +234,7 @@ async function runSteps(
 		move: args.move ?? [],
 		confirmNew: [...new Set(args.confirmNew ?? [])].sort((a, b) => a - b),
 	};
-	const beforeRows = await readList(tx, meeting.id);
+	const beforeRows = await loadTableTopicsList(tx, meeting.id);
 	const blocking: McpBlockingItem[] = [];
 	const adds: AddRow[] = [];
 	const plan = (after: Line[]): Plan => ({
@@ -263,17 +267,25 @@ async function runSteps(
 	}
 
 	// --- remove -------------------------------------------------------------
+	// An id not on the list is a blocking item, not a thrown error: an id the
+	// preview listed and another writer deleted since then must reach the hash
+	// comparison (PLAN_STALE with the fresh plan), not fail as a bad request.
 	const present = new Set(beforeRows.map((r) => r.id));
-	for (const id of request.remove) {
+	for (const [entryIndex, id] of request.remove.entries()) {
 		if (!present.has(id)) {
-			throw new McpError(
-				"VALIDATION",
-				"A remove id is not a table topics speaker of this meeting. Ids come from get_agenda's tableTopicsSpeakers.",
-			);
+			blocking.push({
+				code: "SLOT_NOT_IN_MEETING",
+				entryIndex,
+				message:
+					"A remove id is not a table topics speaker of this meeting. Ids are in the preview's plan.before list (get_agenda's tableTopicsSpeakers for an officer).",
+				detail: { id, step: "remove" },
+			});
 		}
 	}
 	for (const id of new Set(request.remove)) {
-		await removeTableTopicsSpeaker({ meetingId: meeting.id, id }, tx);
+		if (present.has(id)) {
+			await removeTableTopicsSpeaker({ meetingId: meeting.id, id }, tx);
+		}
 	}
 
 	// --- add ----------------------------------------------------------------
@@ -311,17 +323,22 @@ async function runSteps(
 	const guestById = new Map(guestRows.map((r) => [r.id, r]));
 	// Only read when a newGuest is present: the club's people to compare against.
 	const hasNewGuest = request.add.some((a) => "newGuest" in a);
+	// Read in a fixed order (name, then id): the matches are cut to MAX_MATCHES
+	// and hashed, so an unordered read could re-order them and raise a spurious
+	// PLAN_STALE.
 	const roster = hasNewGuest
 		? await tx
 				.select({ name: members.name, preferredName: members.preferredName })
 				.from(members)
 				.where(eq(members.clubId, meeting.clubId))
+				.orderBy(asc(members.name), asc(members.id))
 		: [];
-	const clubGuests = hasNewGuest
+	const clubGuests: { name: string }[] = hasNewGuest
 		? await tx
 				.select({ name: guests.name })
 				.from(guests)
 				.where(eq(guests.clubId, meeting.clubId))
+				.orderBy(asc(guests.name), asc(guests.id))
 		: [];
 	const confirmed = new Set(request.confirmNew);
 
@@ -357,6 +374,7 @@ async function runSteps(
 				topic: entryTopic,
 				verdict: "would_add",
 				confirmed: false,
+				matchCount: 0,
 				possibleMatches: [],
 			});
 			await addTableTopicsSpeaker(
@@ -382,6 +400,7 @@ async function runSteps(
 				topic: entryTopic,
 				verdict: "would_add",
 				confirmed: false,
+				matchCount: 0,
 				possibleMatches: [],
 			});
 			await addTableTopicsSpeaker(
@@ -390,9 +409,9 @@ async function runSteps(
 			);
 		} else {
 			const name = entry.newGuest.name.trim();
-			const close = [...roster, ...clubGuests]
-				.filter((o) => isClose(name, o))
-				.slice(0, MAX_MATCHES);
+			// `clubGuests` also holds the newGuests this call already created, so two
+			// close names in one add are ambiguous against each other.
+			const close = [...roster, ...clubGuests].filter((o) => isClose(name, o));
 			const ambiguous = close.length > 0;
 			const isConfirmed = ambiguous && confirmed.has(index);
 			adds.push({
@@ -402,24 +421,35 @@ async function runSteps(
 				topic: entryTopic,
 				verdict: ambiguous ? "ambiguous" : "would_add",
 				confirmed: isConfirmed,
-				possibleMatches: close.map((o) => ({ name: o.name })),
+				matchCount: close.length,
+				// Names only for a manager. The web lists the club's guests to
+				// managers only (loadMeetingDetail's canManage, listGuests), and it
+				// lists the roster to managers only too, so a plain delegate gets
+				// the count, never a name.
+				possibleMatches: manager
+					? close.slice(0, MAX_MATCHES).map((o) => ({ name: o.name }))
+					: [],
 			});
 			if (ambiguous && !isConfirmed) continue;
 			await addTableTopicsSpeaker(
 				{ meetingId: meeting.id, newGuest: { name }, topic: entryTopic },
 				tx,
 			);
+			clubGuests.push({ name });
 		}
 	}
 
 	// --- move ---------------------------------------------------------------
 	for (const [entryIndex, mv] of request.move.entries()) {
-		const now = await readList(tx, meeting.id);
+		const now = await loadTableTopicsList(tx, meeting.id);
 		if (!now.some((r) => r.id === mv.id)) {
-			throw new McpError(
-				"VALIDATION",
-				`move entry ${entryIndex} names a speaker that is not on the list (never in it, or removed in this call).`,
-			);
+			blocking.push({
+				code: "SLOT_NOT_IN_MEETING",
+				entryIndex,
+				message: `move entry ${entryIndex} names a speaker that is not on the list (never in it, removed in this call, or deleted since the preview).`,
+				detail: { id: mv.id, step: "move" },
+			});
+			continue;
 		}
 		if (mv.toIndex >= now.length) {
 			throw new McpError(
@@ -431,6 +461,7 @@ async function runSteps(
 			{
 				meetingId: meeting.id,
 				id: mv.id,
+				// Ignored: `toIndex` is absolute and wins over `direction`.
 				direction: "down",
 				toIndex: mv.toIndex,
 			},
@@ -438,7 +469,7 @@ async function runSteps(
 		);
 	}
 
-	return plan((await readList(tx, meeting.id)).map(asLine));
+	return plan((await loadTableTopicsList(tx, meeting.id)).map(asLine));
 }
 
 function summarize(plan: Plan): string {
@@ -484,12 +515,13 @@ export const recordTableTopicsTool: McpToolDefinition = {
 			"and reorder who spoke in table topics, in order, each with an " +
 			"optional topic. add takes {memberId}, {guestId} or {newGuest:{name}} " +
 			"entries; remove takes speaker row ids and move takes {id, toIndex}, " +
-			"both from get_agenda's tableTopicsSpeakers. Steps run remove, then " +
+			"both from plan.before[].id in a preview (get_agenda is officer-only). Steps run remove, then " +
 			"add, then move. Without planHash this writes nothing: it returns the " +
 			"list before and after, a planHash and any blocking items. Show it to " +
 			"the user; call again with the same input plus that planHash to apply. " +
 			"A newGuest whose name is close to a guest or member of the club is " +
-			"ambiguous and NOT added unless the user confirms it is someone new " +
+			"ambiguous (a Ballot Counter or Toastmaster sees how many matches, an " +
+			"officer sees their names) and NOT added unless the user confirms it is someone new " +
 			"and you pass its index in confirmNew (preview again, then apply with " +
 			"the new planHash). All steps apply or none do. A cancelled meeting is " +
 			"refused; a completed one is accepted. For the Best Table Topics " +
@@ -508,11 +540,12 @@ export const recordTableTopicsTool: McpToolDefinition = {
 				"Give at least one of add, remove or move.",
 			);
 		}
-		const { club, user } = await authorizeDelegateForMeeting(
+		const { club, user, via } = await authorizeDelegateForMeeting(
 			ctx,
 			args.meetingId,
 			"voteCounter",
 		);
+		const manager = via === "admin";
 		const hashOf = (plan: Plan) =>
 			planHash({
 				tool: RECORD_TABLE_TOPICS_TOOL,
@@ -526,7 +559,7 @@ export const recordTableTopicsTool: McpToolDefinition = {
 			try {
 				await db.transaction(async (tx) => {
 					const meeting = await lockMeetingForSlotEdit(tx, args.meetingId);
-					throw new PreviewRollback(await runSteps(tx, meeting, args));
+					throw new PreviewRollback(await runSteps(tx, meeting, args, manager));
 				});
 				throw new Error("unreachable: a preview always rolls back");
 			} catch (err) {
@@ -559,7 +592,7 @@ export const recordTableTopicsTool: McpToolDefinition = {
 				throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
 			}
 			// Throwing from here on rolls back every step already run.
-			const plan = await runSteps(tx, meeting, args);
+			const plan = await runSteps(tx, meeting, args, manager);
 			const freshHash = hashOf(plan);
 			if (freshHash !== expected) {
 				throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE, {
@@ -580,7 +613,7 @@ export const recordTableTopicsTool: McpToolDefinition = {
 			// stops the call as an error rather than a silent success. It is the
 			// call `meeting-writers.guard.test.ts` reads as this tool's refusal.
 			assertMeetingAccepts(meeting.status, "record");
-			return { plan, list: await readList(tx, meeting.id) };
+			return { plan, list: await loadTableTopicsList(tx, meeting.id) };
 		});
 
 		return {

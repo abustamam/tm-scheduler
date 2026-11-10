@@ -339,10 +339,18 @@ describe.skipIf(!hasTestDb)("record_table_topics (#1575)", () => {
 	it("an unknown remove id, a move past the end and a foreign member are refused, writing nothing", async () => {
 		const foreign = await seedClub();
 		extraClubs.push(foreign);
-		const bad = await outcome(
-			call({ meetingId: seed.meetingId, remove: [randomUUID()] }),
-		);
-		expect(bad).toMatchObject({ ok: false, code: "VALIDATION" });
+		const unknown = randomUUID();
+		const bad = await preview({ remove: [unknown] });
+		expect(bad.blocking.map((x) => x.code)).toEqual(["SLOT_NOT_IN_MEETING"]);
+		expect(
+			await outcome(
+				call({
+					meetingId: seed.meetingId,
+					remove: [unknown],
+					planHash: bad.planHash,
+				}),
+			),
+		).toMatchObject({ ok: false, code: "BLOCKED" });
 		await apply({ add: [{ memberId: seed.memberId }] });
 		const past = await outcome(
 			preview({
@@ -477,5 +485,126 @@ describe.skipIf(!hasTestDb)("record_table_topics (#1575)", () => {
 		);
 		expect(refused.ok).toBe(false);
 		expect(JSON.stringify(refused)).not.toContain("tableTopicsSpeakers");
+	});
+	describe("review round on #1590", () => {
+		async function otherMeetingSpeaker(): Promise<{
+			meetingId: string;
+			id: string;
+		}> {
+			const [m] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: seed.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+			const meetingId = m!.id;
+			const [row] = await testDb
+				.insert(tableTopicsSpeakers)
+				.values({ meetingId, memberId: seed.adminMemberId, sortOrder: 0 })
+				.returning({ id: tableTopicsSpeakers.id });
+			// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+			return { meetingId, id: row!.id };
+		}
+
+		it("a speaker id from ANOTHER meeting of the club is refused in remove and in move, writing to neither meeting", async () => {
+			// protects=the id is scoped to the meeting named in the call, not just the club
+			// fails_when=a foreign row is deleted or moved, or a row appears in either meeting
+			const other = await otherMeetingSpeaker();
+			await apply({ add: [{ memberId: seed.memberId }] });
+			const mine = await stored();
+			for (const args of [
+				{ remove: [other.id] },
+				{ move: [{ id: other.id, toIndex: 0 }] },
+			]) {
+				const p = await preview(args);
+				expect(p.blocking.map((b) => b.code)).toEqual(["SLOT_NOT_IN_MEETING"]);
+				expect(
+					await outcome(
+						call({ meetingId: seed.meetingId, ...args, planHash: p.planHash }),
+					),
+				).toMatchObject({ ok: false, code: "BLOCKED" });
+			}
+			expect(await stored()).toEqual(mine);
+			expect(await stored(other.meetingId)).toHaveLength(1);
+		});
+
+		it("an id the preview listed and another writer deleted is PLAN_STALE, not VALIDATION", async () => {
+			const a = await apply({ add: [{ memberId: seed.memberId }] });
+			const id = a.tableTopicsSpeakers[0]?.id as string;
+			const args = { remove: [id] };
+			const p = await preview(args);
+			await testDb
+				.delete(tableTopicsSpeakers)
+				.where(eq(tableTopicsSpeakers.id, id));
+			expect(
+				await outcome(
+					call({ meetingId: seed.meetingId, ...args, planHash: p.planHash }),
+				),
+			).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		});
+
+		it("two close newGuests in one add: the later is ambiguous against the earlier unless confirmed", async () => {
+			const args = {
+				add: [
+					{ newGuest: { name: "Quentin Vale" } },
+					{ newGuest: { name: "Q Vale" } },
+				],
+			};
+			const p = await preview(args);
+			expect(p.plan.adds.map((x) => x.verdict)).toEqual([
+				"would_add",
+				"ambiguous",
+			]);
+			const res = await apply(args);
+			expect(res.tableTopicsSpeakers.map((r) => r.name)).toEqual([
+				"Quentin Vale",
+			]);
+			// Not close: both land.
+			const far = await apply({
+				add: [
+					{ newGuest: { name: "Orville Ng" } },
+					{ newGuest: { name: "Pria Shah" } },
+				],
+			});
+			expect(far.tableTopicsSpeakers.map((r) => r.name)).toEqual([
+				"Quentin Vale",
+				"Orville Ng",
+				"Pria Shah",
+			]);
+		});
+
+		it("an officer sees the names of close matches; a non-manager Ballot Counter sees only a count, in preview and apply", async () => {
+			// protects=the preview cannot be used to list the club's past visitors or roster
+			// fails_when=a guest or member name from the club shows up in a non-manager's output
+			await addGuest("Zebediah Marlowe");
+			await addMember("Zebediah Fenwick");
+			await giveRole("Vote Counter", seed.memberId);
+			const holder = await mintToken(seed.memberUserId);
+			const args = { add: [{ newGuest: { name: "Zebediah" } }] };
+
+			const asOfficer = await preview(args);
+			expect(JSON.stringify(asOfficer)).toContain("Zebediah Marlowe");
+
+			const asHolder = await preview(args, holder);
+			const text = JSON.stringify(asHolder);
+			expect(text).not.toContain("Marlowe");
+			expect(text).not.toContain("Fenwick");
+			expect(asHolder.plan.adds[0]).toMatchObject({
+				verdict: "ambiguous",
+				matchCount: 2,
+				possibleMatches: [],
+			});
+			const applied = await call(
+				{ meetingId: seed.meetingId, ...args, planHash: asHolder.planHash },
+				holder,
+			);
+			const appliedText = JSON.stringify(applied);
+			expect(appliedText).not.toContain("Marlowe");
+			expect(appliedText).not.toContain("Fenwick");
+			expect(await stored()).toHaveLength(0);
+		});
 	});
 });

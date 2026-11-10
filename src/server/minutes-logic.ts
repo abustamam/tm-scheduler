@@ -1037,20 +1037,20 @@ export async function addTableTopicsSpeaker(
 		newGuest?: NewGuestInput;
 		topic?: string | null;
 	},
-	outer?: DbOrTx,
+	tx?: DbOrTx,
 ): Promise<{ id: string }> {
-	const clubId = await getMeetingClubId(input.meetingId, outer ?? db);
-	const run = async (tx: DbOrTx): Promise<{ id: string }> => {
+	const clubId = await getMeetingClubId(input.meetingId, tx ?? db);
+	const run = async (conn: DbOrTx): Promise<{ id: string }> => {
 		let memberId: string | null = null;
 		let guestId: string | null = null;
 		if (input.memberId) {
-			await requireMemberInMeetingClub(input.memberId, clubId, tx);
+			await requireMemberInMeetingClub(input.memberId, clubId, conn);
 			memberId = input.memberId;
 			// Idempotency first (#1319): a replay whose speaker row already exists
 			// returns it, so a speaker added before the member was marked Absent is
 			// not turned into an error on replay.
 			if (input.id) {
-				const [existing] = await tx
+				const [existing] = await conn
 					.select({ id: tableTopicsSpeakers.id })
 					.from(tableTopicsSpeakers)
 					.where(
@@ -1065,12 +1065,12 @@ export async function addTableTopicsSpeaker(
 			// Insert path only: the same rule the pickers hide by (#1257), so a stale
 			// tab or a queued offline add cannot add an unavailable member.
 			if (
-				await isMemberUnavailable(tx, {
+				await isMemberUnavailable(conn, {
 					memberId: input.memberId,
 					meetingId: input.meetingId,
 				})
 			) {
-				const [person] = await tx
+				const [person] = await conn
 					.select({ name: members.name })
 					.from(members)
 					.where(eq(members.id, input.memberId))
@@ -1080,17 +1080,17 @@ export async function addTableTopicsSpeaker(
 				);
 			}
 		} else if (input.guestId || input.newGuest) {
-			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
+			guestId = await resolveGuestId(conn, clubId, input, input.newGuestId);
 		} else {
 			throw new Error("Provide a member or guest speaker.");
 		}
-		const [{ next } = { next: 0 }] = await tx
+		const [{ next } = { next: 0 }] = await conn
 			.select({
 				next: sql<number>`coalesce(max(${tableTopicsSpeakers.sortOrder}) + 1, 0)`,
 			})
 			.from(tableTopicsSpeakers)
 			.where(eq(tableTopicsSpeakers.meetingId, input.meetingId));
-		const [created] = await tx
+		const [created] = await conn
 			.insert(tableTopicsSpeakers)
 			.values({
 				...(input.id ? { id: input.id } : {}),
@@ -1110,7 +1110,7 @@ export async function addTableTopicsSpeaker(
 	};
 	// A caller's own transaction (the connector tool's preview and apply) runs
 	// the body on it; the web writers pass none and keep their own.
-	return outer ? run(outer) : db.transaction(run);
+	return tx ? run(tx) : db.transaction(run);
 }
 
 /** Remove a Table Topics speaker by id (scoped to the meeting). */
@@ -1170,10 +1170,10 @@ export async function moveTableTopicsSpeaker(
 		/** Absolute 0-based destination. Preferred — see above. */
 		toIndex?: number;
 	},
-	outer?: DbOrTx,
+	tx?: DbOrTx,
 ): Promise<void> {
-	const run = async (tx: DbOrTx): Promise<void> => {
-		const ordered = await tx
+	const run = async (conn: DbOrTx): Promise<void> => {
+		const ordered = await conn
 			.select({
 				id: tableTopicsSpeakers.id,
 				sortOrder: tableTopicsSpeakers.sortOrder,
@@ -1196,13 +1196,13 @@ export async function moveTableTopicsSpeaker(
 			// Already correct — skip the write. An adjacent move therefore costs the
 			// same two UPDATEs the swap did.
 			if (placed[i].sortOrder === i) continue;
-			await tx
+			await conn
 				.update(tableTopicsSpeakers)
 				.set({ sortOrder: i })
 				.where(eq(tableTopicsSpeakers.id, placed[i].id));
 		}
 	};
-	return outer ? run(outer) : db.transaction(run);
+	return tx ? run(tx) : db.transaction(run);
 }
 
 /** One Table Topics speaker as the connector reads it: 1-based `position` in the
