@@ -205,6 +205,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_feedback",
 			"get_my_schedule",
 			"list_meetings",
+			"record_attendance",
 			"record_guest_book",
 			"reschedule_meeting",
 			"restore_meeting",
@@ -616,6 +617,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				meetingId: seed.meetingId,
 				memberId: seed.memberId,
 				status: "not_coming",
+			}),
+			// #1573. The roll: a preview only (no planHash). Names a member, never a
+			// guest row.
+			toolsCall("record_attendance", {
+				meetingId: seed.meetingId,
+				members: [{ memberId: seed.memberId, status: "present" }],
 			}),
 			toolsCall("claim_open_role", {
 				meetingId: seed.meetingId,

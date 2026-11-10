@@ -957,16 +957,21 @@ export async function setMemberAbsentReleasingRoles(
  * `onConflictDoNothing` and the attendance insert already is, so re-running the
  * whole op returns the same `guestId` without duplicating either row.
  */
-export async function addGuestPresent(input: {
-	meetingId: string;
-	id?: string;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	mode?: AttendanceMode;
-	replaceMode?: boolean;
-}): Promise<{ guestId: string }> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	return db.transaction(async (tx) => {
+export async function addGuestPresent(
+	input: {
+		meetingId: string;
+		id?: string;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		mode?: AttendanceMode;
+		replaceMode?: boolean;
+	},
+	/** The caller's transaction (#1573: the connector's roll commits as one).
+	 *  Omitted ⇒ this opens its own, as ever. */
+	outer?: DbOrTx,
+): Promise<{ guestId: string }> {
+	const clubId = await getMeetingClubId(input.meetingId, outer ?? db);
+	const run = async (tx: DbOrTx) => {
 		const guestId = await resolveGuestId(tx, clubId, input, input.id);
 		const insert = tx.insert(meetingAttendance).values({
 			meetingId: input.meetingId,
@@ -984,15 +989,20 @@ export async function addGuestPresent(input: {
 			await insert.onConflictDoNothing({ target });
 		}
 		return { guestId };
-	});
+	};
+	return outer ? run(outer) : db.transaction(run);
 }
 
 /** Remove a present guest's attendance row (does not delete the club guest). */
-export async function removeGuestPresent(input: {
-	meetingId: string;
-	guestId: string;
-}): Promise<void> {
-	await db
+export async function removeGuestPresent(
+	input: {
+		meetingId: string;
+		guestId: string;
+	},
+	/** The caller's transaction, when the delete must commit with other writes. */
+	tx?: DbOrTx,
+): Promise<void> {
+	await (tx ?? db)
 		.delete(meetingAttendance)
 		.where(
 			and(

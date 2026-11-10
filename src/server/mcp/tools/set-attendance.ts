@@ -209,8 +209,9 @@ export const setAttendanceTool: McpToolDefinition = {
 	config: {
 		title: "Set a member's attendance",
 		description:
-			"Mark ANOTHER member coming or not coming to one meeting, as a club " +
-			"admin would in the app. Find the memberId with find_people and the " +
+			"Mark ANOTHER member coming or not coming to one meeting (the PLAN: who " +
+			"says they will be there), as a club admin would in the app. To record " +
+			"who actually CAME, use record_attendance. Find the memberId with find_people and the " +
 			"meetingId with list_meetings; ask the user which when more than one " +
 			"matches. Call once WITHOUT planHash to preview (rolesToFree lists every " +
 			"role the member holds, which confirming frees), show it to the user in " +
