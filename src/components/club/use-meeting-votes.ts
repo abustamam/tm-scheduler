@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -48,6 +48,7 @@ export function useMeetingVotes(args: {
 }) {
 	const { meetingId, myId, isVoteCounter, effectiveCanManage, minutes } = args;
 	const router = useRouter();
+	const queryClient = useQueryClient();
 	// Ballot Counter console (#510 Task 10) — its own Table Topics edits, kept
 	// separate from `MeetingMinutes`'s offline queue: the console is reachable
 	// even when `minutes.visible` is false (a non-admin Vote Counter on a
@@ -183,6 +184,11 @@ export function useMeetingVotes(args: {
 				},
 			});
 			toast.success("Winner set.");
+			// The console's winner box reads the tally; do not make it wait for
+			// the next 5s poll (#1580).
+			await queryClient.invalidateQueries({
+				queryKey: ["vote-tally", meetingId],
+			});
 			await router.invalidate();
 		} catch (err) {
 			toast.error(errMessage(err));
@@ -195,6 +201,11 @@ export function useMeetingVotes(args: {
 				data: { meetingId, category, selfMemberId: myId },
 			});
 			toast.success("Winner cleared.");
+			// The console's winner box reads the tally; do not make it wait for
+			// the next 5s poll (#1580).
+			await queryClient.invalidateQueries({
+				queryKey: ["vote-tally", meetingId],
+			});
 			await router.invalidate();
 		} catch (err) {
 			toast.error(errMessage(err));

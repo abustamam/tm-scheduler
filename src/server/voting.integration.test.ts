@@ -67,6 +67,7 @@ const {
 	joinBallotAsGuest,
 	listVoteSessions,
 	loadBallot,
+	loadConsoleTally,
 	loadParticipation,
 	loadTally,
 	materialiseAutoSession,
@@ -76,7 +77,7 @@ const {
 } = await import("#/server/voting-logic");
 const { applyCompleteMeeting } = await import("#/server/meetings-logic");
 const { applyClubAgendaSettingsUpdate } = await import("#/server/clubs-logic");
-const { setAward } = await import("#/server/minutes-logic");
+const { clearAward, setAward } = await import("#/server/minutes-logic");
 
 describe.skipIf(!hasTestDb)("vote table constraints (#510)", () => {
 	let seed: SeededClub;
@@ -3506,4 +3507,92 @@ describe.skipIf(!hasTestDb)("the automatic vote window (#1472)", () => {
 			});
 		});
 	}
+});
+
+// #1580. protects=the console's winner box reads the stored award through the
+// one award reader; fails_when=a category shows another's winner, a clear
+// leaves the name, or a write-in/guest shape loses its name; no_claim=the
+// handler's gate (`requireVoteCounter`) or the UI that renders the field.
+describe.skipIf(!hasTestDb)("loadConsoleTally awards (#1580)", () => {
+	let seed: SeededClub;
+
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	it("is null for every category when no award is stored", async () => {
+		const { awards } = await loadConsoleTally(seed.meetingId);
+		expect(awards).toEqual({
+			best_speaker: null,
+			best_evaluator: null,
+			best_table_topics: null,
+		});
+	});
+
+	it("names a member winner, and only in its own category", async () => {
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			memberId: seed.memberId,
+		});
+		const { awards } = await loadConsoleTally(seed.meetingId);
+		expect(awards.best_speaker).toMatchObject({
+			kind: "member",
+			id: seed.memberId,
+		});
+		expect(awards.best_speaker?.name).toBeTruthy();
+		expect(awards.best_evaluator).toBeNull();
+		expect(awards.best_table_topics).toBeNull();
+	});
+
+	it("names a guest winner", async () => {
+		const [g] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{ clubId: seed.clubId, name: "Nguyen, Thanh" },
+					testDb,
+				),
+			)
+			.returning({ id: guests.id });
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_evaluator",
+			guestId: g.id,
+		});
+		const { awards } = await loadConsoleTally(seed.meetingId);
+		expect(awards.best_evaluator).toEqual({
+			kind: "guest",
+			id: g.id,
+			name: "Nguyen, Thanh",
+		});
+	});
+
+	it("names a write-in winner with a null id", async () => {
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_table_topics",
+			writeInName: "Rehanna Khan",
+		});
+		const { awards } = await loadConsoleTally(seed.meetingId);
+		expect(awards.best_table_topics).toEqual({
+			kind: "writeIn",
+			id: null,
+			name: "Rehanna Khan",
+		});
+	});
+
+	it("is null again after the award is cleared", async () => {
+		await setAward({
+			meetingId: seed.meetingId,
+			category: "best_speaker",
+			memberId: seed.memberId,
+		});
+		await clearAward({ meetingId: seed.meetingId, category: "best_speaker" });
+		const { awards } = await loadConsoleTally(seed.meetingId);
+		expect(awards.best_speaker).toBeNull();
+	});
 });

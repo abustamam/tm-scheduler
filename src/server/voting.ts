@@ -12,9 +12,8 @@ import {
 	closeVote,
 	disqualifyCandidate,
 	loadBallot,
+	loadConsoleTally,
 	loadParticipation,
-	loadTableTopicsForConsole,
-	loadTally,
 	openVote,
 	undoDisqualification,
 } from "./voting-logic";
@@ -262,9 +261,5 @@ export const getVoteTally = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		await requireVoteCounter(data);
-		const [categories, tableTopicsSpeakers] = await Promise.all([
-			loadTally(data.meetingId),
-			loadTableTopicsForConsole(data.meetingId),
-		]);
-		return { categories, tableTopicsSpeakers };
+		return loadConsoleTally(data.meetingId);
 	});

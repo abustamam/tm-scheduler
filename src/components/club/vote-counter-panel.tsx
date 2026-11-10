@@ -8,6 +8,7 @@ import {
 	DISQUALIFICATION_PRESETS,
 } from "#/lib/disqualification";
 import { formatVoteTime } from "#/lib/vote-window";
+import { writeInKey } from "#/lib/write-in-limits";
 import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import type { AwardCategory } from "#/server/minutes-logic";
 import {
@@ -309,6 +310,17 @@ export function VoteCounterPanel({
 					(r) => r.count === top && top > 0,
 				);
 
+				// The stored winner (#1580), read beside the tally. A write-in
+				// tally row's `id` is `writeInKey(name)`, so it matches by that key
+				// rather than the raw name.
+				const award = tally.data?.awards[category] ?? null;
+				const isWinnerRow = (r: TallyEntry) =>
+					award !== null &&
+					award.kind === r.kind &&
+					(award.kind === "writeIn"
+						? writeInKey(award.name) === r.id
+						: award.id === r.id);
+
 				const rowKey = (r: TallyEntry) => `${category}:${r.kind}:${r.id}`;
 
 				/**
@@ -442,6 +454,34 @@ export function VoteCounterPanel({
 							<p className="mt-2 text-xs text-muted-foreground">{windowNote}</p>
 						) : null}
 
+						{tally.data ? (
+							<div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2">
+								<p className="min-w-0 text-sm">
+									<span className="text-xs font-semibold text-muted-foreground">
+										Winner
+									</span>{" "}
+									{award ? (
+										<span className="font-semibold break-words">
+											{award.name}
+										</span>
+									) : (
+										<span className="text-muted-foreground">Not set</span>
+									)}
+								</p>
+								{award ? (
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										className="shrink-0 text-muted-foreground"
+										onClick={() => onClearWinner(category)}
+									>
+										Clear winner
+									</Button>
+								) : null}
+							</div>
+						) : null}
+
 						<p className="mt-2 text-sm text-muted-foreground">
 							{total} {total === 1 ? "vote" : "votes"} in
 						</p>
@@ -510,7 +550,11 @@ export function VoteCounterPanel({
 								{t.results.map((r) =>
 									candidateRow(
 										r,
-										total > 0 ? (
+										isWinnerRow(r) ? (
+											<span className="rounded-md bg-success/15 px-2 py-1 text-xs font-semibold">
+												Winner
+											</span>
+										) : total > 0 ? (
 											<Button
 												size="sm"
 												variant="outline"
@@ -529,15 +573,6 @@ export function VoteCounterPanel({
 										) : null,
 									),
 								)}
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									className="self-start text-muted-foreground"
-									onClick={() => onClearWinner(category)}
-								>
-									Clear winner
-								</Button>
 							</div>
 						) : null}
 

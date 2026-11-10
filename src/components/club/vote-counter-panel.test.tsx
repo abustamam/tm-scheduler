@@ -62,8 +62,22 @@ function category(over: {
 }
 
 /** Every category empty and closed; override the ones a test cares about. */
-function tally(over: Partial<Record<string, ReturnType<typeof category>>>) {
+function tally(
+	over: Partial<Record<string, ReturnType<typeof category>>>,
+	awards: Partial<
+		Record<
+			string,
+			{ kind: Entry["kind"]; id: string | null; name: string } | null
+		>
+	> = {},
+) {
 	return {
+		awards: {
+			best_speaker: null,
+			best_evaluator: null,
+			best_table_topics: null,
+			...awards,
+		},
 		categories: {
 			best_speaker: category({}),
 			best_evaluator: category({}),
@@ -847,7 +861,119 @@ describe("VoteCounterPanel ruling controls need a session (#752)", () => {
 		expect(await speaker.findByText(/^Ana/)).toBeTruthy();
 		expect(speaker.getByRole("button", { name: /Open voting/ })).toBeTruthy();
 		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+		// No award stored, so there is nothing to clear (#1580).
+		expect(speaker.queryByRole("button", { name: "Clear winner" })).toBeNull();
+	});
+});
+
+// #1580. protects=the winner a Vote Counter just set is readable on the card;
+// fails_when=the box is missing, shows another category's winner, or the row
+// still offers "Set winner" for the winner; no_claim=the server read (covered
+// in voting.integration.test.ts) and the refetch after a tap.
+describe("VoteCounterPanel current winner (#1580)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	it("says Not set, with no Clear winner, when no award is stored", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({ results: [member("m-1", "Ana", 4)] }),
+			}),
+		);
+		renderPanel();
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Not set")).toBeTruthy();
+		expect(speaker.queryByRole("button", { name: "Clear winner" })).toBeNull();
+		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+	});
+
+	it("shows the name, badges the matching row and offers Clear winner", async () => {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{
+					best_speaker: category({
+						results: [member("m-1", "Ana", 4), member("m-2", "Ben", 2)],
+					}),
+				},
+				{ best_speaker: { kind: "member", id: "m-1", name: "Ana" } },
+			),
+		);
+		renderPanel();
+		const speaker = card("Best Speaker");
+		// The box carries the name exactly; "Winner" is its label AND the row badge.
+		expect(await speaker.findByText("Ana", { selector: "span" })).toBeTruthy();
+		expect(speaker.getAllByText("Winner")).toHaveLength(2);
+		// Only Ben's row still offers the button.
+		expect(speaker.getAllByRole("button", { name: "Set winner" })).toHaveLength(
+			1,
+		);
 		expect(speaker.getByRole("button", { name: "Clear winner" })).toBeTruthy();
+		// Another category's box is untouched.
+		expect(
+			await within(
+				screen
+					.getByRole("heading", { name: "Best Evaluator" })
+					.closest("section") as HTMLElement,
+			).findByText("Not set"),
+		).toBeTruthy();
+	});
+
+	it("badges a write-in row by its key, not its raw spelling", async () => {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{
+					best_table_topics: category({
+						results: [
+							{
+								kind: "writeIn",
+								id: "rehanna khan",
+								name: "Rehanna Khan",
+								count: 3,
+							},
+						],
+					}),
+				},
+				{
+					best_table_topics: {
+						kind: "writeIn",
+						id: null,
+						name: "  rehanna  KHAN ",
+					},
+				},
+			),
+		);
+		renderPanel();
+		const tt = card("Best Table Topics");
+		expect(await tt.findByText("rehanna KHAN")).toBeTruthy();
+		expect(tt.queryByRole("button", { name: "Set winner" })).toBeNull();
+	});
+
+	it("shows the name when no tally row matches the award", async () => {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{ best_speaker: category({ results: [member("m-1", "Ana", 4)] }) },
+				{ best_speaker: { kind: "member", id: "m-9", name: "Zed" } },
+			),
+		);
+		renderPanel();
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Zed")).toBeTruthy();
+		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+	});
+
+	it("still shows the box and Set winner to a viewer without ruling rights", async () => {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{ best_speaker: category({ results: [member("m-1", "Ana", 4)] }) },
+				{ best_speaker: { kind: "member", id: "m-2", name: "Ben" } },
+			),
+		);
+		renderPanel({ sessionMemberId: null });
+		const speaker = card("Best Speaker");
+		expect(await speaker.findByText("Ben")).toBeTruthy();
+		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
 	});
 });
 
