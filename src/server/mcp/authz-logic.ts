@@ -73,6 +73,12 @@ import {
 	resolveActiveApiToken,
 	touchApiToken,
 } from "#/server/api-tokens-logic";
+import {
+	resolveMeetingAgendaAuthz,
+	resolveTableTopicsNotesAuthz,
+	resolveVoteCounterAuthz,
+	resolveWordOfTheDayAuthz,
+} from "#/server/meeting-authz-logic";
 import { McpError } from "./errors";
 import type { McpToolContext } from "./tool";
 
@@ -377,4 +383,76 @@ export async function authorizeTokenForMeeting(
 	meetingId: string,
 ): Promise<AuthorizedClub> {
 	return authorizeToken(ctx, await clubIdForMeeting(meetingId));
+}
+
+/** The meeting capabilities a role holder may use from the connector (#1567). */
+export type DelegateCapability =
+	| "agenda"
+	| "wordOfTheDay"
+	| "tableTopicsNotes"
+	| "voteCounter";
+
+export const NOT_ROLE_HOLDER_MESSAGE =
+	"You are not an admin, officer or the role holder for that meeting.";
+
+/**
+ * Authorize a MEMBER-audience call that a meeting's role holder may make for
+ * their own meeting (#1567): an officer, or the member whose own membership
+ * holds the slot the capability keys off (the Toastmaster, Grammarian, Table
+ * Topics Master or Ballot Counter, as the web resolvers define it).
+ *
+ * Authenticates as `authorizeTokenForMeeting` does for a member-audience tool,
+ * so a non-member gets the stranger's refusal before anything about the meeting
+ * is disclosed. The caller's identity is the TOKEN's membership, never a field
+ * of the tool input, so the slot comparison is verified rather than asserted.
+ *
+ * The admin arm is the token's own `officer` standing and nothing else: the
+ * resolver is handed a `connector` caller and never reaches
+ * `resolveAdminGrant`'s impersonation fallback (see the module header).
+ */
+export async function authorizeDelegateForMeeting(
+	ctx: McpToolContext,
+	meetingId: string,
+	capability: DelegateCapability,
+): Promise<AuthorizedClub & { actorMemberId: string | null; via: string }> {
+	const authorized = await authorizeToken(
+		{ ...ctx, audience: "member" },
+		await clubIdForMeeting(meetingId),
+	);
+	const connector = {
+		membershipId: authorized.club.membershipId,
+		officer: authorized.club.via !== "member",
+	};
+	const input = { meetingId, connector };
+	let decision: {
+		allowed: boolean;
+		via: string | null;
+		actorMemberId: string | null;
+	};
+	try {
+		decision =
+			capability === "agenda"
+				? await resolveMeetingAgendaAuthz(input)
+				: capability === "wordOfTheDay"
+					? await resolveWordOfTheDayAuthz(input)
+					: capability === "tableTopicsNotes"
+						? await resolveTableTopicsNotesAuthz(input)
+						: await resolveVoteCounterAuthz(input);
+	} catch (err) {
+		// The resolvers refuse a completed or cancelled meeting (and an archived
+		// club, already ruled out above) by throwing a plain Error whose message
+		// is the sentence to show.
+		if (err instanceof Error && !(err instanceof McpError)) {
+			throw new McpError("LOCKED", err.message);
+		}
+		throw err;
+	}
+	if (!decision.allowed || decision.via === null) {
+		throw new McpError("FORBIDDEN", NOT_ROLE_HOLDER_MESSAGE);
+	}
+	return {
+		...authorized,
+		actorMemberId: decision.actorMemberId,
+		via: decision.via,
+	};
 }

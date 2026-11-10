@@ -49,8 +49,6 @@ const UNROWED_TOOLS: Record<string, string> = {
 	get_my_feedback: "read-only",
 	get_my_schedule: "read-only",
 	find_people: "read-only",
-	set_awards:
-		"its app function (setMinutesAward) is a gap row: the gate differs from the tool's",
 	reschedule_meeting:
 		"its app function (meetings.updateMeeting) is a gap row: the gate differs from the tool's",
 	set_contact_preference:

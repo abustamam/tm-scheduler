@@ -110,8 +110,14 @@ const AUTHENTICATE_ONLY: Record<string, string> = {
 		"ones. Its audience is member, the only door a plain member has.",
 };
 
-/** The two sanctioned club-scoped entry points. */
-const AUTHORIZE = /\bauthorizeToken(ForMeeting)?\s*\(/;
+/**
+ * The sanctioned club-scoped entry points. `authorizeDelegateForMeeting`
+ * (#1567) authenticates through `authorizeToken` itself, then narrows a member
+ * to the meeting's role holder.
+ */
+const AUTHORIZE = /\bauthorize(?:Token(?:ForMeeting)?|DelegateForMeeting)\s*\(/;
+/** The meeting-scoped entry points: each takes its club FROM the meeting. */
+const AUTHORIZE_FOR_MEETING = /\bauthorize(?:Token|Delegate)ForMeeting\s*\(/;
 /** The authenticate-only entry point, for the waived tool. */
 const AUTHENTICATE = /\bauthenticateToken\s*\(/;
 
@@ -258,8 +264,8 @@ describe("every MCP tool authorizes (#773)", () => {
 				`${tool.basename} takes a meetingId AND a clubId, so two ids can disagree about which club it acts on.`,
 			).not.toContain("clubId");
 			expect(
-				/\bauthorizeTokenForMeeting\s*\(/.test(readSource(tool.file)),
-				`${tool.basename} takes a meetingId but does not call authorizeTokenForMeeting.`,
+				AUTHORIZE_FOR_MEETING.test(readSource(tool.file)),
+				`${tool.basename} takes a meetingId but calls neither authorizeTokenForMeeting nor authorizeDelegateForMeeting.`,
 			).toBe(true);
 		});
 	}
