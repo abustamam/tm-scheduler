@@ -28,8 +28,10 @@
  * An officer or Toastmaster goes through `applyMeetingMetaPatch` (the
  * Toastmaster with `canReschedule: false`, so the writer's own refusal of
  * `meetingNumber` and `promoNote` also holds). A caller whose only grants are the
- * Grammarian's or the Table Topics Master's goes through the matching narrow
- * writer. All run in this tool's transaction, under the meeting row's lock.
+ * Grammarian's and/or the Table Topics Master's goes through
+ * `applyWodAndTableTopicsUpdate`, the one combined narrow writer (a Grammarian
+ * and a TTM call alike, so a call logs exactly one `meeting_edit`). All run in
+ * this tool's transaction, under the meeting row's lock.
  *
  * The date, time and length are `reschedule_meeting`'s.
  */
@@ -378,7 +380,7 @@ export const editMeetingTool: McpToolDefinition = {
 
 				// Send only what moves, from what the caller sent (the writers
 				// normalize exactly as the plan did).
-				const sent = (fields: readonly Field[]) =>
+				const patchOf = (fields: readonly Field[]) =>
 					Object.fromEntries(
 						fields.filter((f) => changed.includes(f)).map((f) => [f, args[f]]),
 					);
@@ -387,7 +389,7 @@ export const editMeetingTool: McpToolDefinition = {
 						{
 							meetingId,
 							actorMemberId,
-							...sent(FIELDS),
+							...patchOf(FIELDS),
 							// An officer's call; the Toastmaster's refuses meetingNumber
 							// and promoNote in the writer as well as above.
 							canReschedule: grants.officer,
@@ -401,7 +403,7 @@ export const editMeetingTool: McpToolDefinition = {
 						{
 							meetingId,
 							actorMemberId,
-							...sent([
+							...patchOf([
 								...(grants.wordOfTheDay
 									? (["wordOfTheDay", "wodDefinition", "wodExample"] as const)
 									: []),

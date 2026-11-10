@@ -37,11 +37,38 @@ import {
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
+// A hook that runs once, right after the Table Topics probe (the last of the
+// tool's three) passes: lets a test change the meeting between the probes and
+// the locked re-plan, deterministically.
+let afterLastProbe: (() => Promise<void>) | null = null;
+vi.mock("#/server/mcp/authz-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/mcp/authz-logic")>();
+	return {
+		...actual,
+		authorizeDelegateForMeeting: async (
+			...args: Parameters<typeof actual.authorizeDelegateForMeeting>
+		) => {
+			const result = await actual.authorizeDelegateForMeeting(...args);
+			if (args[2] === "tableTopicsNotes" && afterLastProbe) {
+				const hook = afterLastProbe;
+				afterLastProbe = null;
+				await hook();
+			}
+			return result;
+		},
+	};
+});
+
 const {
 	editMeetingTool,
 	MEETING_NOT_EDITABLE_MESSAGE,
+	MEETING_NUMBER_TAKEN_MESSAGE,
 	NOTHING_TO_CHANGE_MESSAGE,
 } = await import("#/server/mcp/tools/edit-meeting");
+const { applyWodAndTableTopicsUpdate } = await import(
+	"#/server/meetings-logic"
+);
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { McpError } = await import("#/server/mcp/errors");
 const { NOT_ROLE_HOLDER_MESSAGE } = await import("#/server/mcp/authz-logic");
@@ -196,40 +223,52 @@ describe.skipIf(!hasTestDb)("edit_meeting (#1574)", () => {
 		}
 	});
 
-	// One representative field per row of the issue's table, per caller.
-	const MATRIX: Record<Who, Record<string, boolean>> = {
-		officer: {
-			theme: true,
-			wordOfTheDay: true,
-			tableTopicsNotes: true,
-			promoNote: true,
-			meetingNumber: true,
-		},
-		toastmaster: {
-			theme: true,
-			wordOfTheDay: true,
-			tableTopicsNotes: true,
-			promoNote: false,
-			meetingNumber: false,
-		},
-		grammarian: {
-			theme: false,
-			wordOfTheDay: true,
-			tableTopicsNotes: false,
-			promoNote: false,
-			meetingNumber: false,
-		},
-		ttm: {
-			theme: false,
-			wordOfTheDay: false,
-			tableTopicsNotes: true,
-			promoNote: false,
-			meetingNumber: false,
-		},
+	// Typed from the issue's table (#1574), not derived from the tool's source:
+	// every field the tool accepts, for every caller.
+	const ALL_FIELDS = [
+		"theme",
+		"location",
+		"joinUrl",
+		"notes",
+		"reminders",
+		"wordOfTheDay",
+		"wodDefinition",
+		"wodExample",
+		"tableTopicsNotes",
+		"promoNote",
+		"meetingNumber",
+	];
+	const ALLOWED: Record<Who, string[]> = {
+		officer: ALL_FIELDS,
+		toastmaster: [
+			"theme",
+			"location",
+			"joinUrl",
+			"notes",
+			"reminders",
+			"wordOfTheDay",
+			"wodDefinition",
+			"wodExample",
+			"tableTopicsNotes",
+		],
+		grammarian: ["wordOfTheDay", "wodDefinition", "wodExample"],
+		ttm: ["tableTopicsNotes"],
 	};
+	const MATRIX = Object.fromEntries(
+		(Object.keys(ALLOWED) as Who[]).map((who) => [
+			who,
+			Object.fromEntries(ALL_FIELDS.map((f) => [f, ALLOWED[who].includes(f)])),
+		]),
+	) as Record<Who, Record<string, boolean>>;
 	const SAMPLE: Record<string, unknown> = {
 		theme: "New theme",
+		location: "Room 9",
+		joinUrl: "https://zoom.us/j/999",
+		notes: "New notes",
+		reminders: "New announcements",
 		wordOfTheDay: "Resilient",
+		wodDefinition: "new def",
+		wodExample: "an example",
 		tableTopicsNotes: "Ask about travel",
 		promoNote: "Bring a friend",
 		meetingNumber: 42,
@@ -401,9 +440,12 @@ describe.skipIf(!hasTestDb)("edit_meeting (#1574)", () => {
 				.set({ status })
 				.where(eq(meetings.id, seed.meetingId));
 			const r = await outcome(call({ theme: "x" }));
+			// The resolver refuses first, in its own words for each status.
 			expect(r, status).toMatchObject({ ok: false, code: "LOCKED" });
+			expect(r.ok === false && r.message, status).toMatch(
+				status === "cancelled" ? /cancelled/ : /locked/,
+			);
 		}
-		expect(MEETING_NOT_EDITABLE_MESSAGE).toMatch(/cancelled or completed/);
 		expect((await row()).theme).toBe("Old theme");
 	});
 
@@ -440,11 +482,56 @@ describe.skipIf(!hasTestDb)("edit_meeting (#1574)", () => {
 			})
 			.returning({ id: meetings.id });
 		const id = (other as { id: string }).id;
-		const input = { meetingNumber: 5 };
+		const input = { meetingNumber: 5, theme: "Rolled back" };
 		const p = (await call(input, "officer", id)) as Result;
 		const r = await outcome(
 			call({ ...input, planHash: p.planHash }, "officer", id),
 		);
-		expect(r).toMatchObject({ ok: false, code: "VALIDATION" });
+		expect(r).toMatchObject({
+			ok: false,
+			code: "VALIDATION",
+			message: MEETING_NUMBER_TAKEN_MESSAGE,
+		});
+		const [after] = await testDb
+			.select()
+			.from(meetings)
+			.where(eq(meetings.id, id));
+		expect(after?.theme).toBeNull();
+		expect(after?.meetingNumber).toBeNull();
+	});
+
+	it("a meeting completed after the probes is refused under the lock and writes nothing", async () => {
+		const input = { theme: "Too late" };
+		const p = await preview(input);
+		afterLastProbe = async () => {
+			await testDb
+				.update(meetings)
+				.set({ status: "completed" })
+				.where(eq(meetings.id, seed.meetingId));
+		};
+		const r = await outcome(call({ ...input, planHash: p.planHash }));
+		expect(r).toMatchObject({
+			ok: false,
+			code: "LOCKED",
+			message: MEETING_NOT_EDITABLE_MESSAGE,
+		});
+		expect((await row()).theme).toBe("Old theme");
+		expect(await edits()).toHaveLength(0);
+	});
+
+	it("applyWodAndTableTopicsUpdate ignores any field outside the word of the day and table topics notes", async () => {
+		await applyWodAndTableTopicsUpdate({
+			meetingId: seed.meetingId,
+			actorMemberId: memberIds.officer,
+			wordOfTheDay: "Only this",
+			theme: "Smuggled",
+			notes: "Smuggled",
+			promoNote: "Smuggled",
+		} as Parameters<typeof applyWodAndTableTopicsUpdate>[0]);
+		const after = await row();
+		expect(after.wordOfTheDay).toBe("Only this");
+		expect(after.theme).toBe("Old theme");
+		expect(after.notes).toBe("Old notes");
+		expect(after.promoNote).toBeNull();
 	});
 });
