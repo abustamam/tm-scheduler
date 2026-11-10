@@ -68,16 +68,23 @@ import {
 	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	API_TOKEN_PREFIX,
 	resolveActiveApiToken,
 	touchApiToken,
 } from "#/server/api-tokens-logic";
 import {
+	type MeetingAgendaAuthz,
+	type MeetingAgendaAuthzInput,
 	resolveMeetingAgendaAuthz,
 	resolveTableTopicsNotesAuthz,
 	resolveVoteCounterAuthz,
 	resolveWordOfTheDayAuthz,
+	type TableTopicsNotesAuthz,
+	type VoteCounterAuthz,
+	type WordOfTheDayAuthz,
 } from "#/server/meeting-authz-logic";
 import { McpError } from "./errors";
 import type { McpToolContext } from "./tool";
@@ -395,6 +402,25 @@ export type DelegateCapability =
 export const NOT_ROLE_HOLDER_MESSAGE =
 	"You are not an admin, officer or the role holder for that meeting.";
 
+const DELEGATE_RESOLVERS: Record<
+	DelegateCapability,
+	(input: MeetingAgendaAuthzInput) => Promise<DelegateDecision>
+> = {
+	agenda: resolveMeetingAgendaAuthz,
+	wordOfTheDay: resolveWordOfTheDayAuthz,
+	tableTopicsNotes: resolveTableTopicsNotesAuthz,
+	voteCounter: resolveVoteCounterAuthz,
+};
+
+type DelegateDecision =
+	| MeetingAgendaAuthz
+	| WordOfTheDayAuthz
+	| TableTopicsNotesAuthz
+	| VoteCounterAuthz;
+
+/** The grant a resolver reports, with the denied (null) case removed. */
+export type DelegateVia = NonNullable<DelegateDecision["via"]>;
+
 /**
  * Authorize a MEMBER-audience call that a meeting's role holder may make for
  * their own meeting (#1567): an officer, or the member whose own membership
@@ -414,7 +440,9 @@ export async function authorizeDelegateForMeeting(
 	ctx: McpToolContext,
 	meetingId: string,
 	capability: DelegateCapability,
-): Promise<AuthorizedClub & { actorMemberId: string | null; via: string }> {
+): Promise<
+	AuthorizedClub & { actorMemberId: string | null; via: DelegateVia }
+> {
 	const authorized = await authorizeToken(
 		{ ...ctx, audience: "member" },
 		await clubIdForMeeting(meetingId),
@@ -423,27 +451,26 @@ export async function authorizeDelegateForMeeting(
 		membershipId: authorized.club.membershipId,
 		officer: authorized.club.via !== "member",
 	};
-	const input = { meetingId, connector };
-	let decision: {
-		allowed: boolean;
-		via: string | null;
-		actorMemberId: string | null;
-	};
+	let decision: DelegateDecision;
 	try {
-		decision =
-			capability === "agenda"
-				? await resolveMeetingAgendaAuthz(input)
-				: capability === "wordOfTheDay"
-					? await resolveWordOfTheDayAuthz(input)
-					: capability === "tableTopicsNotes"
-						? await resolveTableTopicsNotesAuthz(input)
-						: await resolveVoteCounterAuthz(input);
+		decision = await DELEGATE_RESOLVERS[capability]({ meetingId, connector });
 	} catch (err) {
 		// The resolvers refuse a completed or cancelled meeting (and an archived
 		// club, already ruled out above) by throwing a plain Error whose message
-		// is the sentence to show.
+		// is the sentence to show. Only those sentences, compared by their
+		// exported constants, become tool results; anything else (a driver
+		// error carrying SQL, a meeting deleted mid-call) rethrows unchanged so
+		// `toMcpError` replaces it with the generic INTERNAL.
 		if (err instanceof Error && !(err instanceof McpError)) {
-			throw new McpError("LOCKED", err.message);
+			if (
+				err.message === MEETING_LOCKED_MESSAGE ||
+				err.message === MEETING_CANCELLED_MESSAGE
+			) {
+				throw new McpError("LOCKED", err.message);
+			}
+			if (err.message === CLUB_ARCHIVED_MESSAGE) {
+				throw new McpError("ARCHIVED", err.message);
+			}
 		}
 		throw err;
 	}

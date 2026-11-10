@@ -24,11 +24,13 @@ import {
 	impersonationSessions,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleDefinitions,
 	roleSlots,
 	user,
 } from "#/db/schema";
+import type { DelegateCapability } from "#/server/mcp/authz-logic";
 import {
 	cleanup,
 	hasTestDb,
@@ -38,6 +40,16 @@ import {
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
+// Pass-through, so one test can make a resolver fail in a way the real ones
+// only do under a race or a driver fault.
+vi.mock("#/server/meeting-authz-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/meeting-authz-logic")>();
+	return {
+		...actual,
+		resolveVoteCounterAuthz: vi.fn(actual.resolveVoteCounterAuthz),
+	};
+});
 
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const {
@@ -46,12 +58,9 @@ const {
 	NOT_ROLE_HOLDER_MESSAGE,
 } = await import("#/server/mcp/authz-logic");
 const { CLUB_ARCHIVED_MESSAGE } = await import("#/lib/club-archive");
+const authzLogic = await import("#/server/meeting-authz-logic");
 
-type Capability =
-	| "agenda"
-	| "wordOfTheDay"
-	| "tableTopicsNotes"
-	| "voteCounter";
+type Capability = DelegateCapability;
 
 /** The role names that grant each capability, as the web resolvers define them. */
 const GRANTING_ROLES: Record<Capability, string[]> = {
@@ -342,6 +351,71 @@ describe.skipIf(!hasTestDb)("authorizeDelegateForMeeting (#1567)", () => {
 				}
 			}
 		});
+	});
+
+	it.each(
+		CAPABILITIES,
+	)("%s: a member whose officer standing is an open officer term only is granted (via officer)", async (cap) => {
+		const s = await club();
+		const officer = await addMember(s.clubId, "Term Officer");
+		const token = await tokenFor(officer.userId);
+		// Same plain member, no term yet: refused. Then the term makes the difference.
+		expect(await run(token, s.meetingId, cap)).toMatchObject({
+			ok: false,
+			code: "FORBIDDEN",
+		});
+		await testDb.insert(officerTerms).values({
+			membershipId: officer.memberId,
+			position: "vp_education",
+			termStart: new Date(Date.now() - 24 * 60 * 60 * 1000),
+			termEnd: null,
+		});
+		expect(await run(token, s.meetingId, cap)).toMatchObject({
+			ok: true,
+			value: { via: "admin", actorMemberId: officer.memberId },
+		});
+	});
+
+	it("a resolver failure that is not a refusal sentence is not reported as LOCKED, nor does it carry its message", async () => {
+		const s = await club();
+		const leak = "Failed query: select * from meetings params: secret-param";
+		vi.mocked(authzLogic.resolveVoteCounterAuthz).mockRejectedValueOnce(
+			new Error(leak),
+		);
+		const r = await run(
+			await tokenFor(s.adminUserId),
+			s.meetingId,
+			"voteCounter",
+		);
+		// Rethrown unchanged (not an McpError), so the dispatcher's toMcpError
+		// turns it into the generic INTERNAL.
+		expect(r).toMatchObject({ ok: false, message: leak });
+		expect((r as { code?: string }).code).toBeUndefined();
+	});
+
+	it.each([
+		["the club archived mid-call", CLUB_ARCHIVED_MESSAGE, "ARCHIVED"],
+		["a lock sentence", "This meeting is locked.", "LOCKED"],
+		["a cancelled sentence", "This meeting is cancelled.", "LOCKED"],
+	])("a resolver refusal sentence (%s) keeps its own code", async (_n, message, code) => {
+		const s = await club();
+		vi.mocked(authzLogic.resolveVoteCounterAuthz).mockRejectedValueOnce(
+			new Error(message),
+		);
+		expect(
+			await run(await tokenFor(s.adminUserId), s.meetingId, "voteCounter"),
+		).toEqual({ ok: false, code, message });
+	});
+
+	it("the resolver refuses a connector caller that also carries a session", async () => {
+		const s = await club();
+		await expect(
+			authzLogic.resolveMeetingAgendaAuthz({
+				meetingId: s.meetingId,
+				sessionUserId: s.adminUserId,
+				connector: { membershipId: s.adminMemberId, officer: true },
+			}),
+		).rejects.toThrow("A connector caller cannot also carry a session.");
 	});
 
 	it("a role grants only its own capabilities", async () => {

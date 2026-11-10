@@ -802,7 +802,7 @@ describe.skipIf(!hasTestDb)("set_awards (#1172)", () => {
 	});
 
 	it("refuses a plain member who holds neither role", async () => {
-		// protects=a member holding a different role (Timer) writes nothing
+		// protects=a plain member holding no slot on the meeting writes nothing (the different-role case is delegate-authz's suite)
 		// fails_when=any member of the club can record awards
 		// no_claim=officer-term acceptance is authz-logic's own suite, not repeated here
 		const memberToken = await mintToken(seed.memberUserId);

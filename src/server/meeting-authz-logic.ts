@@ -88,22 +88,23 @@ export interface MeetingAgendaAuthzInput {
 	sessionUserId?: string | null;
 	/** Self-asserted roster member id (TMOD path), or null. */
 	selfMemberId?: string | null;
-	/** A connector caller (#1567). Mutually exclusive with the two fields above:
-	 *  `assertOneCallerKind` throws when a connector caller also has a session. */
+	/** A connector caller (#1567). Mutually exclusive with `sessionUserId`:
+	 *  `assertOneCallerKind` throws when both are set. NOT checked against the
+	 *  self-asserted id above: `self-assert-binding.guard.test.ts` forbids any
+	 *  read of that field outside the seam. It is inert instead, because every
+	 *  arm hands the seam `connector.membershipId` in its place. */
 	connector?: ConnectorCaller;
 }
 
 /**
- * A caller is a web session/self-assert OR a connector token, never both. The
- * self-asserted id is not read here (`self-assert-binding.guard.test.ts` keeps
- * every read of it inside the seam); it needs no check, because every arm
- * hands the seam the connector's own `membershipId` in its place.
+ * A caller is a web session OR a connector token, never both. The self-asserted
+ * id is not read here (`self-assert-binding.guard.test.ts` keeps every read of
+ * it inside the seam); it needs no check, because every arm hands the seam the
+ * connector's own `membershipId` in its place, so a stray one is never consulted.
  */
 function assertOneCallerKind(input: MeetingAgendaAuthzInput): void {
 	if (input.connector && input.sessionUserId) {
-		throw new Error(
-			"A connector caller cannot also carry a session or a self-asserted member.",
-		);
+		throw new Error("A connector caller cannot also carry a session.");
 	}
 }
 
