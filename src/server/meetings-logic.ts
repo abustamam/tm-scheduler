@@ -757,8 +757,11 @@ export interface WordOfTheDayUpdateInput {
  * through the Edit-meeting dialog, save the word, and the sentence was gone with
  * the save reporting success.
  */
-export async function applyWordOfTheDayUpdate(input: WordOfTheDayUpdateInput) {
-	return applyNarrowTextPatch(input, WOD_TEXT_FIELDS);
+export async function applyWordOfTheDayUpdate(
+	input: WordOfTheDayUpdateInput,
+	conn: DbOrTx = db,
+) {
+	return applyNarrowTextPatch(input, WOD_TEXT_FIELDS, conn);
 }
 
 export interface TableTopicsNotesUpdateInput {
@@ -777,8 +780,25 @@ export interface TableTopicsNotesUpdateInput {
  */
 export async function applyTableTopicsNotesUpdate(
 	input: TableTopicsNotesUpdateInput,
+	conn: DbOrTx = db,
 ) {
-	return applyNarrowTextPatch(input, TABLE_TOPICS_TEXT_FIELDS);
+	return applyNarrowTextPatch(input, TABLE_TOPICS_TEXT_FIELDS, conn);
+}
+
+/**
+ * The connector's caller who holds BOTH the Grammarian and the Table Topics
+ * Master grants: the two column groups in ONE patch, so one call logs one
+ * `meeting_edit`. Reaches exactly the union of the two narrow writers' columns.
+ */
+export async function applyWodAndTableTopicsUpdate(
+	input: WordOfTheDayUpdateInput & TableTopicsNotesUpdateInput,
+	conn: DbOrTx = db,
+) {
+	return applyNarrowTextPatch(
+		input,
+		[...WOD_TEXT_FIELDS, ...TABLE_TOPICS_TEXT_FIELDS],
+		conn,
+	);
 }
 
 /** The sparse, diffed, audited writer both narrow capabilities share. `fields`
@@ -790,8 +810,11 @@ async function applyNarrowTextPatch<
 		[K in F]?: string | null;
 	},
 	fields: readonly F[],
+	// Defaults to `db`; the connector's `edit_meeting` passes its transaction so
+	// the write and its `meeting_edit` roll back with the tool's own lock.
+	conn: DbOrTx = db,
 ) {
-	const meeting = await db.query.meetings.findFirst({
+	const meeting = await conn.query.meetings.findFirst({
 		where: eq(meetings.id, input.meetingId),
 	});
 	if (!meeting) throw new Error("Meeting not found.");
@@ -827,7 +850,7 @@ async function applyNarrowTextPatch<
 		return { clubId: meeting.clubId };
 	}
 
-	await db.transaction(async (tx) => {
+	await conn.transaction(async (tx) => {
 		// The resolvers in front of this refuse a cancelled meeting only on an
 		// unlocked read; this is the refusal that holds (#1088).
 		await updateMeetingUnlessCancelled(tx, input.meetingId, next);

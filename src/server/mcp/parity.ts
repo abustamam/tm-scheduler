@@ -440,9 +440,13 @@ export const PARITY_ROWS: ParityRow[] = [
 		},
 	}),
 	row("meetings", "createMeeting", "admin", { gap: true }),
-	row("meetings", "updateMeeting", "member", { gap: true }),
-	row("meetings", "updateWordOfTheDay", "member", { gap: true }),
-	row("meetings", "updateTableTopicsNotes", "member", { gap: true }),
+	row("meetings", "updateMeeting", "member", {
+		tool: ["edit_meeting", "reschedule_meeting"],
+	}),
+	row("meetings", "updateWordOfTheDay", "member", { tool: "edit_meeting" }),
+	row("meetings", "updateTableTopicsNotes", "member", {
+		tool: "edit_meeting",
+	}),
 	row("meetings", "completeMeeting", "admin", { gap: true }),
 	row("meetings", "setMeetingDigitalVoting", "admin", { gap: true }),
 	row("meetings", "reopenMeeting", "admin", { gap: true }),
