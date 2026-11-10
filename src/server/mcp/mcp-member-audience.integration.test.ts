@@ -202,6 +202,27 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		);
 	});
 
+	it("edit_speaker_slots (a role holder's tool, #1576): a plain member is refused with the role-holder message, a stranger with the officer one", async () => {
+		const s = await club();
+		const other = await club();
+		const input = { meetingId: s.meetingId, addSpeakers: 1 };
+		const member = await outcome(
+			call("edit_speaker_slots", await tokenFor(s.memberUserId), input),
+		);
+		expect(member).toMatchObject({ ok: false, code: "FORBIDDEN" });
+		const stranger = await outcome(
+			call("edit_speaker_slots", await tokenFor(other.memberUserId), input),
+		);
+		expect(stranger).toEqual({
+			ok: false,
+			code: "FORBIDDEN",
+			message: NOT_OFFICER_MESSAGE,
+		});
+		expect((member as { message: string }).message).not.toBe(
+			NOT_OFFICER_MESSAGE,
+		);
+	});
+
 	it("a foreign club and the member's own club give byte-identical refusals", async () => {
 		const own = await club();
 		const foreign = await club();

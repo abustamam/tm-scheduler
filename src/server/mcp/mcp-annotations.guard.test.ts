@@ -62,6 +62,7 @@ describe("MCP tool annotations", () => {
 			"edit_agenda",
 			"edit_member",
 			"edit_role_slots",
+			"edit_speaker_slots",
 			"record_attendance",
 			"set_attendance",
 			"set_awards",
