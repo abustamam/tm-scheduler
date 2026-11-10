@@ -123,7 +123,8 @@ export const setMyAttendanceTool: McpToolDefinition = {
 	config: {
 		title: "Set my attendance",
 		description:
-			"Tell the club whether the caller is coming to one meeting: the same as " +
+			"Tell the club whether the caller is coming to one meeting (the PLAN, not " +
+			"the record of who came: record_attendance, for officers, does that): the same as " +
 			'the app\'s "Can\'t make it" (not_coming) or "I\'m coming". Always the ' +
 			"person this token belongs to; it takes no member id. Call " +
 			"get_my_schedule first to find the meetingId, and ask the user which " +

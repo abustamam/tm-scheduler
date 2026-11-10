@@ -764,7 +764,7 @@ async function resolveGuestId(
 		const name = input.newGuest.name.trim();
 		if (!name) throw new Error("A guest name is required.");
 		// Standardize the guest phone to E.164 on write (#295).
-		const cc = await loadClubDefaultCountryCode(clubId);
+		const cc = await loadClubDefaultCountryCode(clubId, tx);
 		const email = input.newGuest.email?.trim() || null;
 		const phone = toStoredPhone(input.newGuest.phone, cc);
 
@@ -957,18 +957,23 @@ export async function setMemberAbsentReleasingRoles(
  * `onConflictDoNothing` and the attendance insert already is, so re-running the
  * whole op returns the same `guestId` without duplicating either row.
  */
-export async function addGuestPresent(input: {
-	meetingId: string;
-	id?: string;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	mode?: AttendanceMode;
-	replaceMode?: boolean;
-}): Promise<{ guestId: string }> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	return db.transaction(async (tx) => {
-		const guestId = await resolveGuestId(tx, clubId, input, input.id);
-		const insert = tx.insert(meetingAttendance).values({
+export async function addGuestPresent(
+	input: {
+		meetingId: string;
+		id?: string;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		mode?: AttendanceMode;
+		replaceMode?: boolean;
+	},
+	/** The caller's transaction (#1573: the connector's roll commits as one).
+	 *  Omitted ⇒ this opens its own, as ever. */
+	tx?: DbOrTx,
+): Promise<{ guestId: string }> {
+	const clubId = await getMeetingClubId(input.meetingId, tx ?? db);
+	const run = async (conn: DbOrTx) => {
+		const guestId = await resolveGuestId(conn, clubId, input, input.id);
+		const insert = conn.insert(meetingAttendance).values({
 			meetingId: input.meetingId,
 			guestId,
 			status: "present",
@@ -984,15 +989,20 @@ export async function addGuestPresent(input: {
 			await insert.onConflictDoNothing({ target });
 		}
 		return { guestId };
-	});
+	};
+	return tx ? run(tx) : db.transaction(run);
 }
 
 /** Remove a present guest's attendance row (does not delete the club guest). */
-export async function removeGuestPresent(input: {
-	meetingId: string;
-	guestId: string;
-}): Promise<void> {
-	await db
+export async function removeGuestPresent(
+	input: {
+		meetingId: string;
+		guestId: string;
+	},
+	/** The caller's transaction, when the delete must commit with other writes. */
+	tx?: DbOrTx,
+): Promise<void> {
+	await (tx ?? db)
 		.delete(meetingAttendance)
 		.where(
 			and(
