@@ -8,6 +8,7 @@ import {
 	DISQUALIFICATION_PRESETS,
 } from "#/lib/disqualification";
 import { formatVoteTime } from "#/lib/vote-window";
+import { writeInKey } from "#/lib/write-in-limits";
 import { RULING_NEEDS_SESSION_MESSAGE } from "#/lib/write-proof";
 import type { AwardCategory } from "#/server/minutes-logic";
 import {
@@ -24,6 +25,10 @@ const CATEGORY_LABELS: Record<AwardCategory, string> = {
 	best_table_topics: "Best Table Topics",
 };
 const CATEGORIES = Object.keys(CATEGORY_LABELS) as AwardCategory[];
+
+/** The one react-query key for a meeting's console tally (#1580). */
+export const voteTallyKey = (meetingId: string) =>
+	["vote-tally", meetingId] as const;
 
 /** One entry in a category's candidate list, as the tally reports it. Derived
  *  off the server payload rather than re-declared, so the console cannot
@@ -196,7 +201,7 @@ export function VoteCounterPanel({
 		canManageClub || (sessionMemberId !== null && !rulingExcluded);
 	const qc = useQueryClient();
 	const tally = useQuery({
-		queryKey: ["vote-tally", meetingId],
+		queryKey: voteTallyKey(meetingId),
 		queryFn: () => getVoteTally({ data: { meetingId, selfMemberId } }),
 		refetchInterval: 5000,
 	});
@@ -211,7 +216,7 @@ export function VoteCounterPanel({
 						data: { meetingId, category: v.category, selfMemberId },
 					}),
 		onSuccess: () =>
-			qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] }),
+			qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) }),
 	});
 
 	/** Which candidate's reason form is open, as `${category}:${kind}:${id}`.
@@ -250,7 +255,7 @@ export function VoteCounterPanel({
 			}),
 		onSuccess: () => {
 			setReasonFor(null);
-			return qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] });
+			return qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) });
 		},
 	});
 
@@ -285,7 +290,7 @@ export function VoteCounterPanel({
 				},
 			}),
 		onSuccess: () =>
-			qc.invalidateQueries({ queryKey: ["vote-tally", meetingId] }),
+			qc.invalidateQueries({ queryKey: voteTallyKey(meetingId) }),
 	});
 
 	return (
@@ -308,6 +313,17 @@ export function VoteCounterPanel({
 				const tied = (t?.results ?? []).filter(
 					(r) => r.count === top && top > 0,
 				);
+
+				// The stored winner (#1580), read beside the tally. A write-in
+				// tally row's `id` is `writeInKey(name)`, so it matches by that key
+				// rather than the raw name.
+				const award = tally.data?.awards[category] ?? null;
+				const isWinnerRow = (r: TallyEntry) =>
+					award !== null &&
+					award.kind === r.kind &&
+					(award.kind === "writeIn"
+						? writeInKey(award.name) === r.id
+						: award.id === r.id);
 
 				const rowKey = (r: TallyEntry) => `${category}:${r.kind}:${r.id}`;
 
@@ -442,6 +458,34 @@ export function VoteCounterPanel({
 							<p className="mt-2 text-xs text-muted-foreground">{windowNote}</p>
 						) : null}
 
+						{tally.data ? (
+							<div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2">
+								<p className="min-w-0 text-sm">
+									<span className="text-xs font-semibold text-muted-foreground">
+										Winner
+									</span>{" "}
+									{award ? (
+										<span className="font-semibold break-words">
+											{award.name}
+										</span>
+									) : (
+										<span className="text-muted-foreground">Not set</span>
+									)}
+								</p>
+								{award ? (
+									<Button
+										type="button"
+										size="sm"
+										variant="ghost"
+										className="shrink-0 text-muted-foreground"
+										onClick={() => onClearWinner(category)}
+									>
+										Clear winner
+									</Button>
+								) : null}
+							</div>
+						) : null}
+
 						<p className="mt-2 text-sm text-muted-foreground">
 							{total} {total === 1 ? "vote" : "votes"} in
 						</p>
@@ -510,7 +554,11 @@ export function VoteCounterPanel({
 								{t.results.map((r) =>
 									candidateRow(
 										r,
-										total > 0 ? (
+										isWinnerRow(r) ? (
+											<span className="rounded-full bg-success/15 px-2 py-1 text-xs font-semibold">
+												Winner
+											</span>
+										) : total > 0 ? (
 											<Button
 												size="sm"
 												variant="outline"
@@ -529,15 +577,6 @@ export function VoteCounterPanel({
 										) : null,
 									),
 								)}
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									className="self-start text-muted-foreground"
-									onClick={() => onClearWinner(category)}
-								>
-									Clear winner
-								</Button>
 							</div>
 						) : null}
 

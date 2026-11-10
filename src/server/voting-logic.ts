@@ -63,7 +63,9 @@ import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import {
 	AWARD_CATEGORIES,
 	type AwardCategory,
+	type AwardWinner,
 	getMeetingClubId,
+	loadAwardRows,
 	requireMemberInMeetingClub,
 } from "./minutes-logic";
 import { isDeadlock } from "./pg-errors";
@@ -2062,4 +2064,28 @@ function joinInTransaction(
 
 		return guest;
 	});
+}
+
+/**
+ * The Ballot Counter console's whole read (#1580): the running count, the
+ * meeting's Table Topics speakers and each category's stored winner, composed
+ * here so a test can call it (`voting.ts` may export only server functions).
+ *
+ * The winner comes from `loadAwardRows`, the shared reader the Minutes card and
+ * `get_agenda` use (the club export and guest pipeline read the table too), so a
+ * winner set from the Minutes card reads here on the next poll and names itself
+ * exactly as the Awards list does. The three reads share one `Promise.all`: this
+ * is polled every 5 seconds per open console.
+ */
+export async function loadConsoleTally(meetingId: string) {
+	const [categories, tableTopicsSpeakers, awardRows] = await Promise.all([
+		loadTally(meetingId),
+		loadTableTopicsForConsole(meetingId),
+		loadAwardRows(db, meetingId),
+	]);
+	const awards = {} as Record<AwardCategory, AwardWinner | null>;
+	for (const category of AWARD_CATEGORIES) {
+		awards[category] = awardRows.get(category)?.winner ?? null;
+	}
+	return { categories, tableTopicsSpeakers, awards };
 }
