@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 /**
  * #1281. protects=the set of tools a plain club member may call;
- * fails_when=any tool other than these nine declares `audience: "member"`
+ * fails_when=any tool other than these ten declares `audience: "member"`
  * (flipping `assign_roles` is the mutation check), or one of them stops;
  * no_claim=that a listed tool is itself safe for a member: each still
  * authorizes through `authenticateToken` and its own query. Adding a member
@@ -13,13 +13,14 @@ vi.mock("#/db", () => ({ db: {} }));
 const { MCP_TOOLS } = await import("#/server/mcp/tools");
 
 describe("MCP tool audiences (#1281)", () => {
-	it("exactly the nine member tools", () => {
+	it("exactly the ten member tools", () => {
 		expect(
 			MCP_TOOLS.filter((t) => t.audience === "member")
 				.map((t) => t.name)
 				.sort(),
 		).toEqual([
 			"claim_open_role",
+			"edit_meeting",
 			"edit_speaker_slots",
 			"get_my_feedback",
 			"get_my_schedule",

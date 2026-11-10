@@ -196,6 +196,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"edit_agenda",
+			"edit_meeting",
 			"edit_member",
 			"edit_role_slots",
 			"edit_speaker_slots",
@@ -664,6 +665,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					{ memberId: seed.memberId, topic: "Weather" },
 					{ newGuest: { name: "Quill Passerby" } },
 				],
+			}),
+			// #1574. A preview only (no planHash): text fields before and after,
+			// never a person's contact detail.
+			toolsCall("edit_meeting", {
+				meetingId: seed.meetingId,
+				theme: "Harvest",
+				notes: null,
 			}),
 			// #1543. A preview only (no planHash): names members, reads their
 			// contact detail to decide, and must never echo it.
