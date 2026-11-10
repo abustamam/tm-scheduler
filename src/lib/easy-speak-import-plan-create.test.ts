@@ -722,3 +722,93 @@ describe('a saved "create" over an automatic link (#1589)', () => {
 		expect(listPlan.notes).toContain(SET_ASIDE("Ada Linked"));
 	});
 });
+
+describe("the codex review round on #1591", () => {
+	const ADA_ES = { esUserId: "900401", name: "Ada Linked" };
+	/** An es: person and a meeting's name-only mention of the same name. */
+	const withMention = () => {
+		const bundle = bundleWith({ holders: [{ role: "Timer", who: ADA_ES }] });
+		const meeting = bundle.meetings[0];
+		if (!meeting) throw new Error("fixture changed");
+		meeting.roles.push({
+			role: "Grammarian",
+			slot: 2,
+			holder: { esUserId: null, name: "Ada Linked" },
+		});
+		return bundle;
+	};
+
+	// protects=a saved create on a name-only mention linked by name survives the namesake pass;
+	// fails_when=the namesake pass links the mention back to the member it was told is someone else;
+	// no_claim=the apply's write.
+	it("keeps a create answer on a name-only mention", () => {
+		const auto = buildImportPlan(withMention(), ctx({ roster: [ADA] }));
+		expect(
+			auto.people.find((p) => p.key === "name:ada linked")?.outcome,
+		).toMatchObject({ status: "member", memberId: ADA.memberId });
+		const plan = buildImportPlan(
+			withMention(),
+			ctx({
+				roster: [ADA],
+				resolutions: { "name:ada linked": { action: "create" } },
+			}),
+		);
+		expect(
+			plan.people.find((p) => p.key === "name:ada linked")?.outcome.status,
+		).toBe("create");
+		expect(
+			plan.people.find((p) => p.key === "es:900401")?.outcome,
+		).toMatchObject({
+			status: "member",
+			memberId: ADA.memberId,
+		});
+		expect(plan.canApply).toBe(true);
+	});
+
+	// protects=createAllowed says where a create answer takes effect: a create or a name link yes, an ambiguous match or an earlier import's ref no;
+	// fails_when=the panel would offer New member to a person the planner then leaves ambiguous, or hide it from a name link;
+	// no_claim=the panel's reading of it (component test).
+	it("says where a create answer would take effect", () => {
+		const two = buildImportPlan(
+			bundleWith({
+				holders: [{ role: "Timer", who: ref("900402", "Sam Same") }],
+			}),
+			ctx({
+				resolutions: {
+					"es:900402": { action: "member", memberId: SAM_A.memberId },
+				},
+			}),
+		);
+		const sam = two.people.find((p) => p.key === "es:900402");
+		expect(sam?.outcome).toMatchObject({ status: "member", via: "chosen" });
+		expect(sam?.createAllowed).toBe(false);
+
+		const linked = buildImportPlan(
+			bundleWith({ holders: [{ role: "Timer", who: ADA_ES }] }),
+			ctx(),
+		);
+		expect(
+			linked.people.find((p) => p.key === "es:900401")?.createAllowed,
+		).toBe(true);
+		const byRef = buildImportPlan(
+			bundleWith({ holders: [{ role: "Timer", who: ADA_ES }] }),
+			ctx({
+				refs: [
+					{ kind: "person", sourceId: "es:900401", targetId: ADA.memberId },
+				],
+			}),
+		);
+		expect(byRef.people.find((p) => p.key === "es:900401")?.createAllowed).toBe(
+			false,
+		);
+		const fresh = buildImportPlan(
+			bundleWith({
+				holders: [{ role: "Timer", who: ref("900403", "Nia New") }],
+			}),
+			ctx(),
+		);
+		expect(fresh.people.find((p) => p.key === "es:900403")?.createAllowed).toBe(
+			true,
+		);
+	});
+});

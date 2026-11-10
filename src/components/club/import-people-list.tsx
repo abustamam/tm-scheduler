@@ -264,7 +264,11 @@ function PersonRow({
 					}}
 				>
 					<option value="">Wrong person?</option>
-					{p.listOnly ? null : <option value={NEW_MEMBER}>New member</option>}
+					{/* Only where the planner honours a create: never a list-only person,
+					    and never one whose automatic outcome was ambiguous. */}
+					{p.listOnly || !p.createAllowed ? null : (
+						<option value={NEW_MEMBER}>New member</option>
+					)}
 					<optgroup label="Same person as…">
 						{roster
 							.filter((m) => m.memberId !== p.memberId)

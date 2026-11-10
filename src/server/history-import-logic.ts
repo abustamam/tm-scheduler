@@ -966,6 +966,8 @@ export interface ImportPreviewPerson {
 	officer: string | null;
 	/** The speeches the imported meetings give this person (#1589). */
 	speeches: number;
+	/** Whether a "create" answer would take effect: the panel offers "New member" only then (#1589). */
+	createAllowed: boolean;
 }
 
 export interface ImportPreview {
@@ -1054,6 +1056,7 @@ function previewPerson(
 				? OFFICER_POSITION_LABELS[o.position]
 				: null,
 		speeches: speeches.get(p.key) ?? 0,
+		createAllowed: p.createAllowed,
 	};
 }
 

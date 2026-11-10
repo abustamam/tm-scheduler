@@ -475,6 +475,7 @@ describe.skipIf(!hasTestDb)(
 				},
 				rejectedChoice: null,
 				suggestions: [],
+				createAllowed: false,
 			});
 			const plan: ImportPlan = {
 				people: [

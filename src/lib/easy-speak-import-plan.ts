@@ -337,6 +337,13 @@ export interface PlanPerson {
 	 * changes the outcome or asks a human: Apply does not wait on it.
 	 */
 	suggestions: PlanRosterMember[];
+	/**
+	 * Whether a saved "create" answer would take effect for this person (#1589):
+	 * their automatic outcome is a create (or a close-name question over one), or a
+	 * link by exact name, folded name or email. Read by the panel, which offers
+	 * "New member" only where the planner honours it.
+	 */
+	createAllowed: boolean;
 }
 
 /** The most likely-duplicate suggestions one new member carries (#1589). */
@@ -1314,6 +1321,10 @@ export function buildImportPlan(
 			d.outcome.via === "folded" ||
 			d.outcome.via === "email");
 
+	// People a saved "create" turned from a link into a new member: the namesake
+	// pass below must not link them back.
+	const createdByAnswer = new Set<string>();
+
 	for (const d of drafts) {
 		const { key, ref, appearances, listOnly, guestRef } = d;
 		let outcome = d.outcome;
@@ -1353,7 +1364,10 @@ export function buildImportPlan(
 				// "Not that member": a create stays a create, and is not asked about;
 				// a name or email link becomes the create the member list gives
 				// (#1589). Anyone else is matched automatically (noted above).
-				if (createOverridesLink(d)) outcome = d.asNewMember;
+				if (createOverridesLink(d)) {
+					outcome = d.asNewMember;
+					createdByAnswer.add(key);
+				}
 			} else if (choice?.action === "member") {
 				if (rosterIds.has(choice.memberId)) {
 					outcome = {
@@ -1392,6 +1406,7 @@ export function buildImportPlan(
 			outcome,
 			rejectedChoice,
 			suggestions: [],
+			createAllowed: d.outcome.status === "create" || createOverridesLink(d),
 		});
 	}
 	// A name-only reference (`name:<fold>`, a meeting's mention) beside `es:` people
@@ -1425,6 +1440,8 @@ export function buildImportPlan(
 		const esPeople = group.filter((p) => p.esUserId !== null);
 		const n = group.find((p) => p.esUserId === null);
 		if (!n || esPeople.length === 0) continue;
+		// Its own saved "create" took effect over a link (#1589): left alone.
+		if (createdByAnswer.has(n.key)) continue;
 		const nOutcome = n.outcome;
 		const nIsCreate = nOutcome.status === "create";
 		const nMatchedByName =

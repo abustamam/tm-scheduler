@@ -1220,6 +1220,7 @@ describe("everyone the import touches (#1589)", () => {
 		membership: null,
 		officer: null,
 		speeches: 0,
+		createAllowed: true,
 		...over,
 	});
 	const TISH = "es:801";
@@ -1270,6 +1271,14 @@ describe("everyone the import touches (#1589)", () => {
 				via: "folded",
 				memberId: M2,
 				listOnly: true,
+			}),
+			someone({
+				key: "es:811",
+				name: "Cho Chosen",
+				status: "member",
+				via: "chosen",
+				memberId: M1,
+				createAllowed: false,
 			}),
 			someone({
 				key: "es:806",
@@ -1329,7 +1338,7 @@ describe("everyone the import touches (#1589)", () => {
 		const expected: Record<string, string[]> = {
 			active: [TISH],
 			former: ["es:802"],
-			linked: ["es:803", "es:804", "es:805"],
+			linked: ["es:803", "es:804", "es:805", "es:811"],
 			guests: ["es:806"],
 			skipped: ["es:807", "es:808"],
 		};
@@ -1343,7 +1352,7 @@ describe("everyone the import touches (#1589)", () => {
 			);
 			expect(rows).toEqual(keys.map((k) => `person-${k}`));
 		}
-		expect(list.querySelectorAll("li")).toHaveLength(8);
+		expect(list.querySelectorAll("li")).toHaveLength(9);
 		// The two other sections keep their own rows.
 		expect(list.textContent).not.toContain("Amb Iguous");
 		expect(list.textContent).not.toContain("Uma Unmatched");
@@ -1438,6 +1447,11 @@ describe("everyone the import touches (#1589)", () => {
 			"Wrong person: Ada Linked",
 		) as HTMLSelectElement;
 		expect([...same.options].map((o) => o.value)).toContain("__new");
+		// A choice over an ambiguous match: the planner would not honour a create.
+		const chosen = screen.getByLabelText(
+			"Wrong person: Cho Chosen",
+		) as HTMLSelectElement;
+		expect([...chosen.options].map((o) => o.value)).not.toContain("__new");
 		// The member it is linked to is not offered as the "other" member.
 		expect([...same.options].map((o) => o.value)).not.toContain(M2);
 	});
