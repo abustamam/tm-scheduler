@@ -298,7 +298,9 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("action-items", "closeActionItem", "admin", { gap: true }),
 	row("action-items", "restoreActionItem", "admin", { gap: true }),
 	row("action-items", "removeActionItem", "admin", { gap: true }),
-	row("batch-meetings", "batchCreateMeetings", "admin", { gap: true }),
+	row("batch-meetings", "batchCreateMeetings", "admin", {
+		tool: "create_meetings",
+	}),
 	row("guest-pipeline", "submitGuestBook", "public", {
 		notOnConnector: {
 			category: "public path",
@@ -439,7 +441,7 @@ export const PARITY_ROWS: ParityRow[] = [
 			reason: "a console feature for the platform operator, not a club officer",
 		},
 	}),
-	row("meetings", "createMeeting", "admin", { gap: true }),
+	row("meetings", "createMeeting", "admin", { tool: "create_meetings" }),
 	row("meetings", "updateMeeting", "member", {
 		tool: ["edit_meeting", "reschedule_meeting"],
 	}),
@@ -447,9 +449,9 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("meetings", "updateTableTopicsNotes", "member", {
 		tool: "edit_meeting",
 	}),
-	row("meetings", "completeMeeting", "admin", { gap: true }),
+	row("meetings", "completeMeeting", "admin", { tool: "complete_meeting" }),
 	row("meetings", "setMeetingDigitalVoting", "admin", { gap: true }),
-	row("meetings", "reopenMeeting", "admin", { gap: true }),
+	row("meetings", "reopenMeeting", "admin", { tool: "reopen_meeting" }),
 	row("meetings", "cancelMeeting", "admin", { tool: "cancel_meeting" }),
 	row("meetings", "restoreMeeting", "admin", { tool: "restore_meeting" }),
 	row("role-feedback", "leaveFeedback", "public", { gap: true }),

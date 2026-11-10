@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { apiTokens, clubs, members } from "#/db/schema";
+import { apiTokens, clubs, meetings, members } from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -86,6 +86,9 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 			assignments: [{ slotId: s.slotId, memberId: s.memberId }],
 		},
 		cancel_meeting: { meetingId: s.meetingId },
+		complete_meeting: { meetingId: s.meetingId },
+		create_meetings: { clubId: s.clubId, dates: ["2031-02-04T19:00"] },
+		reopen_meeting: { meetingId: s.meetingId },
 		edit_agenda: {
 			meetingId: s.meetingId,
 			operations: [{ op: "add", label: "Break", minutes: 5 }],
@@ -145,7 +148,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(19);
+		expect(OFFICER_TOOLS).toHaveLength(22);
 	});
 
 	it.each(
@@ -156,6 +159,16 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		const adminToken = await tokenFor(s.adminUserId);
 		const memberToken = await tokenFor(s.memberUserId);
 
+		// complete needs a meeting whose date has arrived; reopen needs it completed.
+		if (name === "complete_meeting" || name === "reopen_meeting") {
+			await testDb
+				.update(meetings)
+				.set({ scheduledAt: new Date(Date.now() - 2 * 86_400_000) })
+				.where(eq(meetings.id, s.meetingId));
+		}
+		if (name === "reopen_meeting") {
+			await call("complete_meeting", adminToken, { meetingId: s.meetingId });
+		}
 		// restore needs a cancelled meeting for the control call to succeed.
 		if (name === "restore_meeting") {
 			await call("cancel_meeting", adminToken, { meetingId: s.meetingId });
