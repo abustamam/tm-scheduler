@@ -88,8 +88,8 @@
  *
  * ## The club comes from the MEETING
  *
- * `authorizeTokenForMeeting`, never a `clubId` in the input; this tool takes
- * none (`mcp-authz.guard.test.ts`).
+ * `authorizeDelegateForMeeting` (an officer, the meeting's Ballot Counter or its
+ * Toastmaster, #1567), never a `clubId` in the input; this tool takes none.
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
@@ -117,7 +117,7 @@ import {
 	upsertAwardRow,
 } from "#/server/minutes-logic";
 import { listVoteSessions } from "#/server/voting-logic";
-import { authorizeTokenForMeeting } from "../authz-logic";
+import { authorizeDelegateForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 
@@ -195,7 +195,7 @@ function describeWinner(w: AwardWinner | null): string {
 
 export const setAwardsTool: McpToolDefinition = {
 	name: "set_awards",
-	audience: "officer",
+	audience: "member",
 	// Replaces or clears a recorded winner; the same entries again change nothing.
 	annotations: {
 		readOnlyHint: false,
@@ -218,7 +218,11 @@ export const setAwardsTool: McpToolDefinition = {
 	},
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
-		const { club } = await authorizeTokenForMeeting(ctx, args.meetingId);
+		const { club } = await authorizeDelegateForMeeting(
+			ctx,
+			args.meetingId,
+			"voteCounter",
+		);
 		const memberIds = [
 			...new Set(
 				args.awards.flatMap((a) => ("memberId" in a ? [a.memberId] : [])),

@@ -119,10 +119,6 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 			memberId: s.memberId,
 			status: "not_coming",
 		},
-		set_awards: {
-			meetingId: s.meetingId,
-			awards: [{ category: "best_speaker", memberId: s.memberId }],
-		},
 		set_contact_preference: {
 			clubId: s.clubId,
 			memberIds: [s.memberId],
@@ -149,7 +145,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(20);
+		expect(OFFICER_TOOLS).toHaveLength(19);
 	});
 
 	it.each(
@@ -180,6 +176,30 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 			code: "FORBIDDEN",
 			message: NOT_OFFICER_MESSAGE,
 		});
+	});
+
+	it("set_awards (a role holder's tool, #1567): a plain member is refused with the role-holder message, a stranger with the officer one", async () => {
+		const s = await club();
+		const other = await club();
+		const input = {
+			meetingId: s.meetingId,
+			awards: [{ category: "best_speaker", memberId: s.memberId }],
+		};
+		const member = await outcome(
+			call("set_awards", await tokenFor(s.memberUserId), input),
+		);
+		expect(member).toMatchObject({ ok: false, code: "FORBIDDEN" });
+		const stranger = await outcome(
+			call("set_awards", await tokenFor(other.memberUserId), input),
+		);
+		expect(stranger).toEqual({
+			ok: false,
+			code: "FORBIDDEN",
+			message: NOT_OFFICER_MESSAGE,
+		});
+		expect((member as { message: string }).message).not.toBe(
+			NOT_OFFICER_MESSAGE,
+		);
 	});
 
 	it("a foreign club and the member's own club give byte-identical refusals", async () => {

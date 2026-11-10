@@ -24,6 +24,8 @@ import {
 	meetingVoteSessions,
 	members,
 	people,
+	roleDefinitions,
+	roleSlots,
 } from "#/db/schema";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
@@ -753,9 +755,55 @@ describe.skipIf(!hasTestDb)("set_awards (#1172)", () => {
 		});
 	});
 
-	it("refuses a token whose owner is not an admin or officer of the meeting's club", async () => {
-		// protects=authorizeTokenForMeeting gates the write; a plain member's token writes nothing
-		// fails_when=any token holder can record awards
+	it.each([
+		"Vote Counter",
+		"Toastmaster of the Day",
+	])("lets the meeting's %s record awards through their own token (#1567)", async (roleName) => {
+		// protects=a role holder's own token records the award; the plan is the same as an officer's
+		// fails_when=the holder is refused, or the write needs an officer
+		// no_claim=the truth table per capability: delegate-authz.integration.test.ts
+		const holderToken = await mintToken(seed.memberUserId);
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: roleName,
+				category: "functionary",
+				isSpeakerRole: false,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: seed.meetingId,
+			// biome-ignore lint/style/noNonNullAssertion: insert returns a row
+			roleDefinitionId: def!.id,
+			assignedMemberId: seed.memberId,
+			status: "confirmed",
+		});
+		const res = (await call(
+			{
+				meetingId: seed.meetingId,
+				awards: [{ category: "best_speaker", memberId: seed.memberId }],
+			},
+			holderToken,
+		)) as Applied;
+		expect(res.applied).toBe(true);
+		expect(await awardRows()).toHaveLength(1);
+	});
+
+	it("still records for an officer", async () => {
+		// protects=the officer arm survives the move to the delegate helper
+		// fails_when=an officer who holds no slot is refused
+		// no_claim=none beyond protects
+		const res = (await call({
+			meetingId: seed.meetingId,
+			awards: [{ category: "best_speaker", memberId: seed.memberId }],
+		})) as Applied;
+		expect(res.applied).toBe(true);
+	});
+
+	it("refuses a plain member who holds neither role", async () => {
+		// protects=a plain member holding no slot on the meeting writes nothing (the different-role case is delegate-authz's suite)
+		// fails_when=any member of the club can record awards
 		// no_claim=officer-term acceptance is authz-logic's own suite, not repeated here
 		const memberToken = await mintToken(seed.memberUserId);
 		await expect(

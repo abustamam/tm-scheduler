@@ -72,12 +72,40 @@ export function assertMeetingNotLocked(status: string): void {
 	}
 }
 
+/**
+ * A connector (`/api/mcp`) caller, already authenticated by the token layer
+ * (#1567). `membershipId` is the token's own membership in this meeting's club,
+ * so it is VERIFIED, never asserted; `officer` is the token's `via !== "member"`.
+ */
+export interface ConnectorCaller {
+	membershipId: string;
+	officer: boolean;
+}
+
 export interface MeetingAgendaAuthzInput {
 	meetingId: string;
 	/** Signed-in user id (admin path), or null for public callers. */
 	sessionUserId?: string | null;
 	/** Self-asserted roster member id (TMOD path), or null. */
 	selfMemberId?: string | null;
+	/** A connector caller (#1567). Mutually exclusive with `sessionUserId`:
+	 *  `assertOneCallerKind` throws when both are set. NOT checked against the
+	 *  self-asserted id above: `self-assert-binding.guard.test.ts` forbids any
+	 *  read of that field outside the seam. It is inert instead, because every
+	 *  arm hands the seam `connector.membershipId` in its place. */
+	connector?: ConnectorCaller;
+}
+
+/**
+ * A caller is a web session OR a connector token, never both. The self-asserted
+ * id is not read here (`self-assert-binding.guard.test.ts` keeps every read of
+ * it inside the seam); it needs no check, because every arm hands the seam the
+ * connector's own `membershipId` in its place, so a stray one is never consulted.
+ */
+function assertOneCallerKind(input: MeetingAgendaAuthzInput): void {
+	if (input.connector && input.sessionUserId) {
+		throw new Error("A connector caller cannot also carry a session.");
+	}
 }
 
 export interface MeetingAgendaAuthz {
@@ -153,11 +181,23 @@ export interface MeetingAgendaAuthz {
 async function resolveAdminGrant(
 	sessionUserId: string | null | undefined,
 	clubId: string,
+	connector?: ConnectorCaller,
 ): Promise<{
 	granted: boolean;
 	memberId: string | null;
 	membershipIds: readonly string[];
 }> {
+	// A connector caller (#1567): the admin arm is EXACTLY the token's own
+	// `officer` standing. It returns before `getActiveImpersonation` on purpose:
+	// a superadmin's token must never gain a club through an impersonation
+	// session a human opened in a browser (ADR-0020; `mcp/authz-logic.ts`).
+	if (connector) {
+		return {
+			granted: connector.officer,
+			memberId: connector.membershipId,
+			membershipIds: [connector.membershipId],
+		};
+	}
 	if (!sessionUserId) {
 		return { granted: false, memberId: null, membershipIds: [] };
 	}
@@ -268,10 +308,13 @@ export type SelfAssertSession =
  * present and is refused rather than falling through to the anonymous arm.
  */
 function sessionOf(
-	sessionUserId: string | null | undefined,
+	input: Pick<MeetingAgendaAuthzInput, "sessionUserId" | "connector">,
 	membershipIds: readonly string[],
 ): SelfAssertSession {
-	return sessionUserId ? { present: true, membershipIds } : { present: false };
+	// A connector caller always has a session: the token's own membership.
+	return input.sessionUserId || input.connector
+		? { present: true, membershipIds }
+		: { present: false };
 }
 
 /**
@@ -494,7 +537,12 @@ export async function resolveMeetingAgendaAuthz(
 	// Admin path (session admin or read_write impersonation, #246). Also hands
 	// back the caller's own membership in this club, which the self-assert arm
 	// below binds against without a second read (#747).
-	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	assertOneCallerKind(input);
+	const admin = await resolveAdminGrant(
+		input.sessionUserId,
+		clubId,
+		input.connector,
+	);
 	if (admin.granted) {
 		return {
 			clubId,
@@ -508,9 +556,9 @@ export async function resolveMeetingAgendaAuthz(
 	// TMOD self-assert path: caller holds this meeting's TMOD slot, and — when
 	// they have a session — that slot is their own membership (#747).
 	const tmod = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: tmodMemberId,
-		session: sessionOf(input.sessionUserId, admin.membershipIds),
+		session: sessionOf(input, admin.membershipIds),
 	});
 	if (tmod.granted) {
 		return {
@@ -571,7 +619,12 @@ export async function resolveWordOfTheDayAuthz(
 		input.meetingId,
 	);
 
-	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	assertOneCallerKind(input);
+	const admin = await resolveAdminGrant(
+		input.sessionUserId,
+		clubId,
+		input.connector,
+	);
 	if (admin.granted) {
 		return {
 			clubId,
@@ -584,10 +637,10 @@ export async function resolveWordOfTheDayAuthz(
 	}
 	// Both self-assert arms below read the SAME session, so it is built once —
 	// two calls to `sessionOf` would be two chances to pass a different one.
-	const session = sessionOf(input.sessionUserId, admin.membershipIds);
+	const session = sessionOf(input, admin.membershipIds);
 
 	const tmod = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: tmodMemberId,
 		session,
 	});
@@ -603,7 +656,7 @@ export async function resolveWordOfTheDayAuthz(
 	}
 
 	const grammarian = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: grammarianMemberId,
 		session,
 	});
@@ -664,7 +717,12 @@ export async function resolveTableTopicsNotesAuthz(
 	const { tmodMemberId, tableTopicsMasterMemberId } =
 		await loadRoleSlotAssignees(input.meetingId);
 
-	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	assertOneCallerKind(input);
+	const admin = await resolveAdminGrant(
+		input.sessionUserId,
+		clubId,
+		input.connector,
+	);
 	if (admin.granted) {
 		return {
 			clubId,
@@ -673,10 +731,10 @@ export async function resolveTableTopicsNotesAuthz(
 			actorMemberId: admin.memberId,
 		};
 	}
-	const session = sessionOf(input.sessionUserId, admin.membershipIds);
+	const session = sessionOf(input, admin.membershipIds);
 
 	const tmod = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: tmodMemberId,
 		session,
 	});
@@ -690,7 +748,7 @@ export async function resolveTableTopicsNotesAuthz(
 	}
 
 	const ttm = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: tableTopicsMasterMemberId,
 		session,
 	});
@@ -748,7 +806,12 @@ export async function resolveVoteCounterAuthz(
 	const { voteCounterMemberId, tmodMemberId } = await loadRoleSlotAssignees(
 		input.meetingId,
 	);
-	const admin = await resolveAdminGrant(input.sessionUserId, clubId);
+	assertOneCallerKind(input);
+	const admin = await resolveAdminGrant(
+		input.sessionUserId,
+		clubId,
+		input.connector,
+	);
 	if (admin.granted) {
 		return {
 			clubId,
@@ -761,9 +824,9 @@ export async function resolveVoteCounterAuthz(
 	}
 
 	const voteCounter = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: voteCounterMemberId,
-		session: sessionOf(input.sessionUserId, admin.membershipIds),
+		session: sessionOf(input, admin.membershipIds),
 	});
 	if (voteCounter.granted) {
 		return {
@@ -783,9 +846,9 @@ export async function resolveVoteCounterAuthz(
 	// do NOT get is ruling a candidate out: `requireSignedInVoteCounter` refuses
 	// `via === "tmod-self-assert"`.
 	const tmod = resolveSelfAssertGrant({
-		selfMemberId: input.selfMemberId,
+		selfMemberId: input.connector?.membershipId ?? input.selfMemberId,
 		slotMemberId: tmodMemberId,
-		session: sessionOf(input.sessionUserId, admin.membershipIds),
+		session: sessionOf(input, admin.membershipIds),
 	});
 	if (tmod.granted) {
 		return {

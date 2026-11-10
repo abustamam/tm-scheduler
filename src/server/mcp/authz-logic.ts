@@ -68,11 +68,24 @@ import {
 	user,
 } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE, isClubArchived } from "#/lib/club-archive";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import {
 	API_TOKEN_PREFIX,
 	resolveActiveApiToken,
 	touchApiToken,
 } from "#/server/api-tokens-logic";
+import {
+	type MeetingAgendaAuthz,
+	type MeetingAgendaAuthzInput,
+	resolveMeetingAgendaAuthz,
+	resolveTableTopicsNotesAuthz,
+	resolveVoteCounterAuthz,
+	resolveWordOfTheDayAuthz,
+	type TableTopicsNotesAuthz,
+	type VoteCounterAuthz,
+	type WordOfTheDayAuthz,
+} from "#/server/meeting-authz-logic";
 import { McpError } from "./errors";
 import type { McpToolContext } from "./tool";
 
@@ -377,4 +390,96 @@ export async function authorizeTokenForMeeting(
 	meetingId: string,
 ): Promise<AuthorizedClub> {
 	return authorizeToken(ctx, await clubIdForMeeting(meetingId));
+}
+
+/** The meeting capabilities a role holder may use from the connector (#1567). */
+export type DelegateCapability =
+	| "agenda"
+	| "wordOfTheDay"
+	| "tableTopicsNotes"
+	| "voteCounter";
+
+export const NOT_ROLE_HOLDER_MESSAGE =
+	"You are not an admin, officer or the role holder for that meeting.";
+
+const DELEGATE_RESOLVERS: Record<
+	DelegateCapability,
+	(input: MeetingAgendaAuthzInput) => Promise<DelegateDecision>
+> = {
+	agenda: resolveMeetingAgendaAuthz,
+	wordOfTheDay: resolveWordOfTheDayAuthz,
+	tableTopicsNotes: resolveTableTopicsNotesAuthz,
+	voteCounter: resolveVoteCounterAuthz,
+};
+
+type DelegateDecision =
+	| MeetingAgendaAuthz
+	| WordOfTheDayAuthz
+	| TableTopicsNotesAuthz
+	| VoteCounterAuthz;
+
+/** The grant a resolver reports, with the denied (null) case removed. */
+export type DelegateVia = NonNullable<DelegateDecision["via"]>;
+
+/**
+ * Authorize a MEMBER-audience call that a meeting's role holder may make for
+ * their own meeting (#1567): an officer, or the member whose own membership
+ * holds the slot the capability keys off (the Toastmaster, Grammarian, Table
+ * Topics Master or Ballot Counter, as the web resolvers define it).
+ *
+ * Authenticates as `authorizeTokenForMeeting` does for a member-audience tool,
+ * so a non-member gets the stranger's refusal before anything about the meeting
+ * is disclosed. The caller's identity is the TOKEN's membership, never a field
+ * of the tool input, so the slot comparison is verified rather than asserted.
+ *
+ * The admin arm is the token's own `officer` standing and nothing else: the
+ * resolver is handed a `connector` caller and never reaches
+ * `resolveAdminGrant`'s impersonation fallback (see the module header).
+ */
+export async function authorizeDelegateForMeeting(
+	ctx: McpToolContext,
+	meetingId: string,
+	capability: DelegateCapability,
+): Promise<
+	AuthorizedClub & { actorMemberId: string | null; via: DelegateVia }
+> {
+	const authorized = await authorizeToken(
+		{ ...ctx, audience: "member" },
+		await clubIdForMeeting(meetingId),
+	);
+	const connector = {
+		membershipId: authorized.club.membershipId,
+		officer: authorized.club.via !== "member",
+	};
+	let decision: DelegateDecision;
+	try {
+		decision = await DELEGATE_RESOLVERS[capability]({ meetingId, connector });
+	} catch (err) {
+		// The resolvers refuse a completed or cancelled meeting (and an archived
+		// club, already ruled out above) by throwing a plain Error whose message
+		// is the sentence to show. Only those sentences, compared by their
+		// exported constants, become tool results; anything else (a driver
+		// error carrying SQL, a meeting deleted mid-call) rethrows unchanged so
+		// `toMcpError` replaces it with the generic INTERNAL.
+		if (err instanceof Error && !(err instanceof McpError)) {
+			if (
+				err.message === MEETING_LOCKED_MESSAGE ||
+				err.message === MEETING_CANCELLED_MESSAGE
+			) {
+				throw new McpError("LOCKED", err.message);
+			}
+			if (err.message === CLUB_ARCHIVED_MESSAGE) {
+				throw new McpError("ARCHIVED", err.message);
+			}
+		}
+		throw err;
+	}
+	if (!decision.allowed || decision.via === null) {
+		throw new McpError("FORBIDDEN", NOT_ROLE_HOLDER_MESSAGE);
+	}
+	return {
+		...authorized,
+		actorMemberId: decision.actorMemberId,
+		via: decision.via,
+	};
 }
