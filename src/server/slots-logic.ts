@@ -848,6 +848,21 @@ export const SPEAKER_CLAIMED_MESSAGE =
 	"Release a speaker before removing a slot.";
 export const evaluatorClaimedMessage = (speakerSlotIndex: number) =>
 	`Release the evaluator for Speaker ${speakerSlotIndex + 1} before removing that speaker.`;
+export const EVALUATOR_RACE_CLAIMED_MESSAGE =
+	"That evaluator slot was just claimed. Try removing the speaker again.";
+
+/** True for every refusal `applyRemoveSpeakerSlot` raises because the pair it
+ *  would take is held. A caller that must tell "held" from a real failure uses
+ *  this rather than comparing a message built from a stored slot index. */
+export function isSpeakerRemovalHeldRefusal(message: string): boolean {
+	return (
+		message === SPEAKER_CLAIMED_MESSAGE ||
+		message === EVALUATOR_RACE_CLAIMED_MESSAGE ||
+		/^Release the evaluator for Speaker \d+ before removing that speaker\.$/.test(
+			message,
+		)
+	);
+}
 
 /** Remove one unclaimed Speaker slot together with the evaluator paired to THAT
  *  speaker (#512). */
@@ -1003,7 +1018,7 @@ export async function applyRemoveSpeakerSlot(
 			throw new Error(
 				pairedEvaluator
 					? evaluatorClaimedMessage(speaker?.slotIndex ?? 0)
-					: "That evaluator slot was just claimed. Try removing the speaker again.",
+					: EVALUATOR_RACE_CLAIMED_MESSAGE,
 			);
 		}
 

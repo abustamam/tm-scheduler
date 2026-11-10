@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 import {
 	activityLog,
 	apiTokens,
@@ -37,8 +38,10 @@ const { editSpeakerSlotsTool } = await import(
 	"#/server/mcp/tools/edit-speaker-slots"
 );
 const { hashApiToken } = await import("#/server/api-tokens-logic");
-const { applyAddSpeakerSlot, SPEAKER_CLAIMED_MESSAGE } = await import(
-	"#/server/slots-logic"
+const slotsLogic = await import("#/server/slots-logic");
+const { applyAddSpeakerSlot, SPEAKER_CLAIMED_MESSAGE } = slotsLogic;
+const { MAX_MOVES, MAX_SPEAKER_COUNT } = await import(
+	"#/lib/speaker-slot-limits"
 );
 
 type Blocking = {
@@ -94,12 +97,20 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 			const e = err as { code?: string; message: string; detail?: unknown };
 			return {
 				ok: false as const,
+				err,
 				code: e.code,
 				message: e.message,
 				detail: e.detail as { blocking?: Blocking[] } | undefined,
 			};
 		}
 	}
+
+	/** The first zod issue of a schema refusal (the route maps it to VALIDATION). */
+	const schemaIssue = (err: unknown) => {
+		expect(err).toBeInstanceOf(ZodError);
+		const i = (err as ZodError).issues[0];
+		return { path: i?.path, code: i?.code };
+	};
 
 	/** The stored line-ups, read straight from the rows. */
 	async function stored(meetingId = seed.meetingId) {
@@ -403,6 +414,109 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 			expect(await stored()).toEqual(before);
 		});
 
+		it("a held speaker that is not last is skipped for removeSpeakers: 1, and nothing is blocked", async () => {
+			await seedPairs(3);
+			const { speakers } = await stored();
+			const m = await addUserMember("Middle Speaker");
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await hold(speakers[1]!.id, m.memberId);
+			const p = await preview({ removeSpeakers: 1 });
+			expect(p.blocking).toEqual([]);
+			await call({
+				meetingId: seed.meetingId,
+				removeSpeakers: 1,
+				planHash: p.planHash,
+			});
+			const after = await stored();
+			// The app takes the highest unclaimed pair: the last one. The holder's
+			// slot is intact.
+			expect(after.speakers.map((x) => x.id)).toEqual([
+				speakers[0]?.id,
+				speakers[1]?.id,
+			]);
+			expect(after.speakers[1]?.assignedMemberId).toBe(m.memberId);
+			expect(after.evaluators).toHaveLength(2);
+			await expectPaired();
+		});
+
+		it("names the evaluator of the pair the app would take, not another held evaluator", async () => {
+			await seedPairs(3);
+			const { speakers, evaluators } = await stored();
+			const sp3 = await addUserMember("Speaker Three");
+			const ev3 = await addUserMember("Evaluator Three");
+			const ev2 = await addUserMember("Evaluator Two");
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await hold(speakers[2]!.id, sp3.memberId);
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await hold(evaluators[2]!.id, ev3.memberId);
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await hold(evaluators[1]!.id, ev2.memberId);
+			// Speaker 3 is held, so the app's pair is Speaker 2 with Evaluator 2.
+			const p = await preview({ removeSpeakers: 1 });
+			expect(p.blocking).toHaveLength(1);
+			expect(p.blocking[0]).toMatchObject({
+				code: "SLOT_HELD",
+				detail: { holder: "Evaluator Two", slotId: evaluators[1]?.id },
+			});
+		});
+
+		describe("a meeting whose speaker slotIndex values have a gap", () => {
+			/** Speakers at slotIndex 0 and 2 (the middle pair was deleted). */
+			async function gapped() {
+				await seedPairs(3);
+				const { speakers, evaluators } = await stored();
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				await testDb
+					.delete(roleSlots)
+					.where(eq(roleSlots.id, evaluators[1]!.id));
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				await testDb.delete(roleSlots).where(eq(roleSlots.id, speakers[1]!.id));
+				const now = await stored();
+				expect(now.speakers.map((x) => x.slotIndex)).toEqual([0, 2]);
+				return now;
+			}
+
+			it("a held evaluator of the pair is a blocking item naming its holder, not INTERNAL", async () => {
+				const { evaluators } = await gapped();
+				const m = await addUserMember("Gap Evaluator");
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				await hold(evaluators[1]!.id, m.memberId);
+				const before = await stored();
+				const p = await preview({ removeSpeakers: 1 });
+				expect(p.blocking).toHaveLength(1);
+				expect(p.blocking[0]).toMatchObject({
+					code: "SLOT_HELD",
+					detail: { holder: "Gap Evaluator", slotId: evaluators[1]?.id },
+				});
+				const applied = await outcome(
+					call({
+						meetingId: seed.meetingId,
+						removeSpeakers: 1,
+						planHash: p.planHash,
+					}),
+				);
+				expect(applied).toMatchObject({ ok: false, code: "BLOCKED" });
+				expect(await stored()).toEqual(before);
+			});
+
+			it("a held speaker names the speaker's holder", async () => {
+				const { speakers } = await gapped();
+				const a = await addUserMember("Gap One");
+				const b = await addUserMember("Gap Two");
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				await hold(speakers[0]!.id, a.memberId);
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				await hold(speakers[1]!.id, b.memberId);
+				const p = await preview({ removeSpeakers: 1 });
+				expect(p.blocking).toHaveLength(1);
+				expect(p.blocking[0]?.code).toBe("SLOT_HELD");
+				const names = (
+					p.blocking[0]?.detail as { holders: { holder: string }[] }
+				).holders.map((h) => h.holder);
+				expect(names.sort()).toEqual(["Gap One", "Gap Two"]);
+			});
+		});
+
 		it("a meeting with no speaker slots is blocked, not an error", async () => {
 			const p = await preview({ removeSpeakers: 1 });
 			expect(p.blocking).toHaveLength(1);
@@ -507,7 +621,7 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 		});
 	});
 
-	it("a failure in a later step rolls back the earlier ones", async () => {
+	it("a step that throws mid-apply rolls back the earlier steps, rows and activity log", async () => {
 		await seedPairs(2);
 		const { speakers } = await stored();
 		const args = {
@@ -517,15 +631,25 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 		};
 		const p = await preview(args);
 		expect(p.blocking).toEqual([]);
-		// The speaker the move names disappears between preview and apply.
-		await testDb.delete(roleSlots).where(eq(roleSlots.id, speakers[1]!.id));
-		const rowsBefore = await countRows();
-		const applied = await outcome(
-			call({ meetingId: seed.meetingId, ...args, planHash: p.planHash }),
-		);
-		expect(applied).toMatchObject({ ok: false, code: "PLAN_STALE" });
-		// The add ran first inside the transaction and was undone with it.
-		expect(await countRows()).toBe(rowsBefore);
+		const rowsBefore = await stored();
+		const logsBefore = await countLogs();
+		// The add runs first and succeeds; the move then genuinely throws.
+		const spy = vi
+			.spyOn(slotsLogic, "applyMoveSpeakerSlot")
+			.mockRejectedValueOnce(new Error("disk on fire"));
+		let applied: Awaited<ReturnType<typeof outcome>>;
+		try {
+			applied = await outcome(
+				call({ meetingId: seed.meetingId, ...args, planHash: p.planHash }),
+			);
+			expect(spy).toHaveBeenCalledTimes(1);
+		} finally {
+			spy.mockRestore();
+		}
+		expect(applied.ok ? null : applied.message).toContain("disk on fire");
+		expect(applied).not.toMatchObject({ code: "PLAN_STALE" });
+		expect(await stored()).toEqual(rowsBefore);
+		expect(await countLogs()).toBe(logsBefore);
 	});
 
 	it("a stale planHash returns PLAN_STALE with the fresh plan", async () => {
@@ -605,11 +729,40 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 			).toMatchObject({ ok: false, code: "VALIDATION" });
 		});
 
-		it("bounds the counts to 1 to 5", async () => {
-			for (const n of [0, 6]) {
-				expect(
-					await outcome(call({ meetingId: seed.meetingId, addSpeakers: n })),
-				).toMatchObject({ ok: false });
+		it("bounds addSpeakers and removeSpeakers to 1..MAX_SPEAKER_COUNT, refusing at the schema", async () => {
+			for (const n of [0, MAX_SPEAKER_COUNT + 1]) {
+				for (const key of ["addSpeakers", "removeSpeakers"]) {
+					const r = await outcome(
+						call({ meetingId: seed.meetingId, [key]: n }),
+					);
+					expect(r.ok ? null : schemaIssue(r.err)).toEqual({
+						path: [key],
+						code: n === 0 ? "too_small" : "too_big",
+					});
+				}
+			}
+			const p = await preview({ addSpeakers: MAX_SPEAKER_COUNT });
+			expect(p.blocking).toEqual([]);
+		});
+
+		it("bounds each move list to MAX_MOVES, refusing at the schema", async () => {
+			const moves = (n: number) =>
+				Array.from({ length: n }, () => ({
+					slotId: randomUUID(),
+					direction: "up",
+				}));
+			for (const key of ["moveSpeakers", "moveEvaluators"]) {
+				const over = await outcome(
+					call({ meetingId: seed.meetingId, [key]: moves(MAX_MOVES + 1) }),
+				);
+				expect(over.ok ? null : schemaIssue(over.err)).toEqual({
+					path: [key],
+					code: "too_big",
+				});
+				// At the boundary it passes validation (the slots are not this
+				// meeting's, so they come back as blocking items, not an error).
+				const at = await preview({ [key]: moves(MAX_MOVES) });
+				expect(at.blocking).toHaveLength(MAX_MOVES);
 			}
 		});
 	});

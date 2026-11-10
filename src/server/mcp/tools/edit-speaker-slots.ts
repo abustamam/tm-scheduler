@@ -29,9 +29,7 @@
  * A step that cannot run is a blocking item and the whole call is blocked. The
  * tool makes its OWN checks before each step (the slot is of this meeting's
  * speaker or evaluator line-up, the move is not past an end, the role is
- * enabled) and raises the code itself. The one thing it learns from the app's
- * refusal is that the pair the app would remove is held: the two sentences for
- * that are exported constants and are compared by identity with them. It never
+ * enabled) and raises the code itself. The one thing it learns from the app's refusal is that the pair the app would remove is held (`isSpeakerRemovalHeldRefusal`); WHO holds is then read from the rows again, never inferred from the message. It never
  * removes a different pair than the app's function takes.
  *
  * ## Locks
@@ -52,6 +50,7 @@ import {
 	MEETING_CANCELLED_MESSAGE,
 } from "#/lib/meeting-cancellation-notice";
 import { isMeetingLocked } from "#/lib/meeting-lifecycle";
+import { MAX_MOVES, MAX_SPEAKER_COUNT } from "#/lib/speaker-slot-limits";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
 import {
 	applyAddSpeakerSlot,
@@ -59,8 +58,8 @@ import {
 	applyMoveSpeakerSlot,
 	applyRemoveSpeakerSlot,
 	clubRoles,
-	evaluatorClaimedMessage,
 	isSlotHeld,
+	isSpeakerRemovalHeldRefusal,
 	SPEAKER_CLAIMED_MESSAGE,
 } from "#/server/slots-logic";
 import { authorizeDelegateForMeeting } from "../authz-logic";
@@ -70,11 +69,6 @@ import type { McpToolDefinition } from "../tool";
 export const EDIT_SPEAKER_SLOTS_TOOL = "edit_speaker_slots";
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
-
-/** Speakers added or removed in one call, and moves per list. A meeting has a
- *  handful of speakers; these bound how long the meeting row stays locked. */
-const MAX_SPEAKER_COUNT = 5;
-const MAX_MOVES = 20;
 
 const PLAN_STALE_MESSAGE =
 	"This meeting's speaker line-up changed since that preview. Show the user the fresh plan and ask again.";
@@ -269,6 +263,24 @@ const stripIds = (l: Lineup): Plan["after"] => ({
 	evaluators: l.evaluators.map(({ slotId: _s, ...rest }) => rest),
 });
 
+/** The slots whose holders stop the app's removal, read from the current
+ *  line-up. No speaker free: every held speaker. Otherwise the pair's evaluator
+ *  is held (or, with no recorded pairing, any held evaluator): the one on the
+ *  highest-placed speaker that is itself free, which is the pair the app takes. */
+function heldHolders(now: Lineup, message: string): LineupSlot[] {
+	if (message === SPEAKER_CLAIMED_MESSAGE) {
+		return now.speakers.filter((s) => s.holder !== null);
+	}
+	const free = new Set(
+		now.speakers.filter((s) => s.holder === null).map((s) => s.position),
+	);
+	const blocked = now.evaluators.filter(
+		(e) => e.holder !== null && (e.evaluates == null || free.has(e.evaluates)),
+	);
+	blocked.sort((a, b) => (b.evaluates ?? 0) - (a.evaluates ?? 0));
+	return blocked.slice(0, 1);
+}
+
 /**
  * Run the request's steps on `tx` and describe the result. Writes whatever the
  * steps write: the caller either commits (apply) or rolls back (preview).
@@ -343,25 +355,28 @@ async function runSteps(
 			try {
 				await applyRemoveSpeakerSlot(actor, tx);
 			} catch (err) {
-				if (!(err instanceof Error) || err instanceof McpError) throw err;
-				let held: LineupSlot | undefined;
-				if (err.message === SPEAKER_CLAIMED_MESSAGE) {
-					// No unclaimed speaker is left; the last one is what stops it.
-					held = now.speakers[now.speakers.length - 1];
-				} else {
-					// The pair's evaluator is held: the sentence names which speaker.
-					const idx = now.speakers.findIndex(
-						(_, i) => err.message === evaluatorClaimedMessage(i),
-					);
-					if (idx === -1) throw err;
-					held = now.evaluators.find((e) => e.evaluates === idx + 1);
+				if (
+					!(err instanceof Error) ||
+					err instanceof McpError ||
+					!isSpeakerRemovalHeldRefusal(err.message)
+				) {
+					throw err;
 				}
+				// Who holds is read again NOW, not inferred from the message: it is
+				// built from a stored slot index (which has gaps) and from a read
+				// that a claim may have outrun. The refusal is a JS throw after the
+				// core's queries, so the transaction is still usable.
+				const holders = heldHolders(await read(), err.message);
 				blocking.push({
 					code: "SLOT_HELD",
 					message: `${err.message} Clear the holder first (assign_roles with clear: true), then remove.`,
 					detail: {
-						slotId: held?.slotId ?? null,
-						holder: held?.holder?.name ?? null,
+						slotId: holders[0]?.slotId ?? null,
+						holder: holders[0]?.holder?.name ?? null,
+						holders: holders.map((h) => ({
+							slotId: h.slotId,
+							holder: h.holder?.name ?? null,
+						})),
 						removal: n + 1,
 					},
 				});
@@ -415,7 +430,7 @@ async function runSteps(
 }
 
 function describeLine(slots: AfterSlot[]): string {
-	return slots.length === 0 ? "none" : String(slots.length);
+	return slots.length === 0 ? "no" : String(slots.length);
 }
 
 function summarize(plan: Plan): string {
