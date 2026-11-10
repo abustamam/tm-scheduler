@@ -305,20 +305,6 @@ export interface PlanPanelCounts {
 	noAnswer: number;
 }
 
-/** Chase-worthy first. `null` sorts before every rung because "no answer" is
- *  the only state where nobody has done anything at all. */
-/** Keyed by `PlanStatus | "null"`, NOT by `string`: a `Record<string, number>`
- *  accepts any key, so a fourth rung added to the enum would fall through the
- *  `?? 0` below and sort silently alongside "no answer". Typed this way, `tsc`
- *  demands a rank for it — the same guarantee `RUNG_LABELS` already has six
- *  lines away in the panel. */
-const RUNG_ORDER: Record<PlanStatus | "null", number> = {
-	null: 0,
-	reached_out: 1,
-	coming: 2,
-	not_coming: 3,
-};
-
 export function buildPlanPanel(input: {
 	roster: Omit<PanelMember, "status" | "storedStatus" | "assumed" | "role">[];
 	plan: { memberId: string; status: PlanStatus }[];
@@ -352,15 +338,9 @@ export function buildPlanPanel(input: {
 		};
 	});
 
-	// `?? "null"` rather than `String(...)`: the latter widens the key to
-	// `string`, which is what let `RUNG_ORDER` be a `Record<string, number>` and
-	// silently accept a rung it has no rank for.
-	const rankOf = (s: PlanStatus | null) => RUNG_ORDER[s ?? "null"];
-
-	rows.sort((a, b) => {
-		const rung = rankOf(a.status) - rankOf(b.status);
-		return rung !== 0 ? rung : a.name.localeCompare(b.name);
-	});
+	// A to Z, always (#1581): marking a member changes their chip, never their
+	// position, so an officer working down the list on a phone keeps their place.
+	rows.sort((a, b) => a.name.localeCompare(b.name));
 
 	// Both of these read the EFFECTIVE status, so an assumed Coming is a Coming
 	// here too. That is the point of resolving precedence once, above.

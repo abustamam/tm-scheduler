@@ -17,9 +17,10 @@ const roster = [
 ];
 
 describe("buildPlanPanel", () => {
-	it("sorts by how much chasing is left, then alphabetically", () => {
-		// Spec D2: no answer → reached out → coming → not coming. The people you
-		// still have to do something about are at the top; the settled answers sink.
+	it("lists A to Z whatever each member's status (#1581)", () => {
+		// protects=row order is name order; fails_when=a status sort moves a
+		// marked member (the old order was d, c, a, b); no_claim=nothing about
+		// how the component renders or filters the rows.
 		const { rows } = buildPlanPanel({
 			roster,
 			plan: [
@@ -29,7 +30,20 @@ describe("buildPlanPanel", () => {
 			],
 			roleByMemberId: {},
 		});
-		expect(rows.map((r) => r.id)).toEqual(["d", "c", "a", "b"]);
+		expect(rows.map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+	});
+
+	it("marking a member changes their status, not any row's index (#1581)", () => {
+		// protects=positions are stable across every rung; fails_when=any rung
+		// reorders the list; no_claim=optimistic override wiring (component test).
+		const order = (plan: Parameters<typeof buildPlanPanel>[0]["plan"]) =>
+			buildPlanPanel({ roster, plan, roleByMemberId: {} }).rows.map(
+				(r) => r.id,
+			);
+		const base = order([]);
+		for (const status of ["reached_out", "coming", "not_coming"] as const) {
+			expect(order([{ memberId: "d", status }])).toEqual(base);
+		}
 	});
 
 	it("orders alphabetically WITHIN a rung", () => {
@@ -78,7 +92,7 @@ describe("buildPlanPanel", () => {
 		expect(countsLine).toBe("1 still to answer");
 	});
 
-	it("attaches the role a member holds, and an UNCONFIRMED one does not reorder", () => {
+	it("attaches the role a member holds, and an UNCONFIRMED one does not reorder (#1581: nothing does)", () => {
 		// Holding a role is INFORMATION on the row (spec D2: "assigned members
 		// included, with a role chip"), not a bucket. A member with an unconfirmed
 		// role who has not answered is still someone to chase. A CONFIRMED role IS
@@ -91,7 +105,8 @@ describe("buildPlanPanel", () => {
 				d: { code: "TD", roleName: "Toastmaster", confirmed: false },
 			},
 		});
-		expect(rows[0]).toMatchObject({ id: "b", role: null });
+		expect(rows.map((r) => r.id)).toEqual(["a", "b", "c", "d"]);
+		expect(rows.find((r) => r.id === "b")?.role).toBeNull();
 		expect(rows.find((r) => r.id === "d")?.role).toMatchObject({
 			code: "TD",
 			roleName: "Toastmaster",
@@ -225,18 +240,18 @@ describe("buildPlanPanel — an assumed Coming is a real Coming", () => {
 		expect(countsLine).toBe("1 coming · 1 still to answer");
 	});
 
-	it("sorts into the coming bucket, not the chase-me-first bucket", () => {
-		// The role goes to ALI on purpose. Ali sorts first alphabetically, so an
-		// assumed Coming has to REVERSE the pair to pass — give the role to Dana
-		// instead and the expected order is alphabetical either way, and the
-		// assertion cannot fail. Dana has answered nothing and holds nothing, so
-		// Dana is the one still to chase and sorts first.
-		const { rows } = buildPlanPanel({
+	it("an assumed Coming counts as Coming but does not reorder (#1581)", () => {
+		// protects=order stays A to Z while the effective status is coming;
+		// fails_when=a confirmed role moves its holder (the old order was d, a);
+		// no_claim=the chip text the row shows.
+		const { rows, counts } = buildPlanPanel({
 			roster: [roster[0]!, roster[1]!],
 			plan: [],
 			roleByMemberId: { a: CONFIRMED },
 		});
-		expect(rows.map((r) => r.id)).toEqual(["d", "a"]);
+		expect(rows.map((r) => r.id)).toEqual(["a", "d"]);
+		expect(rows[0]?.status).toBe("coming");
+		expect(counts.coming).toBe(1);
 	});
 
 	it("an UNCONFIRMED role still does not move anyone", () => {

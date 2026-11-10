@@ -55,6 +55,26 @@ const RUNG_LABELS: Record<PlanStatus, string> = {
 	not_coming: "Not coming",
 };
 
+/** The plan list's filter chips (#1581), in their fixed order. */
+type PlanFilterKey = "all" | "none" | PlanStatus;
+
+const PLAN_FILTERS: { key: PlanFilterKey; label: string }[] = [
+	{ key: "all", label: "All" },
+	{ key: "none", label: "No answer" },
+	{ key: "reached_out", label: RUNG_LABELS.reached_out },
+	{ key: "coming", label: RUNG_LABELS.coming },
+	{ key: "not_coming", label: RUNG_LABELS.not_coming },
+];
+
+/** Does an EFFECTIVE status belong under this chip? */
+function matchesPlanFilter(
+	key: PlanFilterKey,
+	status: PlanStatus | null,
+): boolean {
+	if (key === "all") return true;
+	return key === "none" ? status === null : status === key;
+}
+
 /** The two qualifiers a Coming can carry on the status control. MUTUALLY
  *  EXCLUSIVE by construction — `alsoAsked ? ASKED_WORD : m.assumed ?
  *  ASSUMED_WORD : null` — and `asked` WINS when both apply, because it is the
@@ -1245,6 +1265,19 @@ export function MeetingAttendancePanel({
 	// `rungOverride`, which the route owns.
 	const [pendingId, setPendingId] = useState<string | null>(null);
 
+	// Plan-mode filter chips (#1581). Selecting a chip SNAPSHOTS the member ids
+	// that match at that moment, so marking someone does not drop their row from
+	// the filtered list; only a chip tap (or a different meeting) retakes it.
+	// `All` carries no snapshot: it lists the live roster.
+	const [planFilter, setPlanFilter] = useState<{
+		key: PlanFilterKey;
+		ids: ReadonlySet<string> | null;
+		meeting: string;
+	}>({ key: "all", ids: null, meeting: meetingDate });
+	if (planFilter.meeting !== meetingDate) {
+		setPlanFilter({ key: "all", ids: null, meeting: meetingDate });
+	}
+
 	// Mobile collapse (spec D4): below `lg` PLAN mode starts collapsed to its
 	// counts line so a big roster does not push the agenda off screen; at `lg`
 	// and up it is always shown. Starting `false` (rather than reading `window`
@@ -1322,6 +1355,26 @@ export function MeetingAttendancePanel({
 				guestCount: expectedGuests?.length ?? 0,
 			});
 	const countsLine = rollPanel?.countsLine ?? planPanel?.countsLine ?? "";
+
+	const activeFilter =
+		planFilter.meeting === meetingDate ? planFilter.key : "all";
+	const planRows = (planPanel?.rows ?? []).filter(
+		(m) => activeFilter === "all" || (planFilter.ids?.has(m.id) ?? false),
+	);
+	function selectPlanFilter(key: PlanFilterKey) {
+		setPlanFilter({
+			key,
+			ids:
+				key === "all"
+					? null
+					: new Set(
+							(planPanel?.rows ?? [])
+								.filter((m) => matchesPlanFilter(key, m.status))
+								.map((m) => m.id),
+						),
+			meeting: meetingDate,
+		});
+	}
 
 	async function writeRung(memberId: string, next: PlanStatus | null) {
 		setPendingId(memberId);
@@ -1468,6 +1521,38 @@ export function MeetingAttendancePanel({
 			 *  screen reader (and make the collapse untestable). */}
 			{showRows ? (
 				<CardContent className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:px-4">
+					{/* Plan mode only. Wraps onto a second line on a narrow screen; it
+					 *  never scrolls sideways. A zero chip is disabled unless selected. */}
+					{!roll && planPanel ? (
+						<div className="mb-3 flex flex-wrap gap-2">
+							{PLAN_FILTERS.map(({ key, label }) => {
+								const count =
+									key === "all"
+										? planPanel.rows.length
+										: key === "none"
+											? planPanel.counts.noAnswer
+											: key === "reached_out"
+												? planPanel.counts.reachedOut
+												: key === "coming"
+													? planPanel.counts.coming
+													: planPanel.counts.notComing;
+								const selected = activeFilter === key;
+								return (
+									<Button
+										key={key}
+										type="button"
+										size="sm"
+										variant={selected ? "default" : "outline"}
+										aria-pressed={selected}
+										disabled={count === 0 && !selected}
+										onClick={() => selectPlanFilter(key)}
+									>
+										{label} {count}
+									</Button>
+								);
+							})}
+						</div>
+					) : null}
 					{/* A LIST, not forty sibling divs: without it an AT user gets no set
 					 *  size and no position within it, on the one surface whose job is
 					 *  "how many of us are there and where am I in the chase".
@@ -1502,7 +1587,7 @@ export function MeetingAttendancePanel({
 										onSetMode={onSetMode ? setMode : undefined}
 									/>
 								))
-							: (planPanel?.rows ?? []).map((m) => (
+							: planRows.map((m) => (
 									<AttendanceRow
 										key={m.id}
 										m={m}
