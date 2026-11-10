@@ -22,8 +22,11 @@ import { z } from "zod";
 import { db } from "#/db";
 import { roleDefinitions, roleSlots, speeches } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
+import { TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import { lockClubForWrite } from "#/server/club-write-lock";
+import { resolveProjectDisplay } from "#/server/project-picker-logic";
 import {
+	lockHeldSpeakerSlots,
 	normalizeSpeech,
 	SPEAKER_SLOT_NOT_YOURS_MESSAGE,
 	type SpeechInput,
@@ -45,7 +48,7 @@ import { isoInTimezone } from "./get-my-schedule";
 
 const TOOL = "set_my_speech_details";
 
-const text = (what: string) =>
+const clearableText = (what: string) =>
 	z
 		.string()
 		.nullable()
@@ -61,11 +64,11 @@ const inputSchema = {
 		.describe(
 			"Only needed when the caller holds two speaker slots at that meeting; the preview lists them.",
 		),
-	speechTitle: text("The speech title."),
-	introduction: text("The introduction the speaker wants read out."),
-	pathwayPath: text("The Pathways path, e.g. Dynamic Leadership."),
-	projectName: text("The Pathways project name."),
-	projectLevel: text("The Pathways level, e.g. Level 2."),
+	speechTitle: clearableText("The speech title."),
+	introduction: clearableText("The introduction the speaker wants read out."),
+	pathwayPath: clearableText("The Pathways path, e.g. Dynamic Leadership."),
+	projectName: clearableText("The Pathways project name."),
+	projectLevel: clearableText("The Pathways level, e.g. Level 2."),
 	projectId: z
 		.string()
 		.uuid()
@@ -86,7 +89,7 @@ const inputSchema = {
 		.nullable()
 		.optional()
 		.describe("Longest length in minutes. Send with minMinutes."),
-	presentationUrl: text("A link to the slides."),
+	presentationUrl: clearableText("A link to the slides."),
 	planHash: z
 		.string()
 		.optional()
@@ -240,26 +243,36 @@ async function compute(
 		}
 		// The writer overwrites the free-text triple from a linked catalogue
 		// project, so changing one of them while the link stays would be undone.
-		// Naming free text without a project is a request to unlink.
+		// Naming free text without a project is a request to unlink. Compared
+		// normalized (trimmed, "" as null), so "Ice Breaker " is not a change.
+		const norm = (v: string | number | null | undefined) =>
+			typeof v === "string" ? v.trim() || null : (v ?? null);
 		if (
 			args.projectId === undefined &&
 			before.projectId !== null &&
 			FREE_TEXT_PROJECT.some(
-				(f) => args[f] !== undefined && args[f] !== before[f],
+				(f) => args[f] !== undefined && norm(args[f]) !== norm(before[f]),
 			)
 		) {
 			merged.projectId = null;
 		}
+		// Validate and clamp only what the caller SENT. An omitted field is
+		// written back as stored: the update schema truncates, and a legacy value
+		// over today's cap must survive an edit of something else.
+		const sent = (f: Field) => args[f] !== undefined;
+		const minutesSent = sent("minMinutes") || sent("maxMinutes");
 		const parsed = speakerDetailsUpdateSchema.safeParse({
-			speechTitle: merged.speechTitle ?? "",
-			introduction: merged.introduction ?? "",
-			pathwayPath: merged.pathwayPath ?? "",
-			projectName: merged.projectName ?? "",
-			projectLevel: merged.projectLevel ?? "",
+			speechTitle: sent("speechTitle") ? (merged.speechTitle ?? "") : "",
+			introduction: sent("introduction") ? (merged.introduction ?? "") : "",
+			pathwayPath: sent("pathwayPath") ? (merged.pathwayPath ?? "") : "",
+			projectName: sent("projectName") ? (merged.projectName ?? "") : "",
+			projectLevel: sent("projectLevel") ? (merged.projectLevel ?? "") : "",
 			projectId: merged.projectId,
 			minMinutes: merged.minMinutes ?? undefined,
 			maxMinutes: merged.maxMinutes ?? undefined,
-			presentationUrl: merged.presentationUrl ?? "",
+			presentationUrl: sent("presentationUrl")
+				? (merged.presentationUrl ?? "")
+				: "",
 		});
 		if (!parsed.success) {
 			throw new McpError(
@@ -269,8 +282,32 @@ async function compute(
 					.join("; "),
 			);
 		}
-		details = parsed.data;
-		const after = normalizeSpeech(parsed.data).content;
+		const data: SpeechInput = { ...parsed.data };
+		if (!sent("speechTitle"))
+			data.speechTitle = (before.speechTitle as string | null) ?? "";
+		for (const f of [
+			"introduction",
+			"pathwayPath",
+			"projectName",
+			"projectLevel",
+			"presentationUrl",
+		] as const) {
+			if (!sent(f)) data[f] = (before[f] as string | null) ?? "";
+		}
+		if (!minutesSent) {
+			data.minMinutes = (before.minMinutes as number | null) ?? undefined;
+			data.maxMinutes = (before.maxMinutes as number | null) ?? undefined;
+		}
+		details = data;
+		// What the writer will actually store: a linked project's catalogue
+		// display replaces the free-text triple (applyProjectDisplay).
+		let after = normalizeSpeech(data).content;
+		if (after.projectId) {
+			after = {
+				...after,
+				...(await resolveProjectDisplay(after.projectId, conn)),
+			};
+		}
 		const afterValues: Values = {
 			speechTitle: after.title,
 			introduction: after.introduction,
@@ -284,7 +321,8 @@ async function compute(
 		};
 		for (const f of FIELDS) {
 			// A slot with no speech reads as "TBA" on the agenda.
-			const was = f === "speechTitle" ? (before[f] ?? "TBA") : before[f];
+			const was =
+				f === "speechTitle" ? (before[f] ?? TBA_SPEECH_TITLE) : before[f];
 			if (was !== afterValues[f]) {
 				changes.push({ field: f, before: was, after: afterValues[f] });
 			}
@@ -371,6 +409,15 @@ export const setMySpeechDetailsTool: McpToolDefinition = {
 
 		return db.transaction(async (tx) => {
 			await lockClubForWrite(tx, who.clubId);
+			// The meeting lock and the caller's speaker-slot rows, BEFORE compute
+			// reads the speech it merges omitted fields from: an app save that
+			// commits first is then seen by compute, and one that arrives later
+			// waits for this transaction. Same order as the app's save (meeting,
+			// then slot), so no deadlock.
+			await lockHeldSpeakerSlots(tx, {
+				meetingId: args.meetingId,
+				memberId: who.memberId,
+			});
 			const facts = await loadMeetingFacts(tx, args.meetingId);
 			throwIfLocked(facts);
 			const c = await compute(tx, args, who);

@@ -1371,7 +1371,7 @@ export function normalizeSpeech(input?: SpeechInput): {
  * working with no change, and the fallback text can never drift from the linked
  * project. A speech with no picked project is left exactly as typed.
  */
-async function applyProjectDisplay(
+export async function applyProjectDisplay(
 	conn: DbOrTx,
 	content: SpeechContent,
 ): Promise<SpeechContent> {
@@ -1468,6 +1468,37 @@ export async function lockSpeakerSlotForDetails(
 		.limit(1);
 	if (!slot) throw new Error("Role not found.");
 	return { meetingStatus: meeting.status, ...slot };
+}
+
+/**
+ * Take the locks a connector save needs BEFORE it reads the speech it will
+ * merge omitted fields from (#1571): the meeting's slot-edit lock, then every
+ * speaker slot `memberId` holds there FOR UPDATE, in id order. The app's
+ * `updateSpeakerDetails` takes the same two in the same order (meeting, then
+ * slot), so the two paths cannot deadlock, and a save that committed first is
+ * visible to the read that follows.
+ */
+export async function lockHeldSpeakerSlots(
+	tx: Tx,
+	args: { meetingId: string; memberId: string },
+): Promise<void> {
+	await lockMeetingForSlotEdit(tx, args.meetingId);
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.meetingId, args.meetingId),
+				eq(roleSlots.assignedMemberId, args.memberId),
+				eq(roleDefinitions.isSpeakerRole, true),
+			),
+		)
+		.orderBy(roleSlots.id)
+		.for("update", { of: roleSlots });
 }
 
 /**

@@ -17,6 +17,8 @@ import {
 	apiTokens,
 	guests,
 	meetings,
+	pathwaysPaths,
+	pathwaysProjects,
 	roleDefinitions,
 	roleSlots,
 	speeches,
@@ -37,9 +39,11 @@ const { setMySpeechDetailsTool } = await import(
 );
 const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { McpError } = await import("#/server/mcp/errors");
-const { saveSpeakerDetailsCore, SPEAKER_SLOT_NOT_YOURS_MESSAGE } = await import(
-	"#/server/slots-logic"
-);
+const {
+	lockSpeakerSlotForDetails,
+	saveSpeakerDetailsCore,
+	SPEAKER_SLOT_NOT_YOURS_MESSAGE,
+} = await import("#/server/slots-logic");
 
 const seeded: SeededClub[] = [];
 afterEach(async () => {
@@ -363,5 +367,181 @@ describe.skipIf(!hasTestDb)("set_my_speech_details (#1571)", () => {
 			"LOCKED",
 		);
 		expect(await speechOf(slotId ?? "")).toBeNull();
+	});
+
+	// Card: protects=a release between preview and apply writes nothing;
+	// fails_when=the apply recreates a speech for a slot the caller let go.
+	it("a release between preview and apply is PLAN_STALE, nothing written", async () => {
+		const s = await club();
+		const [slotId] = await addSpeakerSlots(s, [{ memberId: s.memberId }]);
+		const token = await tokenFor(s.memberUserId);
+		const args = { meetingId: s.meetingId, speechTitle: "Mine" };
+		const p = await preview(token, args);
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: null, status: "open" })
+			.where(eq(roleSlots.id, slotId ?? ""));
+		await expectMcpError(
+			Promise.resolve(call(token, { ...args, planHash: p.planHash })),
+			"PLAN_STALE",
+		);
+		expect(await speechOf(slotId ?? "")).toBeNull();
+	});
+
+	// Card: protects=an app save that commits while the apply is waiting is not
+	// overwritten by the tool's copy of the fields it omitted; fails_when=the
+	// speech is read before the slot lock is held (the apply then writes back
+	// the stale introduction).
+	it("an app save committing during the apply is not overwritten", async () => {
+		const s = await club();
+		const [slotId] = await addSpeakerSlots(s, [{ memberId: s.memberId }]);
+		const token = await tokenFor(s.memberUserId);
+		await set(token, {
+			meetingId: s.meetingId,
+			speechTitle: "First",
+			introduction: "Old intro",
+		});
+		const args = { meetingId: s.meetingId, speechTitle: "Second" };
+		const p = await preview(token, args);
+		let applying: Promise<unknown> | undefined;
+		await testDb.transaction(async (tx) => {
+			// What updateSpeakerDetails holds while it saves: meeting, then slot.
+			const locked = await lockSpeakerSlotForDetails(tx, {
+				meetingId: s.meetingId,
+				slotId: slotId ?? "",
+			});
+			applying = call(token, { ...args, planHash: p.planHash }).then(
+				() => null,
+				(e: unknown) => e,
+			);
+			await new Promise((r) => setTimeout(r, 400));
+			await tx
+				.update(speeches)
+				.set({ introduction: "App intro" })
+				.where(eq(speeches.id, locked.speechId ?? ""));
+		});
+		const err = await applying;
+		expect(err).toBeInstanceOf(McpError);
+		expect((err as InstanceType<typeof McpError>).code).toBe("PLAN_STALE");
+		expect(await speechOf(slotId ?? "")).toMatchObject({
+			title: "First",
+			introduction: "App intro",
+		});
+	});
+
+	// Card: protects=a stored value over today's cap survives an edit of another
+	// field; fails_when=an omitted field goes through the truncating schema.
+	it("a title-only edit does not truncate a stored over-cap introduction", async () => {
+		const s = await club();
+		const [slotId] = await addSpeakerSlots(s, [{ memberId: s.memberId }]);
+		const token = await tokenFor(s.memberUserId);
+		await set(token, { meetingId: s.meetingId, speechTitle: "First" });
+		const long = "x".repeat(2_500);
+		const [row] = await testDb
+			.select({ id: roleSlots.speechId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotId ?? ""));
+		await testDb
+			.update(speeches)
+			.set({ introduction: long })
+			.where(eq(speeches.id, row?.id ?? ""));
+		const p = await preview(token, {
+			meetingId: s.meetingId,
+			speechTitle: "Second",
+		});
+		expect(p.plan.changes.map((c) => c.field)).toEqual(["speechTitle"]);
+		await set(token, { meetingId: s.meetingId, speechTitle: "Second" });
+		expect((await speechOf(slotId ?? ""))?.introduction).toBe(long);
+		// The same holds for a stored window past the clamp.
+		await testDb
+			.update(speeches)
+			.set({ minMinutes: 700, maxMinutes: 800 })
+			.where(eq(speeches.id, row?.id ?? ""));
+		await set(token, { meetingId: s.meetingId, speechTitle: "Third" });
+		expect(await speechOf(slotId ?? "")).toMatchObject({
+			title: "Third",
+			minMinutes: 700,
+			maxMinutes: 800,
+		});
+	});
+
+	// Card: protects=trailing whitespace on a free-text field is not a request to
+	// unlink the catalogue project; fails_when=the raw compare unlinks.
+	it("the catalogue display is what the preview shows, and whitespace does not unlink", async () => {
+		const s = await club();
+		const [slotId] = await addSpeakerSlots(s, [{ memberId: s.memberId }]);
+		const token = await tokenFor(s.memberUserId);
+		const tag = randomUUID().slice(0, 8);
+		let [path] = await testDb
+			.select({ id: pathwaysPaths.id, name: pathwaysPaths.name })
+			.from(pathwaysPaths)
+			.where(eq(pathwaysPaths.courseCode, "8701"));
+		const madePath = !path;
+		if (!path) {
+			[path] = await testDb
+				.insert(pathwaysPaths)
+				.values({ courseCode: "8701", name: "Presentation Mastery" })
+				.returning({ id: pathwaysPaths.id, name: pathwaysPaths.name });
+		}
+		const [project] = await testDb
+			.insert(pathwaysProjects)
+			.values({
+				pathId: path?.id ?? "",
+				level: 2,
+				name: `Catalogue ${tag}`,
+				isRequired: true,
+			})
+			.returning({ id: pathwaysProjects.id });
+		try {
+			const projectId = project?.id ?? "";
+			const args = {
+				meetingId: s.meetingId,
+				speechTitle: "Linked",
+				projectId,
+				projectName: "typed name",
+			};
+			const p = await preview(token, args);
+			// The preview shows the catalogue's name, not the typed one.
+			expect(p.plan.changes).toContainEqual({
+				field: "projectName",
+				before: null,
+				after: `Catalogue ${tag}`,
+			});
+			await call(token, { ...args, planHash: p.planHash });
+			expect(await speechOf(slotId ?? "")).toMatchObject({
+				projectId,
+				projectName: `Catalogue ${tag}`,
+			});
+			// Same value plus a space: no change, still linked.
+			const same = await preview(token, {
+				meetingId: s.meetingId,
+				projectName: `Catalogue ${tag} `,
+			});
+			expect(same.blocking.map((b) => b.code)).toEqual(["NO_CHANGE"]);
+			// A different name with the link kept unlinks, and the preview says so.
+			const diff = await preview(token, {
+				meetingId: s.meetingId,
+				projectName: "Something else",
+			});
+			expect(diff.plan.changes).toContainEqual({
+				field: "projectId",
+				before: projectId,
+				after: null,
+			});
+		} finally {
+			await testDb
+				.update(roleSlots)
+				.set({ speechId: null })
+				.where(eq(roleSlots.id, slotId ?? ""));
+			await testDb.delete(speeches).where(eq(speeches.title, "Linked"));
+			await testDb
+				.delete(pathwaysProjects)
+				.where(eq(pathwaysProjects.id, project?.id ?? ""));
+			if (madePath) {
+				await testDb
+					.delete(pathwaysPaths)
+					.where(eq(pathwaysPaths.id, path?.id ?? ""));
+			}
+		}
 	});
 });

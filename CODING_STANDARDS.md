@@ -754,8 +754,8 @@ from vitest, so a handler-gated write is covered by a source grep and nothing el
 the eight" until v1.26.0.0; #616 admin-gated `addMember`, which took it out of the session-less set
 entirely, and #630 deleted it. `WRITE_GATES` in `public-readers-archive-gate.guard.test.ts` is the
 list — count there.)
-`releaseSlot`/`updateSpeakerDetails` are the two still in that position (their logic is inline in
-`slots.ts`), recorded in `TODOS/legacy-2026-09.md`.
+`releaseSlot`/`updateSpeakerDetails` are the two still in that position (`updateSpeakerDetails`'s save is now
+`saveSpeakerDetailsCore` in `slots-logic.ts`; the handler's gate stays in `slots.ts`), recorded in `TODOS/legacy-2026-09.md`.
 
 **Where a write already holds a club lock, gate INSIDE it; everywhere else the unlocked assert is
 an accepted trade-off, not a race-free gate.** `assertClubNotArchived` is a plain, unlocked

@@ -476,7 +476,7 @@ const REVIEWED_UNGATED: Record<string, string> = {
  * WHERE it lives. FIFTEEN of these gate in a `-logic` seam — which is
  * strictly better, because a seam is reachable from vitest — and FOUR gate in
  * the handler's own server-fn module: `updateSpeakerDetails` (`slots.ts`),
- * whose logic is inline there, and the three `requireMemberInClub` writes #825
+ * whose locked save is `saveSpeakerDetailsCore` in `slots-logic.ts`, and the three `requireMemberInClub` writes #825
  * re-enrolled (`setPlannedAttendance`, `setAvailability`,
  * `markUnavailableReleasing`), which assert directly in their handlers.
  *
