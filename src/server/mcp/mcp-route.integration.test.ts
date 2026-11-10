@@ -198,6 +198,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"edit_agenda",
 			"edit_member",
 			"edit_role_slots",
+			"edit_speaker_slots",
 			"find_people",
 			"get_agenda",
 			"get_import_report",
@@ -648,6 +649,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("edit_role_slots", {
 				meetingId: seed.meetingId,
 				operations: [{ op: "add", role: "Timer" }],
+			}),
+			// #1576. A preview only (no planHash): rolls its steps back.
+			toolsCall("edit_speaker_slots", {
+				meetingId: seed.meetingId,
+				addSpeakers: 1,
 			}),
 			// #1543. A preview only (no planHash): names members, reads their
 			// contact detail to decide, and must never echo it.

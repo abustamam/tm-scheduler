@@ -73,7 +73,7 @@ type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
  *  these flags. `evaluatorEnabled` is false (not just absent) when the club has
  *  no paired evaluator role at all, which is the safe default for a caller
  *  that only checks the flag before inserting. */
-async function clubRoles(
+export async function clubRoles(
 	conn: DbOrTx,
 	clubId: string,
 	templateId: string | null,
@@ -173,11 +173,14 @@ async function nextIndexUnderLock(
  *  right back. Rejects outright when the club's Speaker role is disabled (there's
  *  nothing sensible to add); silently skips the Evaluator insert when only the
  *  paired Evaluator role is disabled (the Speaker slot alone is still useful). */
-export async function applyAddSpeakerSlot(input: {
-	meetingId: string;
-	actorMemberId: string | null;
-}) {
-	return db.transaction(async (tx) => {
+export async function applyAddSpeakerSlot(
+	input: {
+		meetingId: string;
+		actorMemberId: string | null;
+	},
+	conn?: Tx,
+) {
+	const run = async (tx: Tx) => {
 		// Status and shape decisions must use the row acquired after any lock wait.
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
 		assertMeetingAccepts(meeting.status, "plan");
@@ -240,7 +243,11 @@ export async function applyAddSpeakerSlot(input: {
 			detail: { change: "speaker_added" },
 		});
 		return { clubId: meeting.clubId };
-	});
+	};
+	// `conn`: the caller's open transaction (the `edit_speaker_slots` tool runs
+	// several steps in one, under its own meeting lock). Without it, today's
+	// behaviour: one transaction of its own.
+	return conn ? run(conn) : db.transaction(run);
 }
 
 /** The club's whole role BANK in the shape `pairedRoleIds` needs, plus
@@ -841,19 +848,37 @@ export const SPEAKER_CLAIMED_MESSAGE =
 	"Release a speaker before removing a slot.";
 export const evaluatorClaimedMessage = (speakerSlotIndex: number) =>
 	`Release the evaluator for Speaker ${speakerSlotIndex + 1} before removing that speaker.`;
+export const EVALUATOR_RACE_CLAIMED_MESSAGE =
+	"That evaluator slot was just claimed. Try removing the speaker again.";
+
+/** True for every refusal `applyRemoveSpeakerSlot` raises because the pair it
+ *  would take is held. A caller that must tell "held" from a real failure uses
+ *  this rather than comparing a message built from a stored slot index. */
+export function isSpeakerRemovalHeldRefusal(message: string): boolean {
+	return (
+		message === SPEAKER_CLAIMED_MESSAGE ||
+		message === EVALUATOR_RACE_CLAIMED_MESSAGE ||
+		/^Release the evaluator for Speaker \d+ before removing that speaker\.$/.test(
+			message,
+		)
+	);
+}
 
 /** Remove one unclaimed Speaker slot together with the evaluator paired to THAT
  *  speaker (#512). */
-export async function applyRemoveSpeakerSlot(input: {
-	meetingId: string;
-	actorMemberId: string | null;
-}) {
+export async function applyRemoveSpeakerSlot(
+	input: {
+		meetingId: string;
+		actorMemberId: string | null;
+	},
+	conn?: Tx,
+) {
 	// Read under the meeting lock, like the add path: which slot is "the top
 	// unclaimed one" and which evaluator is paired to it are DECISIONS, and a
 	// concurrent add or reorder moves both answers. WHICH ROLES those questions
 	// are about is a decision too — `clubRoles` resolves it from `templateId`, a
 	// column on the very row locked below — so it is inside as well.
-	return db.transaction(async (tx) => {
+	const run = async (tx: Tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, input.meetingId);
 		assertMeetingAccepts(meeting.status, "plan");
 		const { speakerRoleId, evaluatorRoleId } = await clubRoles(
@@ -993,7 +1018,7 @@ export async function applyRemoveSpeakerSlot(input: {
 			throw new Error(
 				pairedEvaluator
 					? evaluatorClaimedMessage(speaker?.slotIndex ?? 0)
-					: "That evaluator slot was just claimed. Try removing the speaker again.",
+					: EVALUATOR_RACE_CLAIMED_MESSAGE,
 			);
 		}
 
@@ -1019,7 +1044,8 @@ export async function applyRemoveSpeakerSlot(input: {
 			detail: { change: "speaker_removed" },
 		});
 		return { clubId: meeting.clubId };
-	});
+	};
+	return conn ? run(conn) : db.transaction(run);
 }
 
 /**
@@ -1110,8 +1136,9 @@ async function applyMoveSlot(
 		actorMemberId: string | null;
 	},
 	kind: "speaker" | "evaluator",
+	conn?: Tx,
 ) {
-	const [located] = await db
+	const [located] = await (conn ?? db)
 		.select({ meetingId: roleSlots.meetingId })
 		.from(roleSlots)
 		.where(eq(roleSlots.id, input.slotId))
@@ -1122,7 +1149,7 @@ async function applyMoveSlot(
 			: "Evaluator slot not found.";
 	if (!located) throw new Error(notFound);
 
-	return db.transaction(async (tx) => {
+	const run = async (tx: Tx) => {
 		const meeting = await lockMeetingForSlotEdit(tx, located.meetingId);
 		assertMeetingAccepts(meeting.status, "plan");
 		// A conversion can repoint a slot to a different bank role while we wait.
@@ -1252,28 +1279,35 @@ async function applyMoveSlot(
 			},
 		});
 		return { clubId: meeting.clubId };
-	});
+	};
+	return conn ? run(conn) : db.transaction(run);
 }
 
 /** Swap a speaker slot's position with its neighbor (up = lower index), then
  *  re-point the evaluator links positionally — the evaluator LINEUP stays put,
  *  so Evaluator 1 always evaluates whoever now speaks first. */
-export async function applyMoveSpeakerSlot(input: {
-	slotId: string;
-	direction: "up" | "down";
-	actorMemberId: string | null;
-}) {
-	return applyMoveSlot(input, "speaker");
+export async function applyMoveSpeakerSlot(
+	input: {
+		slotId: string;
+		direction: "up" | "down";
+		actorMemberId: string | null;
+	},
+	conn?: Tx,
+) {
+	return applyMoveSlot(input, "speaker", conn);
 }
 
 /** Swap an evaluator slot's position with its neighbor (up = lower index),
  *  then re-point the links positionally (Evaluator N ↔ Speaker N). */
-export async function applyMoveEvaluatorSlot(input: {
-	slotId: string;
-	direction: "up" | "down";
-	actorMemberId: string | null;
-}) {
-	return applyMoveSlot(input, "evaluator");
+export async function applyMoveEvaluatorSlot(
+	input: {
+		slotId: string;
+		direction: "up" | "down";
+		actorMemberId: string | null;
+	},
+	conn?: Tx,
+) {
+	return applyMoveSlot(input, "evaluator", conn);
 }
 
 // ---------------------------------------------------------------------------
