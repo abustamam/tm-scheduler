@@ -54,6 +54,7 @@ import { ATTENDANCE_MODES } from "#/lib/attendance-mode";
 import { planHash } from "#/lib/mcp-plan";
 import {
 	ATTENDANCE_BEFORE_MEETING_MESSAGE,
+	assertMeetingAccepts,
 	meetingDateReached,
 	meetingRefusal,
 } from "#/lib/meeting-lifecycle";
@@ -682,6 +683,13 @@ export const recordAttendanceTool: McpToolDefinition = {
 					blocking: c.blocking,
 				});
 			}
+
+			// The enforcement, apart from the blocking item above: it throws for
+			// any status the "record" class refuses, so a refusal the blocking
+			// item missed still stops the call before a write. It is the call
+			// `meeting-writers.guard.test.ts` reads as this tool's "record"
+			// refusal. With `blocking` empty it cannot throw.
+			assertMeetingAccepts(c.facts.status, "record");
 
 			const meetingId = c.facts.meetingId;
 			for (const l of c.plan.members) {

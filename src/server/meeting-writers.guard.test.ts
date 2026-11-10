@@ -628,7 +628,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	// -- minutes, attendance and the record (#1137): refused in minutes.ts by assertMinutesMeetingRecordable
 	"src/server/minutes-logic.ts#addGuestPresent": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#addMinutesGuest"],
+		refusedBy: [
+			"src/server/minutes.ts#addMinutesGuest",
+			"src/server/mcp/tools/record-attendance.ts#recordAttendanceTool",
+		],
 	},
 	"src/server/minutes-logic.ts#addTableTopicsSpeaker": {
 		class: "record",
@@ -647,7 +650,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	},
 	"src/server/minutes-logic.ts#removeGuestPresent": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#removeMinutesGuest"],
+		refusedBy: [
+			"src/server/minutes.ts#removeMinutesGuest",
+			"src/server/mcp/tools/record-attendance.ts#recordAttendanceTool",
+		],
 	},
 	"src/server/minutes-logic.ts#removeTableTopicsSpeaker": {
 		class: "record",
@@ -662,7 +668,10 @@ const MEETING_WRITERS: Record<string, Entry> = {
 	},
 	"src/server/minutes-logic.ts#setMemberPresence": {
 		class: "record",
-		refusedBy: ["src/server/minutes.ts#setAttendance"],
+		refusedBy: [
+			"src/server/minutes.ts#setAttendance",
+			"src/server/mcp/tools/record-attendance.ts#recordAttendanceTool",
+		],
 	},
 
 	// -- role feedback (#1137)
