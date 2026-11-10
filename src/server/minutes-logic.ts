@@ -1027,27 +1027,30 @@ export async function removeGuestPresent(
  * (`onConflictDoNothing` on the guest PK) instead of minting an orphan guest.
  * The online path never passes it, so it keeps the fresh-random-id behaviour.
  */
-export async function addTableTopicsSpeaker(input: {
-	meetingId: string;
-	id?: string;
-	newGuestId?: string;
-	memberId?: string | null;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	topic?: string | null;
-}): Promise<{ id: string }> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	return db.transaction(async (tx) => {
+export async function addTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id?: string;
+		newGuestId?: string;
+		memberId?: string | null;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		topic?: string | null;
+	},
+	tx?: DbOrTx,
+): Promise<{ id: string }> {
+	const clubId = await getMeetingClubId(input.meetingId, tx ?? db);
+	const run = async (conn: DbOrTx): Promise<{ id: string }> => {
 		let memberId: string | null = null;
 		let guestId: string | null = null;
 		if (input.memberId) {
-			await requireMemberInMeetingClub(input.memberId, clubId);
+			await requireMemberInMeetingClub(input.memberId, clubId, conn);
 			memberId = input.memberId;
 			// Idempotency first (#1319): a replay whose speaker row already exists
 			// returns it, so a speaker added before the member was marked Absent is
 			// not turned into an error on replay.
 			if (input.id) {
-				const [existing] = await tx
+				const [existing] = await conn
 					.select({ id: tableTopicsSpeakers.id })
 					.from(tableTopicsSpeakers)
 					.where(
@@ -1062,12 +1065,12 @@ export async function addTableTopicsSpeaker(input: {
 			// Insert path only: the same rule the pickers hide by (#1257), so a stale
 			// tab or a queued offline add cannot add an unavailable member.
 			if (
-				await isMemberUnavailable(tx, {
+				await isMemberUnavailable(conn, {
 					memberId: input.memberId,
 					meetingId: input.meetingId,
 				})
 			) {
-				const [person] = await tx
+				const [person] = await conn
 					.select({ name: members.name })
 					.from(members)
 					.where(eq(members.id, input.memberId))
@@ -1077,17 +1080,17 @@ export async function addTableTopicsSpeaker(input: {
 				);
 			}
 		} else if (input.guestId || input.newGuest) {
-			guestId = await resolveGuestId(tx, clubId, input, input.newGuestId);
+			guestId = await resolveGuestId(conn, clubId, input, input.newGuestId);
 		} else {
 			throw new Error("Provide a member or guest speaker.");
 		}
-		const [{ next } = { next: 0 }] = await tx
+		const [{ next } = { next: 0 }] = await conn
 			.select({
 				next: sql<number>`coalesce(max(${tableTopicsSpeakers.sortOrder}) + 1, 0)`,
 			})
 			.from(tableTopicsSpeakers)
 			.where(eq(tableTopicsSpeakers.meetingId, input.meetingId));
-		const [created] = await tx
+		const [created] = await conn
 			.insert(tableTopicsSpeakers)
 			.values({
 				...(input.id ? { id: input.id } : {}),
@@ -1104,15 +1107,21 @@ export async function addTableTopicsSpeaker(input: {
 		// a prior replay; the create is idempotent, so return that same id.
 		if (input.id) return { id: input.id };
 		throw new Error("Failed to add speaker.");
-	});
+	};
+	// A caller's own transaction (the connector tool's preview and apply) runs
+	// the body on it; the web writers pass none and keep their own.
+	return tx ? run(tx) : db.transaction(run);
 }
 
 /** Remove a Table Topics speaker by id (scoped to the meeting). */
-export async function removeTableTopicsSpeaker(input: {
-	meetingId: string;
-	id: string;
-}): Promise<void> {
-	await db
+export async function removeTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id: string;
+	},
+	tx?: DbOrTx,
+): Promise<void> {
+	await (tx ?? db)
 		.delete(tableTopicsSpeakers)
 		.where(
 			and(
@@ -1153,15 +1162,18 @@ export async function removeTableTopicsSpeaker(input: {
  * client mirror in `derive-minutes.ts` cannot diverge on it. The per-row skip
  * keeps an adjacent move to the same two UPDATEs it always cost.
  */
-export async function moveTableTopicsSpeaker(input: {
-	meetingId: string;
-	id: string;
-	direction: "up" | "down";
-	/** Absolute 0-based destination. Preferred — see above. */
-	toIndex?: number;
-}): Promise<void> {
-	await db.transaction(async (tx) => {
-		const ordered = await tx
+export async function moveTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id: string;
+		direction: "up" | "down";
+		/** Absolute 0-based destination. Preferred — see above. */
+		toIndex?: number;
+	},
+	tx?: DbOrTx,
+): Promise<void> {
+	const run = async (conn: DbOrTx): Promise<void> => {
+		const ordered = await conn
 			.select({
 				id: tableTopicsSpeakers.id,
 				sortOrder: tableTopicsSpeakers.sortOrder,
@@ -1184,12 +1196,55 @@ export async function moveTableTopicsSpeaker(input: {
 			// Already correct — skip the write. An adjacent move therefore costs the
 			// same two UPDATEs the swap did.
 			if (placed[i].sortOrder === i) continue;
-			await tx
+			await conn
 				.update(tableTopicsSpeakers)
 				.set({ sortOrder: i })
 				.where(eq(tableTopicsSpeakers.id, placed[i].id));
 		}
-	});
+	};
+	return tx ? run(tx) : db.transaction(run);
+}
+
+/** One Table Topics speaker as the connector reads it: 1-based `position` in the
+ *  speaking order, exactly one of `memberId` / `guestId`, and the resolved name. */
+export interface TableTopicsListRow {
+	id: string;
+	position: number;
+	memberId: string | null;
+	guestId: string | null;
+	name: string;
+	topic: string | null;
+}
+
+/** A meeting's Table Topics speakers in speaking order, read through `conn`
+ *  (the main client, or a transaction so a preview sees its own steps). */
+export async function loadTableTopicsList(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<TableTopicsListRow[]> {
+	const ttMember = alias(members, "tt_list_member");
+	const ttGuest = alias(guests, "tt_list_guest");
+	const rows = await conn
+		.select({
+			id: tableTopicsSpeakers.id,
+			memberId: tableTopicsSpeakers.memberId,
+			guestId: tableTopicsSpeakers.guestId,
+			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
+			topic: tableTopicsSpeakers.topic,
+		})
+		.from(tableTopicsSpeakers)
+		.leftJoin(ttMember, eq(ttMember.id, tableTopicsSpeakers.memberId))
+		.leftJoin(ttGuest, eq(ttGuest.id, tableTopicsSpeakers.guestId))
+		.where(eq(tableTopicsSpeakers.meetingId, meetingId))
+		.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
+	return rows.map((r, i) => ({
+		id: r.id,
+		position: i + 1,
+		memberId: r.memberId,
+		guestId: r.guestId,
+		name: r.name ?? "Unknown",
+		topic: r.topic,
+	}));
 }
 
 /**

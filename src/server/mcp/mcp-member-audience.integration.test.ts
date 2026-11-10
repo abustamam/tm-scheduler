@@ -223,6 +223,30 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		);
 	});
 
+	it("record_table_topics (a role holder's tool, #1575): a plain member is refused with the role-holder message, a stranger with the officer one", async () => {
+		const s = await club();
+		const other = await club();
+		const input = {
+			meetingId: s.meetingId,
+			add: [{ memberId: s.memberId }],
+		};
+		const member = await outcome(
+			call("record_table_topics", await tokenFor(s.memberUserId), input),
+		);
+		expect(member).toMatchObject({ ok: false, code: "FORBIDDEN" });
+		const stranger = await outcome(
+			call("record_table_topics", await tokenFor(other.memberUserId), input),
+		);
+		expect(stranger).toEqual({
+			ok: false,
+			code: "FORBIDDEN",
+			message: NOT_OFFICER_MESSAGE,
+		});
+		expect((member as { message: string }).message).not.toBe(
+			NOT_OFFICER_MESSAGE,
+		);
+	});
+
 	it("a foreign club and the member's own club give byte-identical refusals", async () => {
 		const own = await club();
 		const foreign = await club();

@@ -47,6 +47,7 @@ import {
 	type AwardCategory,
 	type AwardWinner,
 	loadAwardRows,
+	loadTableTopicsList,
 } from "#/server/minutes-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
@@ -89,7 +90,9 @@ export const getAgendaTool: McpToolDefinition = {
 			'"cancelled" means every write tool refuses this meeting until ' +
 			"restore_meeting puts it back. `awards` is the three ribbon winners " +
 			"(best_speaker, best_evaluator, best_table_topics), each a member, " +
-			"guest or write-in name, or null when none is recorded. `readiness` lists what is still " +
+			"guest or write-in name, or null when none is recorded. " +
+			"`tableTopicsSpeakers` is who spoke in table topics, in order, each " +
+			"with the id record_table_topics takes. `readiness` lists what is still " +
 			"missing before an upcoming meeting (open or unconfirmed roles, " +
 			"theme, Word of the Day, Table Topics, speech details); it is null " +
 			"once the meeting is completed, cancelled or past.",
@@ -120,10 +123,11 @@ export const getAgendaTool: McpToolDefinition = {
 		// closed rather than rendering an agenda for nothing.
 		if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
 
-		const [slots, draft, awards] = await Promise.all([
+		const [slots, draft, awards, tableTopicsSpeakers] = await Promise.all([
 			loadMeetingSlots(meeting.id),
 			readAgendaSnapshot(meeting.id),
 			loadAwards(meeting.id),
+			loadTableTopicsList(db, meeting.id),
 		]);
 		const { date, time, weekday } = clubLocalParts(
 			meeting.scheduledAt,
@@ -180,6 +184,12 @@ export const getAgendaTool: McpToolDefinition = {
 			// The recorded ribbon winners (#1172), so an assistant can tell whether
 			// they are already entered before it calls `set_awards`.
 			awards,
+			// Who spoke in table topics (#1575), in order, with the row ids
+			// `record_table_topics` removes and moves by. Roll-derived, like
+			// `awards`: this tool is an OFFICER tool, so a signed-out reader, a
+			// non-member and a plain member are refused before any of it is read
+			// (#1259); a test pins that.
+			tableTopicsSpeakers,
 			// What is still missing before an upcoming meeting (#963), derived by the
 			// function the meeting page's "Before the meeting" panel reads, from the
 			// SAME slot rows, so the two cannot disagree. Gaps carry a slot label and
