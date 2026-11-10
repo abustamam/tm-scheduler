@@ -208,6 +208,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"list_meetings",
 			"record_attendance",
 			"record_guest_book",
+			"record_table_topics",
 			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",
@@ -654,6 +655,15 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("edit_speaker_slots", {
 				meetingId: seed.meetingId,
 				addSpeakers: 1,
+			}),
+			// #1575. A preview only (no planHash): a member entry and a new guest,
+			// rolled back; the list it echoes carries names, never contact detail.
+			toolsCall("record_table_topics", {
+				meetingId: seed.meetingId,
+				add: [
+					{ memberId: seed.memberId, topic: "Weather" },
+					{ newGuest: { name: "Quill Passerby" } },
+				],
 			}),
 			// #1543. A preview only (no planHash): names members, reads their
 			// contact detail to decide, and must never echo it.

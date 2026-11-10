@@ -1027,21 +1027,24 @@ export async function removeGuestPresent(
  * (`onConflictDoNothing` on the guest PK) instead of minting an orphan guest.
  * The online path never passes it, so it keeps the fresh-random-id behaviour.
  */
-export async function addTableTopicsSpeaker(input: {
-	meetingId: string;
-	id?: string;
-	newGuestId?: string;
-	memberId?: string | null;
-	guestId?: string | null;
-	newGuest?: NewGuestInput;
-	topic?: string | null;
-}): Promise<{ id: string }> {
-	const clubId = await getMeetingClubId(input.meetingId);
-	return db.transaction(async (tx) => {
+export async function addTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id?: string;
+		newGuestId?: string;
+		memberId?: string | null;
+		guestId?: string | null;
+		newGuest?: NewGuestInput;
+		topic?: string | null;
+	},
+	outer?: DbOrTx,
+): Promise<{ id: string }> {
+	const clubId = await getMeetingClubId(input.meetingId, outer ?? db);
+	const run = async (tx: DbOrTx): Promise<{ id: string }> => {
 		let memberId: string | null = null;
 		let guestId: string | null = null;
 		if (input.memberId) {
-			await requireMemberInMeetingClub(input.memberId, clubId);
+			await requireMemberInMeetingClub(input.memberId, clubId, tx);
 			memberId = input.memberId;
 			// Idempotency first (#1319): a replay whose speaker row already exists
 			// returns it, so a speaker added before the member was marked Absent is
@@ -1104,15 +1107,21 @@ export async function addTableTopicsSpeaker(input: {
 		// a prior replay; the create is idempotent, so return that same id.
 		if (input.id) return { id: input.id };
 		throw new Error("Failed to add speaker.");
-	});
+	};
+	// A caller's own transaction (the connector tool's preview and apply) runs
+	// the body on it; the web writers pass none and keep their own.
+	return outer ? run(outer) : db.transaction(run);
 }
 
 /** Remove a Table Topics speaker by id (scoped to the meeting). */
-export async function removeTableTopicsSpeaker(input: {
-	meetingId: string;
-	id: string;
-}): Promise<void> {
-	await db
+export async function removeTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id: string;
+	},
+	tx?: DbOrTx,
+): Promise<void> {
+	await (tx ?? db)
 		.delete(tableTopicsSpeakers)
 		.where(
 			and(
@@ -1153,14 +1162,17 @@ export async function removeTableTopicsSpeaker(input: {
  * client mirror in `derive-minutes.ts` cannot diverge on it. The per-row skip
  * keeps an adjacent move to the same two UPDATEs it always cost.
  */
-export async function moveTableTopicsSpeaker(input: {
-	meetingId: string;
-	id: string;
-	direction: "up" | "down";
-	/** Absolute 0-based destination. Preferred — see above. */
-	toIndex?: number;
-}): Promise<void> {
-	await db.transaction(async (tx) => {
+export async function moveTableTopicsSpeaker(
+	input: {
+		meetingId: string;
+		id: string;
+		direction: "up" | "down";
+		/** Absolute 0-based destination. Preferred — see above. */
+		toIndex?: number;
+	},
+	outer?: DbOrTx,
+): Promise<void> {
+	const run = async (tx: DbOrTx): Promise<void> => {
 		const ordered = await tx
 			.select({
 				id: tableTopicsSpeakers.id,
@@ -1189,7 +1201,50 @@ export async function moveTableTopicsSpeaker(input: {
 				.set({ sortOrder: i })
 				.where(eq(tableTopicsSpeakers.id, placed[i].id));
 		}
-	});
+	};
+	return outer ? run(outer) : db.transaction(run);
+}
+
+/** One Table Topics speaker as the connector reads it: 1-based `position` in the
+ *  speaking order, exactly one of `memberId` / `guestId`, and the resolved name. */
+export interface TableTopicsListRow {
+	id: string;
+	position: number;
+	memberId: string | null;
+	guestId: string | null;
+	name: string;
+	topic: string | null;
+}
+
+/** A meeting's Table Topics speakers in speaking order, read through `conn`
+ *  (the main client, or a transaction so a preview sees its own steps). */
+export async function loadTableTopicsList(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<TableTopicsListRow[]> {
+	const ttMember = alias(members, "tt_list_member");
+	const ttGuest = alias(guests, "tt_list_guest");
+	const rows = await conn
+		.select({
+			id: tableTopicsSpeakers.id,
+			memberId: tableTopicsSpeakers.memberId,
+			guestId: tableTopicsSpeakers.guestId,
+			name: sql<string | null>`coalesce(${ttMember.name}, ${ttGuest.name})`,
+			topic: tableTopicsSpeakers.topic,
+		})
+		.from(tableTopicsSpeakers)
+		.leftJoin(ttMember, eq(ttMember.id, tableTopicsSpeakers.memberId))
+		.leftJoin(ttGuest, eq(ttGuest.id, tableTopicsSpeakers.guestId))
+		.where(eq(tableTopicsSpeakers.meetingId, meetingId))
+		.orderBy(asc(tableTopicsSpeakers.sortOrder), asc(tableTopicsSpeakers.id));
+	return rows.map((r, i) => ({
+		id: r.id,
+		position: i + 1,
+		memberId: r.memberId,
+		guestId: r.guestId,
+		name: r.name ?? "Unknown",
+		topic: r.topic,
+	}));
 }
 
 /**
