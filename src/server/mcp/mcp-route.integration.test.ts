@@ -213,6 +213,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"set_awards",
 			"set_contact_preference",
 			"set_my_attendance",
+			"set_my_speech_details",
 			"update_meeting_schedule",
 			"upsert_agendas",
 			"whoami",
@@ -627,6 +628,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("claim_open_role", {
 				meetingId: seed.meetingId,
 				role: "Toastmaster",
+			}),
+			// #1571. Preview only: the caller's own speaker slot, never a guest row.
+			toolsCall("set_my_speech_details", {
+				meetingId: seed.meetingId,
+				speechTitle: "Ice Breaker",
 			}),
 			// Preview only (no planHash): writes nothing.
 			toolsCall("reschedule_meeting", {
