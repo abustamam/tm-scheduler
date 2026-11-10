@@ -26,7 +26,7 @@ import { TBA_SPEECH_TITLE } from "#/lib/speech-title";
 import { lockClubForWrite } from "#/server/club-write-lock";
 import { resolveProjectDisplay } from "#/server/project-picker-logic";
 import {
-	lockHeldSpeakerSlots,
+	lockMeetingSpeakerSlots,
 	normalizeSpeech,
 	SPEAKER_SLOT_NOT_YOURS_MESSAGE,
 	type SpeechInput,
@@ -409,14 +409,13 @@ export const setMySpeechDetailsTool: McpToolDefinition = {
 
 		return db.transaction(async (tx) => {
 			await lockClubForWrite(tx, who.clubId);
-			// The meeting lock and the caller's speaker-slot rows, BEFORE compute
+			// The meeting lock and its speaker-slot rows, BEFORE compute
 			// reads the speech it merges omitted fields from: an app save that
 			// commits first is then seen by compute, and one that arrives later
 			// waits for this transaction. Same order as the app's save (meeting,
 			// then slot), so no deadlock.
-			await lockHeldSpeakerSlots(tx, {
+			await lockMeetingSpeakerSlots(tx, {
 				meetingId: args.meetingId,
-				memberId: who.memberId,
 			});
 			const facts = await loadMeetingFacts(tx, args.meetingId);
 			throwIfLocked(facts);
