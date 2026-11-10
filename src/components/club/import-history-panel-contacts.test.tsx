@@ -140,24 +140,19 @@ async function openImport() {
 }
 
 describe("ImportHistoryPanel one-upload preview (#1240)", () => {
-	// protects=the preview says in one line how many it will link, create (active,
-	// officers, former), add as guests and skip as erased, and does not list the
-	// people the rules placed;
-	// fails_when=a count is mislabelled or dropped, or a created person is listed
-	// as a decision;
-	// no_claim=the numbers are the mocked plan's; the plan tests own them.
-	it("shows one summary line and no per-person list for placed people", async () => {
+	// protects=a person the rules placed is listed by name under the new members (#1589), not as a decision, and the old count sentence is gone;
+	// fails_when=the count sentence renders, the created person is missing, or they are asked about;
+	// no_claim=the grouping of other statuses (import-history-panel.test.tsx); the preview is mocked.
+	it("lists a placed person by name and shows no count sentence", async () => {
 		fns.previewEasySpeakImport.mockImplementation(
 			async ({ data }: { data: { contacts?: string } }) =>
 				previewFor(data.contacts ?? ""),
 		);
 		await openImport();
-		const line = await screen.findByTestId("import-people-summary");
-		expect(line.textContent?.replace(/\s+/gu, " ")).toBe(
-			"Will link 5 existing members, create 2 active members (1 officer) and 3 former members, add 1 guest, and skip 4 erased accounts.",
-		);
+		const group = await screen.findByTestId("people-group-active");
+		expect(group.textContent).toContain("Pia President");
+		expect(screen.queryByTestId("import-people-summary")).toBeNull();
 		expect(screen.queryByText("People to decide")).toBeNull();
-		expect(screen.queryByText("Pia President")).toBeNull();
 	});
 
 	// protects=pasted contacts reach the preview when the box loses focus and the
@@ -181,7 +176,7 @@ describe("ImportHistoryPanel one-upload preview (#1240)", () => {
 			},
 		});
 		await openImport();
-		await screen.findByTestId("import-people-summary");
+		await screen.findByTestId("import-people-list");
 		const box = screen.getByLabelText("Contacts (optional)");
 		const pasted = "Pia President, pia@example.com, 555-0101";
 		fireEvent.change(box, { target: { value: pasted } });

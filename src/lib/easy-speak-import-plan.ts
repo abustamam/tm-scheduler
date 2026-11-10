@@ -47,7 +47,7 @@ import {
 	type GuestKind,
 	readLegacyGuestKind,
 } from "./guest-profile";
-import { isCloseName } from "./name-short-forms";
+import { isCloseName, isLikelySameName } from "./name-short-forms";
 import { type OfficerPosition, parseOfficerPosition } from "./officers";
 import { isValidEmail, parseRosterText } from "./roster-import";
 
@@ -209,7 +209,9 @@ const MAX_SKIP_REASON = 500;
 /** A human's answer for one person the plan could not place. */
 export const personResolutionSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("member"), memberId: z.string().uuid() }),
-	// "Not that member: make a new one." Only a `possible_match` person takes it (#1493).
+	// "Not that member: make a new one." Taken by a `possible_match` person (#1493)
+	// and by one linked automatically by exact name, folded name or email (#1589);
+	// never over an earlier import's ref, nor by a list-only person.
 	z.object({ action: z.literal("create") }),
 	z.object({
 		action: z.literal("guest"),
@@ -328,7 +330,24 @@ export interface PlanPerson {
 	outcome: PlanPersonOutcome;
 	/** A chosen member id the roster does not hold: shown, and the person stays unresolved. */
 	rejectedChoice: string | null;
+	/**
+	 * For a `create`: the roster members whose name is likely the same
+	 * ({@link isLikelySameName}), by name, at most {@link MAX_SUGGESTIONS}; `[]`
+	 * otherwise (#1589). A suggestion is shown beside the new member and never
+	 * changes the outcome or asks a human: Apply does not wait on it.
+	 */
+	suggestions: PlanRosterMember[];
+	/**
+	 * Whether a saved "create" answer would take effect for this person (#1589):
+	 * their automatic outcome is a create (or a close-name question over one), or a
+	 * link by exact name, folded name or email. Read by the panel, which offers
+	 * "New member" only where the planner honours it.
+	 */
+	createAllowed: boolean;
 }
+
+/** The most likely-duplicate suggestions one new member carries (#1589). */
+export const MAX_SUGGESTIONS = 3;
 
 /** Why an erased Easy-Speak account ("Forgotten User") is skipped. */
 export const ERASED_ACCOUNT_REASON = "Erased Easy-Speak account";
@@ -1107,6 +1126,8 @@ export function buildImportPlan(
 		listOnly: boolean;
 		guestRef: string | null;
 		outcome: PlanPersonOutcome;
+		/** The create a saved "create" answer gives over a name or email link (#1589). */
+		asNewMember: Extract<PlanPersonOutcome, { status: "create" }>;
 	}
 	const drafts: Draft[] = [];
 	const people: PlanPerson[] = [];
@@ -1220,7 +1241,32 @@ export function buildImportPlan(
 			// the roster when it has them, otherwise left alone and not asked about
 			// (#1203).
 		}
-		drafts.push({ key, ref, appearances, listOnly, guestRef, outcome });
+		// What this person would be made if no roster member were theirs (#1589): the
+		// member list's row, the same reading as the create above, else a former
+		// member.
+		const asNewMember: Extract<PlanPersonOutcome, { status: "create" }> =
+			entry.listRow && !INACTIVE_STATUS.test(entry.listRow.status)
+				? {
+						status: "create",
+						membership: "active",
+						position: parseOfficerPosition(entry.listRow.status),
+						joinedAt: entry.listRow.joined,
+					}
+				: {
+						status: "create",
+						membership: "former",
+						position: null,
+						joinedAt: entry.listRow?.joined ?? null,
+					};
+		drafts.push({
+			key,
+			ref,
+			appearances,
+			listOnly,
+			guestRef,
+			outcome,
+			asNewMember,
+		});
 	}
 
 	// Two people on one member, when an email is involved (#1493): the email-linked
@@ -1264,6 +1310,21 @@ export function buildImportPlan(
 	): outcome is Extract<PlanPersonOutcome, { status: "create" }> =>
 		outcome.status === "create" && closeMembers(name).length > 0;
 
+	// A person linked automatically by name or email whom a saved "create" may
+	// make a new member instead (#1589): "they are not that member". Never one an
+	// earlier import's ref names (re-pointing it would move imported history:
+	// merge instead), nor a list-only person, who is never created (#1203).
+	const createOverridesLink = (d: Draft): boolean =>
+		!d.listOnly &&
+		d.outcome.status === "member" &&
+		(d.outcome.via === "exact" ||
+			d.outcome.via === "folded" ||
+			d.outcome.via === "email");
+
+	// People a saved "create" turned from a link into a new member: the namesake
+	// pass below must not link them back.
+	const createdByAnswer = new Set<string>();
+
 	for (const d of drafts) {
 		const { key, ref, appearances, listOnly, guestRef } = d;
 		let outcome = d.outcome;
@@ -1286,7 +1347,8 @@ export function buildImportPlan(
 			}
 			if (
 				saved?.action === "create" &&
-				!createWithCloseMembers(outcome, ref.name)
+				!createWithCloseMembers(outcome, ref.name) &&
+				!createOverridesLink(d)
 			) {
 				notes.push(
 					`${ref.name}: the saved answer "create" is set aside; they are matched automatically.`,
@@ -1299,8 +1361,13 @@ export function buildImportPlan(
 					? undefined
 					: saved;
 			if (choice?.action === "create") {
-				// "Not that member": a create stays a create, and is not asked about.
-				// Anyone else is matched automatically (noted above).
+				// "Not that member": a create stays a create, and is not asked about;
+				// a name or email link becomes the create the member list gives
+				// (#1589). Anyone else is matched automatically (noted above).
+				if (createOverridesLink(d)) {
+					outcome = d.asNewMember;
+					createdByAnswer.add(key);
+				}
 			} else if (choice?.action === "member") {
 				if (rosterIds.has(choice.memberId)) {
 					outcome = {
@@ -1338,6 +1405,8 @@ export function buildImportPlan(
 			listOnly,
 			outcome,
 			rejectedChoice,
+			suggestions: [],
+			createAllowed: d.outcome.status === "create" || createOverridesLink(d),
 		});
 	}
 	// A name-only reference (`name:<fold>`, a meeting's mention) beside `es:` people
@@ -1371,6 +1440,8 @@ export function buildImportPlan(
 		const esPeople = group.filter((p) => p.esUserId !== null);
 		const n = group.find((p) => p.esUserId === null);
 		if (!n || esPeople.length === 0) continue;
+		// Its own saved "create" took effect over a link (#1589): left alone.
+		if (createdByAnswer.has(n.key)) continue;
 		const nOutcome = n.outcome;
 		const nIsCreate = nOutcome.status === "create";
 		const nMatchedByName =
@@ -1456,6 +1527,18 @@ export function buildImportPlan(
 			candidates: closeMembers(p.name),
 			fallback: p.outcome,
 		};
+	}
+	// Likely duplicates of each new member (#1589), read after every outcome is
+	// final. Shown, never acted on: the outcome stays a create and nothing waits.
+	for (const p of people) {
+		if (p.outcome.status !== "create") continue;
+		p.suggestions = ctx.roster
+			.filter((m) => isLikelySameName(p.name, m.name))
+			.sort(
+				(a, b) =>
+					a.name.localeCompare(b.name) || a.memberId.localeCompare(b.memberId),
+			)
+			.slice(0, MAX_SUGGESTIONS);
 	}
 	people.sort(
 		(a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
@@ -2211,6 +2294,12 @@ export interface ImportReport {
 		roleDefinitions: string[];
 		/** Members made from the member list and the meetings (#1240); absent on an older report. */
 		members?: { active: number; former: number; officers: number };
+		/** Who this apply created, by name (#1589); absent on an older report. */
+		people?: Array<{
+			name: string;
+			membership: "active" | "former" | "guest";
+			officer: boolean;
+		}>;
 	};
 	/**
 	 * What the pasted contacts did not do, each naming a row and a person, never

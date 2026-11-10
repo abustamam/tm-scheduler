@@ -1204,6 +1204,321 @@ describe("the roster notice (#1498)", () => {
 // fails_when=the ids go back inline in a nowrap cell, or the table loses its
 // width bound; no_claim=any width but 375px. The markup is the REAL panel,
 // serialised from jsdom, laid out with the app's compiled Tailwind.
+describe("everyone the import touches (#1589)", () => {
+	const M3 = "33333333-6a3d-4d1b-9f5e-2c7a8b9d0e1f";
+	const roster = [
+		{ memberId: M1, name: "Tishiana Roe-Smith" },
+		{ memberId: M2, name: "Ada Linked" },
+		{ memberId: M3, name: "Rex Earlier" },
+	];
+	const someone = (over: Record<string, unknown>) => ({
+		...person,
+		status: "create",
+		candidates: [],
+		needsDecision: false,
+		suggestions: [],
+		membership: null,
+		officer: null,
+		speeches: 0,
+		createAllowed: true,
+		...over,
+	});
+	const TISH = "es:801";
+	/** The plan the server would give, read from the answers sent: a stand-in for the planner. */
+	const peopleFor = (
+		resolutions: Record<string, { action: string; memberId?: string }> = {},
+	) => {
+		const tish = resolutions[TISH];
+		const ada = resolutions["es:803"];
+		return [
+			tish?.action === "member"
+				? someone({
+						key: TISH,
+						name: "Tish Roe",
+						status: "member",
+						via: "chosen",
+						memberId: tish.memberId,
+					})
+				: someone({
+						key: TISH,
+						name: "Tish Roe",
+						membership: "active",
+						officer: "Vice President Education",
+						speeches: 2,
+						suggestions: [roster[0]],
+					}),
+			someone({ key: "es:802", name: "Fern Former", membership: "former" }),
+			ada?.action === "create"
+				? someone({ key: "es:803", name: "Ada Linked", membership: "active" })
+				: someone({
+						key: "es:803",
+						name: "Ada Linked",
+						status: "member",
+						via: "exact",
+						memberId: M2,
+					}),
+			someone({
+				key: "es:804",
+				name: "Rex Earlier",
+				status: "member",
+				via: "ref",
+				memberId: M3,
+			}),
+			someone({
+				key: "es:805",
+				name: "Lia Listed",
+				status: "member",
+				via: "folded",
+				memberId: M2,
+				listOnly: true,
+			}),
+			someone({
+				key: "es:811",
+				name: "Cho Chosen",
+				status: "member",
+				via: "chosen",
+				memberId: M1,
+				createAllowed: false,
+			}),
+			someone({
+				key: "es:806",
+				name: "Gus Guest",
+				status: "guest",
+				via: "category",
+				kind: "visitor",
+			}),
+			someone({
+				key: "es:807",
+				name: "Forgotten User",
+				status: "skipped",
+				reason: "Erased Easy-Speak account",
+			}),
+			someone({ key: "es:808", name: "Del Deleted", status: "deleted" }),
+			someone({
+				key: "es:809",
+				name: "Amb Iguous",
+				status: "ambiguous",
+				needsDecision: true,
+				candidates: roster.slice(0, 2),
+			}),
+			someone({
+				key: "es:810",
+				name: "Uma Unmatched",
+				status: "unmatched",
+				listOnly: true,
+			}),
+		];
+	};
+	const answering = () =>
+		fns.previewEasySpeakImport.mockImplementation(
+			async ({
+				data,
+			}: {
+				data: {
+					resolutions?: Record<string, { action: string; memberId?: string }>;
+				};
+			}) => ({
+				...previewFor(true),
+				roster,
+				people: peopleFor(data.resolutions),
+			}),
+		);
+	const group = (id: string) => screen.getByTestId(`people-group-${id}`);
+	const lastResolutions = () =>
+		fns.previewEasySpeakImport.mock.calls.at(-1)?.[0].data.resolutions;
+
+	// protects=every person shows in exactly one group, each heading's count equals its rows, the count sentence is gone, and a likely duplicate leaves Apply on;
+	// fails_when=a person is missing or listed twice, a count is off, a person to decide or an unmatched list-only person is listed again, the old sentence renders, or a suggestion disables Apply;
+	// no_claim=the planner's grouping inputs; the preview is mocked.
+	it("lists everyone once, by group, with counts, and leaves Apply on", async () => {
+		answering();
+		await openImport();
+		await screen.findByTestId("import-people-list");
+		expect(screen.queryByTestId("import-people-summary")).toBeNull();
+		const expected: Record<string, string[]> = {
+			active: [TISH],
+			former: ["es:802"],
+			linked: ["es:803", "es:804", "es:805", "es:811"],
+			guests: ["es:806"],
+			skipped: ["es:807", "es:808"],
+		};
+		const list = screen.getByTestId("import-people-list");
+		for (const [id, keys] of Object.entries(expected)) {
+			expect(screen.getByTestId(`people-group-${id}-count`).textContent).toBe(
+				`(${keys.length})`,
+			);
+			const rows = [...group(id).querySelectorAll("li")].map((li) =>
+				li.getAttribute("data-testid"),
+			);
+			expect(rows).toEqual(keys.map((k) => `person-${k}`));
+		}
+		expect(list.querySelectorAll("li")).toHaveLength(9);
+		// The two other sections keep their own rows.
+		expect(list.textContent).not.toContain("Amb Iguous");
+		expect(list.textContent).not.toContain("Uma Unmatched");
+		expect(screen.getByTestId("resolve-es:809")).toBeTruthy();
+		// Only the active new members are open.
+		expect((group("active") as HTMLDetailsElement).open).toBe(true);
+		expect((group("linked") as HTMLDetailsElement).open).toBe(false);
+		expect(group("active").textContent).toContain(
+			"Tish Roe, officer: Vice President Education · 1 roles, 2 speeches, 1 attended",
+		);
+		expect(group("linked").textContent).toContain(
+			"Ada Linked → Ada Linked (same name)",
+		);
+		expect(group("linked").textContent).toContain("(earlier import)");
+		expect(group("skipped").textContent).toContain(
+			"Forgotten User · Erased Easy-Speak account",
+		);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Apply import",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
+	// protects=Yes, link sends a member answer for that person, the row moves to the linked group as "your choice", and Undo takes the answer back;
+	// fails_when=the answer is not sent or names another member, the row stays a new member, or Undo leaves the answer in place;
+	// no_claim=that the server honours the answer (planner tests); the preview is mocked.
+	it("links a likely duplicate in one click, and Undo restores it", async () => {
+		answering();
+		await openImport();
+		expect((await screen.findByTestId(`person-${TISH}`)).textContent).toContain(
+			"Same person as Tishiana Roe-Smith?",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Yes, link" }));
+		await waitFor(() =>
+			expect(lastResolutions()).toEqual({
+				[TISH]: { action: "member", memberId: M1 },
+			}),
+		);
+		await waitFor(() =>
+			expect(group("linked").textContent).toContain(
+				"Tish Roe → Tishiana Roe-Smith (your choice)",
+			),
+		);
+		expect(screen.queryByTestId("people-group-active")).toBeNull();
+		expect(screen.getByTestId(`person-${TISH}`).textContent).toContain(
+			"changed",
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		await waitFor(() => expect(lastResolutions()).toEqual({}));
+		await waitFor(() =>
+			expect(group("active").textContent).toContain("Tish Roe"),
+		);
+		expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+	});
+
+	// protects=Wrong person, New member on a same-name row sends a create and the row moves to the new members;
+	// fails_when=the create is not sent, or the row stays linked;
+	// no_claim=the planner's override (planner tests).
+	it("turns a same-name link into a new member", async () => {
+		answering();
+		await openImport();
+		fireEvent.change(await screen.findByLabelText("Wrong person: Ada Linked"), {
+			target: { value: "__new" },
+		});
+		await waitFor(() =>
+			expect(lastResolutions()).toEqual({ "es:803": { action: "create" } }),
+		);
+		await waitFor(() =>
+			expect(group("active").textContent).toContain("Ada Linked"),
+		);
+		expect(group("linked").textContent).not.toContain("Ada Linked →");
+	});
+
+	// protects=an earlier import's link offers no change at all, and a list-only person is never offered New member;
+	// fails_when=a ref row has a Wrong person picker, or a list-only row offers New member;
+	// no_claim=the server's refusal of the same answers (planner tests).
+	it("offers no change on an earlier import's link and no New member for a list-only person", async () => {
+		answering();
+		await openImport();
+		await screen.findByTestId("import-people-list");
+		expect(screen.queryByLabelText("Wrong person: Rex Earlier")).toBeNull();
+		const listed = screen.getByLabelText(
+			"Wrong person: Lia Listed",
+		) as HTMLSelectElement;
+		const values = [...listed.options].map((o) => o.value);
+		expect(values).not.toContain("__new");
+		expect(values).toContain(M1);
+		const same = screen.getByLabelText(
+			"Wrong person: Ada Linked",
+		) as HTMLSelectElement;
+		expect([...same.options].map((o) => o.value)).toContain("__new");
+		// A choice over an ambiguous match: the planner would not honour a create.
+		const chosen = screen.getByLabelText(
+			"Wrong person: Cho Chosen",
+		) as HTMLSelectElement;
+		expect([...chosen.options].map((o) => o.value)).not.toContain("__new");
+		// The member it is linked to is not offered as the "other" member.
+		expect([...same.options].map((o) => o.value)).not.toContain(M2);
+	});
+});
+
+describe("the report names who was created (#1589)", () => {
+	const reportWith = (created: Record<string, unknown>) => ({
+		reconciled: true,
+		counts: [],
+		meetings: { applied: 1, failed: [] },
+		notImported: [],
+		skippedPeople: [],
+		created: { guests: 1, roleDefinitions: [], ...created },
+	});
+
+	// protects=an applied report lists the created members and guests by name, ten inline and the rest folded;
+	// fails_when=a name is missing, the kind or officer mark is wrong, or more than ten show inline;
+	// no_claim=what the apply stores (the integration test's).
+	it("lists the created people by name", async () => {
+		const people = [
+			{ name: "Pia President", membership: "active", officer: true },
+			{ name: "Gus Guest", membership: "guest", officer: false },
+			...Array.from({ length: 10 }, (_, i) => ({
+				name: `Former ${i + 1}`,
+				membership: "former",
+				officer: false,
+			})),
+		];
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(
+				true,
+				reportWith({ members: { active: 1, former: 10, officers: 1 }, people }),
+			),
+		);
+		await openImport();
+		const created = await screen.findByTestId("report-created-people");
+		expect(created.textContent).toContain(
+			"Pia President (active member, officer)",
+		);
+		expect(created.textContent).toContain("Gus Guest (guest)");
+		const inline = created.querySelectorAll(":scope > ul > li");
+		expect(inline).toHaveLength(10);
+		expect(created.querySelector("summary")?.textContent).toBe("and 2 more");
+		expect(created.querySelectorAll("details li")).toHaveLength(2);
+		expect(screen.getByText(/Created 1 guests, 1 active members/)).toBeTruthy();
+	});
+
+	// protects=a report written before #1589 renders its count line as before and no name list;
+	// fails_when=an older report breaks or shows an empty Created list;
+	// no_claim=none beyond protects.
+	it("keeps the count line for a report without names", async () => {
+		fns.previewEasySpeakImport.mockResolvedValue(
+			previewFor(
+				true,
+				reportWith({ members: { active: 2, former: 0, officers: 0 } }),
+			),
+		);
+		await openImport();
+		expect(
+			await screen.findByText(
+				"Created 1 guests, 2 active members (0 officers) and 0 former members.",
+			),
+		).toBeTruthy();
+		expect(screen.queryByTestId("report-created-people")).toBeNull();
+	});
+});
+
 describe("the import report 375px harness availability", () => {
 	it("has a browser to measure with when running in CI", () => {
 		if (!process.env.CI) return;
