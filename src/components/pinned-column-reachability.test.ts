@@ -2,6 +2,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 import {
 	buildAppCss,
 	candidatesIn,
@@ -174,15 +175,21 @@ describe.skipIf(!hasChrome)(
 			cls.navBand = classContaining(SHELL, "min-h-0 flex-1 flex-col");
 			cls.footer = classContaining(SHELL, "rounded-xl border border-border");
 			cls.drawer = classAfterTag(SHELL, "<SheetContent");
-			cls.tabPanel = classAfterTag(MEETING_TABS, "<TabsContent");
+			cls.tabPanel =
+				tagClassName(openingTag(readSource(MEETING_TABS), "TabsContent")) ?? "";
+			expect(cls.tabPanel, "<TabsContent> className not found").not.toBe("");
 			// The panel's card and body carry NO className now (the rail's cap and
-			// scroller classes went with the rail). Read the tag bare, so a class
-			// added back is a failure to look at rather than a silent skip.
+			// scroller classes went with the rail). Each tag is read on its own, so a
+			// class added back, or a second bare tag elsewhere, cannot satisfy this.
 			const panelSrc = readSource(PANEL);
-			expect(panelSrc, "<Card> gained a className").toContain("<Card>");
-			expect(panelSrc, "<CardContent> gained a className").toContain(
-				"<CardContent>",
-			);
+			expect(
+				tagClassName(openingTag(panelSrc, "Card")),
+				"<Card> gained a className",
+			).toBeNull();
+			expect(
+				tagClassName(openingTag(panelSrc, "CardContent")),
+				"<CardContent> gained a className",
+			).toBeNull();
 			cls.card = "";
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
 			cls.cardBody = "";

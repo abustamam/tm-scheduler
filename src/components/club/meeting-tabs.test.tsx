@@ -1,4 +1,12 @@
 // @vitest-environment jsdom
+import {
+	createMemoryHistory,
+	createRootRoute,
+	createRoute,
+	createRouter,
+	RouterProvider,
+	useLocation,
+} from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { hydrateRoot } from "react-dom/client";
@@ -100,6 +108,9 @@ describe("MeetingTabs (#1582)", () => {
 	});
 
 	it("calls onSelect with the chosen tab", () => {
+		// protects=a tab click reports the chosen tab to the route (which writes it
+		// to the URL); fails_when=onSelect is not called or gets another tab;
+		// no_claim=says nothing about the URL write itself
 		const onSelect = vi.fn();
 		const { getByRole } = render(
 			<MeetingTabs
@@ -137,10 +148,14 @@ describe("MeetingTabs (#1582)", () => {
 	});
 
 	it("falls back to Roles when the tab is not offered", () => {
+		// protects=a URL naming a tab this viewer is not offered (`?tab=ballots` for
+		// a plain member) shows Roles, on the first render and after the post-mount
+		// reconcile; fails_when=the fallback is dropped from either; no_claim=says
+		// nothing about which tabs a viewer is offered
 		const { container } = render(
 			<MeetingTabs
 				tabs={["roles", "minutes"]}
-				active="roles"
+				active="ballots"
 				onSelect={() => {}}
 				panels={panels()}
 			/>,
@@ -149,6 +164,9 @@ describe("MeetingTabs (#1582)", () => {
 	});
 
 	it("follows the URL when the active tab changes", () => {
+		// protects=back/forward and links that change `?tab=` move the visible
+		// panel; fails_when=`active` is read once and never again; no_claim=says
+		// nothing about how the URL changes
 		function Harness() {
 			const [active, setActive] = useState<MeetingTab>("roles");
 			return (
@@ -202,6 +220,12 @@ describe("MeetingTabs (#1582)", () => {
 		});
 		errors.mockRestore();
 		expect(visibleTabs(host)).toEqual(["roles"]);
+		// the roving tabindex follows the live tab too
+		expect(
+			[...host.querySelectorAll<HTMLElement>('[role="tab"]')].map(
+				(t) => t.tabIndex,
+			),
+		).toEqual([0, -1, -1, -1]);
 		await act(async () => root?.unmount());
 		host.remove();
 	});
@@ -224,6 +248,9 @@ describe("MeetingTabs (#1582)", () => {
 	});
 
 	it("a hashchange to #slot-<id> from another tab shows Roles", async () => {
+		// protects=a hand-edited or back/forward fragment into a role slot reveals
+		// Roles; fails_when=the hashchange listener is dropped; no_claim=an in-app
+		// link (the router test below)
 		const { container } = render(
 			<MeetingTabs
 				tabs={ALL}
@@ -242,6 +269,8 @@ describe("MeetingTabs (#1582)", () => {
 	});
 
 	it("ignores a fragment that names nothing inside a panel", () => {
+		// protects=a stray fragment does not switch tabs; fails_when=an unknown
+		// fragment is treated as an owner; no_claim=says nothing about scrolling
 		window.history.replaceState(null, "", "/#nowhere");
 		const { container } = render(
 			<MeetingTabs
@@ -252,5 +281,47 @@ describe("MeetingTabs (#1582)", () => {
 			/>,
 		);
 		expect(visibleTabs(container)).toEqual(["ballots"]);
+	});
+
+	it("follows an in-app router navigation that sets a hash after mount", async () => {
+		// protects=the toolbar's Minutes button (`<Link to="." hash="minutes">`, a
+		// pushState that fires NO hashchange) activates Minutes and scrolls to it;
+		// fails_when=the shell reads the fragment only on mount and on hashchange,
+		// or the `hash` prop is no longer followed; no_claim=that the route passes
+		// the hash (meeting-tabs-wiring.guard.test.ts pins that) or real scrolling
+		function Page() {
+			// The same read the meeting route makes.
+			const hash = useLocation({ select: (l) => l.hash });
+			return (
+				<MeetingTabs
+					tabs={ALL}
+					active="roles"
+					onSelect={() => {}}
+					hash={hash}
+					panels={panels()}
+				/>
+			);
+		}
+		const root = createRootRoute({ component: Page });
+		const index = createRoute({ getParentRoute: () => root, path: "/" });
+		const router = createRouter({
+			routeTree: root.addChildren([index]),
+			history: createMemoryHistory({ initialEntries: ["/"] }),
+		});
+		await router.load();
+		const { container } = render(<RouterProvider router={router} />);
+		await act(async () => {});
+		expect(visibleTabs(container)).toEqual(["roles"]);
+		(Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+		let hashchanges = 0;
+		const count = () => hashchanges++;
+		window.addEventListener("hashchange", count);
+		await act(async () => {
+			await router.navigate({ to: "/", hash: "minutes" });
+		});
+		window.removeEventListener("hashchange", count);
+		expect(hashchanges, "memory history fires no hashchange").toBe(0);
+		expect(visibleTabs(container)).toEqual(["minutes"]);
+		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
 	});
 });

@@ -3,6 +3,7 @@ import {
 	createFileRoute,
 	Link,
 	notFound,
+	useLocation,
 	useRouter,
 } from "@tanstack/react-router";
 import {
@@ -380,6 +381,9 @@ function MeetingView() {
 	const router = useRouter();
 	const search = Route.useSearch();
 	const navigate = Route.useNavigate();
+	// The fragment, from the router: an in-app `<Link hash>` is a pushState and
+	// fires no `hashchange` (#1582 AC 10).
+	const locationHash = useLocation({ select: (l) => l.hash });
 	const online = useOnlineStatus();
 	// #176 / DP3: ONE offline-write-queue instance per meeting, shared by
 	// <MeetingMinutes> below and (PR 3) the attendance panel's roll-mode
@@ -982,10 +986,12 @@ function MeetingView() {
 	// The three conditions that decide today whether each section renders at all
 	// (`meeting-tabs-wiring.guard.test.ts` pins them): a tab is offered exactly
 	// when its section is, never on a new rule.
+	const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;
+	const minutesShown = Boolean(minutes.visible && minutes.data);
 	const offeredTabs = meetingTabsFor({
 		attendance: showPanel && !tmodPanelUnavailable,
-		ballots: (isVoteCounter || effectiveCanManage) && !cancelled,
-		minutes: Boolean(minutes.visible && minutes.data) || effectiveCanManage,
+		ballots: ballotsShown,
+		minutes: minutesShown || effectiveCanManage,
 	});
 	const activeTab = meetingTabFrom(search, offeredTabs);
 	const selectTab = (tab: MeetingTab) => {
@@ -1377,6 +1383,7 @@ function MeetingView() {
 				tabs={offeredTabs}
 				active={activeTab}
 				onSelect={selectTab}
+				hash={locationHash}
 				panels={{
 					roles: (
 						<>
@@ -1597,7 +1604,7 @@ function MeetingView() {
 							{/* Never on a cancelled meeting (#1057): `castVote` refuses every
 					    ballot on it, and a console for a vote nobody can cast invites
 					    the Vote Counter to open one. */}
-							{(isVoteCounter || effectiveCanManage) && !cancelled ? (
+							{ballotsShown ? (
 								<section className="space-y-4 rounded-xl border border-border bg-card p-4">
 									<div>
 										<h2 className="font-display font-semibold text-lg">
@@ -1670,7 +1677,7 @@ function MeetingView() {
 					),
 					minutes: (
 						<>
-							{minutes.visible && minutes.data ? (
+							{minutesShown && minutes.data ? (
 								// Anchor target for the toolbar's completed-phase primary (#541 D2).
 								// The wrapper exists because <MeetingMinutes> renders a <Card> and
 								// takes no id/className. `scroll-mt-28` (112px) clears the sticky header

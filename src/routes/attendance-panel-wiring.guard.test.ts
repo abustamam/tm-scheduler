@@ -23,6 +23,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 
 const ROUTE = resolve(
 	dirname(fileURLToPath(import.meta.url)),
@@ -332,7 +333,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 
 	it("keeps every tab panel shrinkable so a wide row cannot push the page sideways", () => {
 		// #1582: the two-column row is gone; the panels are the tab shell's.
-		expect(readSource(TABS)).toContain("min-w-0");
+		// protects=a wide row cannot push the page sideways; fails_when=min-w-0 is
+		// dropped from the <TabsContent> tag itself (a mention elsewhere in the file
+		// does not count); no_claim=measures no layout, the geometry suites do
+		const cls = tagClassName(openingTag(readSource(TABS), "TabsContent"));
+		expect(cls, "<TabsContent> has no className").not.toBeNull();
+		expect(cls?.split(/\s+/)).toContain("min-w-0");
 	});
 
 	// Task 7: the personal strip's rung is the member's OWN answer, read from the
@@ -821,12 +827,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(src).not.toContain("<aside");
 		expect(src).not.toContain("lg:max-h-[calc(100vh");
 		expect(src).not.toContain("lg:sticky");
+		// protects=the panel's Card and CardContent tags carry no className (the
+		// rail's scroller and cap lived on them); fails_when=either tag gains a
+		// className; no_claim=says nothing about the classes of other elements
 		const panel = readSource(PANEL);
-		const at = panel.indexOf("<CardContent");
-		expect(at).toBeGreaterThan(-1);
-		const cls = /className="([^"]*)"/.exec(panel.slice(at))?.[1] ?? "";
-		expect(cls).not.toContain("overflow-y-auto");
-		expect(cls).not.toContain("lg:min-h-0");
+		expect(tagClassName(openingTag(panel, "CardContent"))).toBeNull();
+		expect(tagClassName(openingTag(panel, "Card"))).toBeNull();
 	});
 });
 

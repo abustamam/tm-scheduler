@@ -116,9 +116,12 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(readSource(OUTREACH_HOOK).replace(/\s+/g, " ")).toContain(
 			"const canLineupBlast = !cancelled && (effectiveCanManage ||",
 		);
+		// The one named gate (#1582): the ballots tab's offer and its panel both
+		// read it, and it is false on a cancelled meeting.
 		expect(src).toContain(
-			"(isVoteCounter || effectiveCanManage) && !cancelled ?",
+			"const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;",
 		);
+		expect(src).toContain("{ballotsShown ? (");
 	});
 
 	it("the banner comes FIRST in the status chain and carries the officer controls", () => {

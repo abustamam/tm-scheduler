@@ -21,8 +21,42 @@ describe("the meeting route wires the tab shell (#1582)", () => {
 	// guards) or that the shell renders
 	it("hands meetingTabsFor the three section gates", () => {
 		expect(source).toContain(
-			"meetingTabsFor({ attendance: showPanel && !tmodPanelUnavailable, ballots: (isVoteCounter || effectiveCanManage) && !cancelled, minutes: Boolean(minutes.visible && minutes.data) || effectiveCanManage, })",
+			"const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;",
 		);
+		expect(source).toContain(
+			"const minutesShown = Boolean(minutes.visible && minutes.data);",
+		);
+		expect(source).toContain(
+			"meetingTabsFor({ attendance: showPanel && !tmodPanelUnavailable, ballots: ballotsShown, minutes: minutesShown || effectiveCanManage, })",
+		);
+	});
+
+	// protects=the tab's offer and its panel use the SAME named gate, so they
+	// cannot drift apart; fails_when=a panel re-spells its condition inline;
+	// no_claim=the gates' own expressions (the test above pins them)
+	it("renders the ballots and minutes panels behind the same gates", () => {
+		const from = source.indexOf("panels={{");
+		expect(from).toBeGreaterThan(-1);
+		expect(source.indexOf("{ballotsShown ? (", from)).toBeGreaterThan(from);
+		expect(
+			source.indexOf("{minutesShown && minutes.data ? (", from),
+		).toBeGreaterThan(from);
+		// the inline spellings are gone from the panels
+		expect(source.slice(from)).not.toContain(
+			"(isVoteCounter || effectiveCanManage) && !cancelled",
+		);
+		expect(source.slice(from)).not.toContain("minutes.visible && minutes.data");
+	});
+
+	// protects=an in-app hash navigation (the toolbar's Minutes <Link hash>, a
+	// pushState that fires no hashchange) reaches the tab shell; fails_when=the
+	// route stops reading the router location's hash or stops passing it on;
+	// no_claim=the shell's reaction to it (meeting-tabs.test.tsx drives that)
+	it("feeds the router location's hash to the tab shell", () => {
+		expect(source).toContain(
+			"const locationHash = useLocation({ select: (l) => l.hash });",
+		);
+		expect(source).toContain("hash={locationHash}");
 	});
 
 	// protects=the URL's tab is resolved against the offered tabs and handed to

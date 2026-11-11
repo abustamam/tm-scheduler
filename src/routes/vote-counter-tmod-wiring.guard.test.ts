@@ -23,9 +23,11 @@ describe("Toastmaster vote console wiring (#1472)", () => {
 	//   (deriveMeetingRoleFlags has its own tests); jsdom cannot render the route
 	it("renders the console for isVoteCounter (which includes isTmod) or an admin, nothing else", () => {
 		expect(src).toContain("const isVoteCounter = isSlotVoteCounter || isTmod;");
+		// The one named gate (#1582): the tab's offer and the panel both read it.
 		expect(src).toContain(
-			"{(isVoteCounter || effectiveCanManage) && !cancelled ? (",
+			"const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;",
 		);
+		expect(src).toContain("{ballotsShown ? (");
 	});
 
 	// protects=the tally poll runs for a Toastmaster, so the console is not empty;

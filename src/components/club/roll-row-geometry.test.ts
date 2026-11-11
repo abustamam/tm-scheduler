@@ -43,6 +43,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 import {
 	buildAppCss,
 	candidatesIn,
@@ -536,16 +537,21 @@ describe.skipIf(!hasChrome)(
 				/const containerClass = canManage\s*\?\s*"([^"]*)"/,
 				"containerClass (the manager arm)",
 			);
-			cls.tabPanel = classAfterTag(MEETING_TABS, "<TabsContent");
+			cls.tabPanel =
+				tagClassName(openingTag(readSource(MEETING_TABS), "TabsContent")) ?? "";
+			expect(cls.tabPanel, "<TabsContent> className not found").not.toBe("");
 			cls.cardBase = cnBaseOf(CARD, "Card");
 			// The panel's card and body carry no className since #1582 (the rail's
-			// cap and scroller went); read bare so a class added back is noticed.
-			expect(readSource(PANEL), "<Card> gained a className").toContain(
-				"<Card>",
-			);
-			expect(readSource(PANEL), "<CardContent> gained a className").toContain(
-				"<CardContent>",
-			);
+			// cap and scroller went). Each tag is read on its own.
+			const panelSrc = readSource(PANEL);
+			expect(
+				tagClassName(openingTag(panelSrc, "Card")),
+				"<Card> gained a className",
+			).toBeNull();
+			expect(
+				tagClassName(openingTag(panelSrc, "CardContent")),
+				"<CardContent> gained a className",
+			).toBeNull();
 			cls.card = "";
 			cls.cardHeaderBase = cnBaseOf(CARD, "CardHeader");
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
@@ -914,6 +920,24 @@ describe.skipIf(!hasChrome)(
 					expect(at.rowHeight).toBeLessThanOrEqual(48);
 				});
 
+				// The one configuration at desktop width where `@md:` (the panel's own
+				// width) and `md:` (the viewport) DISAGREE: the window is 1024px, so
+				// `md` and `lg` are on, but the panel is pinned narrower than 28rem.
+				// The real page cannot produce it now the rail is gone, so this is a
+				// synthetic control; without it the full-width cases below pass for
+				// `md:w-44` as well as `@md:w-44` and cannot fail on that bug.
+				it(`${shape}: with the window at lg but the panel under 28rem the track follows the PANEL (144px), not the viewport, and the row is not restacked`, () => {
+					const m = measure(shape, {
+						viewport: LG_VIEWPORT,
+						// `sm:` is on at 1024px, so the gutter is the tablet's.
+						pagePx: CONTAINER_MD_PX - 1 + CARD_CHROME_PX + TABLET_GUTTER_PX,
+					});
+					expect(m.innerWidth, "md and lg are on").toBeGreaterThanOrEqual(1024);
+					expect(m.listWidth).toBe(CONTAINER_MD_PX - 1);
+					expect(m.stacked, "lg is on: no restack").toBe(false);
+					expect(m.statusWidth, "the track follows the panel").toBe(144);
+				});
+
 				// Long-name pressure at the same boundary (#1309): beside the widest
 				// role code the name clamps at two lines, never stacks, and neither
 				// the track nor the row's edge gives way.
@@ -984,7 +1008,9 @@ describe.skipIf(!hasChrome)(
 		 * NOT reach it; the list is past 28rem, so the track is the 176px `@md`
 		 * arm. The fixture has no shell sidebar, so it is wider than the real page
 		 * beside the 248px nav; the 800px tablet cases above are the narrow
-		 * desktop-class panel.
+		 * desktop-class panel. At this width `@md` and `md` agree, so the track
+		 * width here cannot tell them apart; the "window at lg, panel under 28rem"
+		 * case above and the source-class test at the foot of the file do.
 		 */
 		for (const [where, viewport] of [
 			["the full-width tab at 1024px", LG_VIEWPORT],

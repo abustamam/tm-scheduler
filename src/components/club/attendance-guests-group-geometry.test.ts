@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GUEST_TEXT_MAX } from "#/lib/guest-profile";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 import {
 	buildAppCss,
 	candidatesIn,
@@ -55,16 +56,6 @@ const MEETING_ROUTE = resolve(
  * element here carries a long comment that quotes its own class names, and
  * matching one would measure documentation rather than the shipped attribute.
  */
-
-/** First `className="…"` after an opening tag. */
-function classAfterTag(file: string, tag: string): string {
-	const src = readSource(file);
-	const at = src.indexOf(tag);
-	expect(at, `\`${tag}\` not found in ${file}`).toBeGreaterThan(-1);
-	const m = /className="([^"]*)"/.exec(src.slice(at));
-	expect(m, `no className after \`${tag}\``).not.toBeNull();
-	return m?.[1] ?? "";
-}
 
 /** The unique `className="…"` CONTAINING `fragment`. Uniqueness is asserted,
  *  because a fragment that started matching two elements would silently
@@ -400,18 +391,31 @@ describe.skipIf(!hasChrome)(
 		}
 
 		beforeAll(async () => {
-			cls.container =
-				/"(max-w-workspace[^"]*)"/.exec(readSource(MEETING_ROUTE))?.[1] ?? "";
-			cls.tabPanel = classAfterTag(MEETING_TABS, "<TabsContent");
+			// Anchored on the route's `containerClass`, as `roll-row` does.
+			const container =
+				/const containerClass = canManage\s*\?\s*"([^"]*)"/.exec(
+					readSource(MEETING_ROUTE),
+				)?.[1];
+			expect(
+				container,
+				"containerClass (the manager arm) not found",
+			).toBeTruthy();
+			cls.container = container ?? "";
+			cls.tabPanel =
+				tagClassName(openingTag(readSource(MEETING_TABS), "TabsContent")) ?? "";
+			expect(cls.tabPanel, "<TabsContent> className not found").not.toBe("");
 			cls.cardBase = cnBaseOf(CARD, "Card");
-			// The panel's card and body carry no className since #1582; read bare so
-			// a class added back is noticed.
-			expect(readSource(PANEL), "<Card> gained a className").toContain(
-				"<Card>",
-			);
-			expect(readSource(PANEL), "<CardContent> gained a className").toContain(
-				"<CardContent>",
-			);
+			// The panel's card and body carry no className since #1582. Each tag is
+			// read on its own.
+			const panelSrc = readSource(PANEL);
+			expect(
+				tagClassName(openingTag(panelSrc, "Card")),
+				"<Card> gained a className",
+			).toBeNull();
+			expect(
+				tagClassName(openingTag(panelSrc, "CardContent")),
+				"<CardContent> gained a className",
+			).toBeNull();
 			cls.card = "";
 			cls.cardBodyBase = cnBaseOf(CARD, "CardContent");
 			cls.cardBody = "";

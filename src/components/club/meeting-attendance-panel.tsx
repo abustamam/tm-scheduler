@@ -1444,7 +1444,7 @@ export function MeetingAttendancePanel({
 	// flows with the page: no height cap and no inner scroller.
 	return (
 		<Card>
-			<CardHeader className="shrink-0">
+			<CardHeader>
 				<div className="flex items-center justify-between gap-2">
 					<div className="min-w-0">
 						<CardTitle>{roll ? "Attendance" : "Planned attendance"}</CardTitle>

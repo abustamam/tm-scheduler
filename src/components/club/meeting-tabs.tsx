@@ -1,10 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import {
-	Tabs,
-	TabsContent,
-	TabsList,
-	TabsTrigger,
-} from "#/components/ui/tabs.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import type { MeetingTab } from "#/lib/meeting-hub";
 
 /** The visible label of each tab. Exact, per the spec: a test pins them. */
@@ -31,14 +26,15 @@ const PANEL_ATTR = "data-meeting-tab-panel";
  *   an offline navigation from cache ignoring the query string, so the HTML a
  *   viewer gets can be the one rendered for another `?tab=`.
  * - A fragment naming an element inside a panel (`#slot-<id>`, `#minutes`)
- *   activates that tab and then scrolls to the element, on mount and on
- *   `hashchange`. When the URL carries both, the fragment's tab wins.
+ *   activates that tab and then scrolls to the element, on mount, on
+ *   `hashchange` and whenever the router location's `hash` changes. When the URL carries both, the fragment's tab wins.
  */
 export function MeetingTabs({
 	tabs,
 	active,
 	onSelect,
 	panels,
+	hash = "",
 }: {
 	/** The offered tabs, in order. Always starts with `"roles"`. */
 	tabs: MeetingTab[];
@@ -47,6 +43,12 @@ export function MeetingTabs({
 	onSelect: (tab: MeetingTab) => void;
 	/** One panel per offered tab. */
 	panels: Partial<Record<MeetingTab, ReactNode>>;
+	/**
+	 * The router location's fragment (no `#`). TanStack navigates with
+	 * `pushState`, which fires no `hashchange`, so an in-app `<Link hash>` (the
+	 * toolbar's Minutes button) is only visible through the router's location.
+	 */
+	hash?: string;
 }) {
 	const [current, setCurrent] = useState<MeetingTab>(active);
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -72,7 +74,10 @@ export function MeetingTabs({
 	// tab, state alone would leave the wrong panel showing; the DOM is brought
 	// into line directly, once, as well.
 	useEffect(() => {
-		const live = activeRef.current;
+		// A tab that is not offered falls back to Roles, as `shown` does.
+		const live = tabsRef.current.includes(activeRef.current)
+			? activeRef.current
+			: "roles";
 		const root = rootRef.current;
 		if (!root) return;
 		// `data-state` only: with `forceMount` Radix never sets `hidden`, the
@@ -86,13 +91,14 @@ export function MeetingTabs({
 			const isLive = trigger.dataset.tab === live;
 			trigger.dataset.state = isLive ? "active" : "inactive";
 			trigger.setAttribute("aria-selected", String(isLive));
+			trigger.tabIndex = isLive ? 0 : -1;
 		}
 	}, []);
 
 	// Fragment links into a panel.
 	useEffect(() => {
-		const follow = () => {
-			const raw = window.location.hash.slice(1);
+		const follow = (fromRouter?: string) => {
+			const raw = (fromRouter || window.location.hash).replace(/^#/, "");
 			if (!raw) return;
 			let id = raw;
 			try {
@@ -108,10 +114,11 @@ export function MeetingTabs({
 			setCurrent(owner);
 			setScrollTick((t) => t + 1);
 		};
-		follow();
-		window.addEventListener("hashchange", follow);
-		return () => window.removeEventListener("hashchange", follow);
-	}, []);
+		follow(hash);
+		const onHashChange = () => follow();
+		window.addEventListener("hashchange", onHashChange);
+		return () => window.removeEventListener("hashchange", onHashChange);
+	}, [hash]);
 
 	// Scroll once the owning panel is the visible one.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scrollTick is the trigger
