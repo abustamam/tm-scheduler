@@ -197,7 +197,10 @@ describe.skipIf(!hasTestDb)("release_my_role (#1568)", () => {
 			"BLOCKED",
 		);
 		// Nor by naming the slot, nor by handing it on.
-		for (const extra of [{ slotId: s.slotId }, { toMemberId: s.adminMemberId }]) {
+		for (const extra of [
+			{ slotId: s.slotId },
+			{ toMemberId: s.adminMemberId },
+		]) {
 			const q = await preview(token, { ...args, ...extra });
 			expect(q.blocking.map((b) => b.code)).toEqual(["NOT_YOURS"]);
 			await expectMcpError(
