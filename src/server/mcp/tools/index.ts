@@ -41,6 +41,7 @@ import { restoreMeetingTool } from "./restore-meeting";
 import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setContactPreferenceTool } from "./set-contact-preference";
+import { setMemberStandingTool } from "./set-member-standing";
 import { setMyAttendanceTool } from "./set-my-attendance";
 import { setMySpeechDetailsTool } from "./set-my-speech-details";
 import { updateMeetingScheduleTool } from "./update-meeting-schedule";
@@ -79,5 +80,6 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	setContactPreferenceTool,
 	addMembersTool,
 	editMemberTool,
+	setMemberStandingTool,
 	setMySpeechDetailsTool,
 ];
