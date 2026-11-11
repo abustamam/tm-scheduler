@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import {
+	type AnyRouter,
 	createMemoryHistory,
 	createRootRoute,
 	createRoute,
 	createRouter,
 	RouterProvider,
 	useLocation,
+	useSearch,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
@@ -323,5 +325,109 @@ describe("MeetingTabs (#1582)", () => {
 		expect(hashchanges, "memory history fires no hashchange").toBe(0);
 		expect(visibleTabs(container)).toEqual(["minutes"]);
 		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+	});
+	// A router whose page reads `?tab=` and the hash as the meeting route does.
+	async function mountRouter(
+		initial: string,
+		onSelect: (tab: MeetingTab, router: AnyRouter) => void = () => {},
+	) {
+		const holder: { router?: AnyRouter } = {};
+		function Page() {
+			const search = useSearch({ strict: false }) as { tab?: string };
+			const hash = useLocation({ select: (l) => l.hash });
+			const active = (search.tab as MeetingTab | undefined) ?? "roles";
+			return (
+				<MeetingTabs
+					tabs={ALL}
+					active={active}
+					onSelect={(tab) => holder.router && onSelect(tab, holder.router)}
+					hash={hash}
+					panels={panels()}
+				/>
+			);
+		}
+		const root = createRootRoute({ component: Page });
+		const index = createRoute({
+			getParentRoute: () => root,
+			path: "/",
+			validateSearch: (s: Record<string, unknown>) =>
+				typeof s.tab === "string" ? { tab: s.tab } : {},
+		});
+		const router = createRouter({
+			routeTree: root.addChildren([index]),
+			history: createMemoryHistory({ initialEntries: [initial] }),
+		});
+		holder.router = router;
+		await router.load();
+		const { container } = render(<RouterProvider router={router} />);
+		await act(async () => {});
+		return { router, container };
+	}
+
+	it("a hash-only navigation that drops ?tab= from a non-Roles tab still shows Minutes", async () => {
+		// protects=the toolbar's Minutes button clicked from Ballots (the link drops
+		// `search`, so `active` goes ballots -> roles while `hash` goes "" ->
+		// minutes) ends on Minutes, not Roles (#1597); fails_when=the [active] sync
+		// overwrites the fragment's tab; no_claim=real browser or scrolling
+		const { router, container } = await mountRouter("/?tab=ballots");
+		expect(visibleTabs(container)).toEqual(["ballots"]);
+		await act(async () => {
+			await router.navigate({ to: "/", hash: "minutes", search: {} });
+		});
+		expect(visibleTabs(container)).toEqual(["minutes"]);
+	});
+
+	it("a tab click after landing a fragment shows the clicked tab even though the hash stays", async () => {
+		// protects=the tab-click clears the fragment claim; fails_when=the claim
+		// outlives a click and pins Minutes while the URL says Attendance
+		const { router, container } = await mountRouter(
+			"/?tab=ballots",
+			(tab, r) => {
+				void r.navigate({ to: "/", hash: "minutes", search: { tab } });
+			},
+		);
+		await act(async () => {
+			await router.navigate({ to: "/", hash: "minutes", search: {} });
+		});
+		expect(visibleTabs(container)).toEqual(["minutes"]);
+		await act(async () => {
+			fireEvent.mouseDown(
+				container.querySelector('[data-tab="attendance"]') as HTMLElement,
+			);
+			fireEvent.click(
+				container.querySelector('[data-tab="attendance"]') as HTMLElement,
+			);
+		});
+		expect(visibleTabs(container)).toEqual(["attendance"]);
+	});
+
+	it("Back from a landed fragment to ?tab=ballots follows the URL, not the old claim", async () => {
+		// protects=a claim whose hash moved on is ignored; fails_when=the claim is
+		// matched without comparing it with the live hash
+		const { router, container } = await mountRouter("/?tab=ballots");
+		await act(async () => {
+			await router.navigate({ to: "/", hash: "minutes", search: {} });
+		});
+		expect(visibleTabs(container)).toEqual(["minutes"]);
+		await act(async () => {
+			router.history.back();
+		});
+		expect(visibleTabs(container)).toEqual(["ballots"]);
+	});
+
+	it("a native hashchange claim does not hold its tab across a fragment-less ?tab= link", async () => {
+		// protects=the claim is keyed on the fragment, so one recorded from the
+		// window (address-bar edit, plain <a href="#...">) never matches the empty
+		// hash of a later fragment-less URL; fails_when=the claim is stored as ""
+		const { router, container } = await mountRouter("/?tab=attendance");
+		await act(async () => {
+			window.history.replaceState(null, "", "/#slot-abc");
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+		});
+		expect(visibleTabs(container)).toEqual(["roles"]);
+		await act(async () => {
+			await router.navigate({ to: "/", search: { tab: "ballots" } });
+		});
+		expect(visibleTabs(container)).toEqual(["ballots"]);
 	});
 });

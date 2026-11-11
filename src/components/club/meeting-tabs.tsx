@@ -54,6 +54,9 @@ export function MeetingTabs({
 	const rootRef = useRef<HTMLDivElement>(null);
 	const pendingScrollId = useRef<string | null>(null);
 	const [scrollTick, setScrollTick] = useState(0);
+	const fragmentClaim = useRef<{ hash: string; tab: MeetingTab } | null>(null);
+	const hashRef = useRef(hash);
+	hashRef.current = hash;
 	// The effects below read the freshest offered list without re-subscribing.
 	const tabsRef = useRef(tabs);
 	tabsRef.current = tabs;
@@ -64,7 +67,18 @@ export function MeetingTabs({
 	const shown: MeetingTab = tabs.includes(current) ? current : "roles";
 
 	// The URL moved (back/forward, or a link): follow it.
+	// While the fragment that chose a tab is still in the URL it keeps that tab:
+	// an in-app `<Link hash>` that drops `?tab=` lands the hash first and the
+	// search (so `active`, now Roles) a render later, and following `active`
+	// then would undo the fragment (#1597). A tab click clears the claim.
 	useEffect(() => {
+		const claim = fragmentClaim.current;
+		// An empty fragment never holds a tab: it is "no fragment", which every
+		// fragment-less URL shares.
+		if (claim?.hash && claim.hash === hashRef.current?.replace(/^#/, "")) {
+			setCurrent(claim.tab);
+			return;
+		}
 		setCurrent(active);
 	}, [active]);
 
@@ -111,6 +125,8 @@ export function MeetingTabs({
 			const owner = panel?.getAttribute(PANEL_ATTR) as MeetingTab | null;
 			if (!owner || !tabsRef.current.includes(owner)) return;
 			pendingScrollId.current = id;
+			// Keyed on the fragment itself, whichever source named it.
+			fragmentClaim.current = { hash: raw, tab: owner };
 			setCurrent(owner);
 			setScrollTick((t) => t + 1);
 		};
@@ -135,6 +151,7 @@ export function MeetingTabs({
 			value={shown}
 			onValueChange={(value) => {
 				const tab = value as MeetingTab;
+				fragmentClaim.current = null;
 				setCurrent(tab);
 				onSelect(tab);
 			}}
