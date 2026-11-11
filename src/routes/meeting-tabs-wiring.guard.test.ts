@@ -133,6 +133,30 @@ describe("the meeting route wires the Ballots awards list (#1583)", () => {
 		expect(block).toContain("<SyncStatus");
 		expect(block).toContain("<AwardsSection");
 		expect(block).toContain("offline={offlineMinutes}");
-		expect(block).toContain("canEdit={true}");
+		expect(block).toContain("canEdit offline={offlineMinutes}");
+	});
+
+	// protects=the Minutes tab's awards list stays read-only, so winners are only
+	// decided in Ballots (AC 1); fails_when=the literal becomes true or a prop
+	// such as canEdit; no_claim=what the component renders read-only
+	// (awards-section.test.tsx drives that)
+	it("renders the Minutes awards list read-only", () => {
+		const minutesSource = flat(
+			readSource("src/components/club/meeting-minutes.tsx"),
+		);
+		expect(minutesSource).toContain(
+			"<AwardsSection meetingId={meetingId} minutes={minutes} canEdit={false} offline={offline}",
+		);
+	});
+
+	// protects=the "Change in Ballots" link is offered only when the Ballots tab
+	// is, and switches to it (AC 2); fails_when=the gate uses another flag, the
+	// tab id changes, or the handler is passed ungated; no_claim=how the link
+	// renders (awards-section.test.tsx drives that)
+	it("gates the Minutes link on ballotsShown and selects the ballots tab", () => {
+		expect(source).toContain(
+			'onChangeInBallots={ ballotsShown ? () => selectTab("ballots") : undefined }',
+		);
+		expect(source).toContain("ballots: ballotsShown,");
 	});
 });

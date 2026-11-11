@@ -57,7 +57,7 @@ let captured: {
 	makeOp: () => MinutesOp;
 } | null = null;
 
-const offlineStub = () =>
+const offlineStub = (queue: MinutesOp[] = []) =>
 	({
 		mutate: async (
 			onlineFn: () => Promise<unknown>,
@@ -67,7 +67,7 @@ const offlineStub = () =>
 		},
 		opMeta: () => ({ opId: "op-fixed", queuedAt: 1 }),
 		busy: false,
-		queue: [] as MinutesOp[],
+		queue,
 		snapshot: null,
 		draining: false,
 		syncError: null,
@@ -79,12 +79,13 @@ function renderSection(
 	props: { canEdit: boolean; onChangeInBallots?: () => void } = {
 		canEdit: true,
 	},
+	queue: MinutesOp[] = [],
 ) {
 	return render(
 		<AwardsSection
 			meetingId="m1"
 			minutes={minutes()}
-			offline={offlineStub()}
+			offline={offlineStub(queue)}
 			clubGuests={[{ id: "g-1", name: "Gia" }]}
 			{...props}
 		/>,
@@ -135,7 +136,8 @@ describe("AwardsSection (#1583)", () => {
 	});
 
 	// protects=an officer can set, change and clear; fails_when=a control is
-	// missing for its state (Set when unset, Change+Clear when set)
+	// missing for its state (Set when unset, Change+Clear when set); no_claim=an
+	// op's shape (the tests below pin it)
 	it("offers Set when unset and Change plus Clear when set", () => {
 		renderSection();
 		expect(screen.getAllByRole("button", { name: "Set" })).toHaveLength(2);
@@ -148,10 +150,11 @@ describe("AwardsSection (#1583)", () => {
 	it("clear calls mutate with the clearAward op and the online call", async () => {
 		renderSection();
 		fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-		expect(op()).toMatchObject({
+		expect(op()).toEqual({
 			type: "clearAward",
-			category: "best_evaluator",
 			opId: "op-fixed",
+			queuedAt: 1,
+			category: "best_evaluator",
 		});
 		await captured?.onlineFn();
 		expect(clearSpy).toHaveBeenCalledWith({
@@ -160,17 +163,23 @@ describe("AwardsSection (#1583)", () => {
 	});
 
 	// protects=a roster member pick keeps its op shape on both channels;
-	// fails_when=memberId or the resolved name is dropped
+	// fails_when=memberId or the resolved name is dropped; no_claim=the picker's
+	// eligibility scoping
 	it("set with a member carries memberId and the member's name", async () => {
 		renderSection();
 		fireEvent.click(screen.getAllByRole("button", { name: "Set" })[0]);
 		fireEvent.click(await screen.findByText("Ana"));
-		expect(op()).toMatchObject({
+		expect(op()).toEqual({
 			type: "setAward",
+			opId: "op-fixed",
+			queuedAt: 1,
 			category: "best_speaker",
 			name: "Ana",
 			isGuest: false,
 			memberId: "mem-ana",
+			guestId: undefined,
+			newGuest: undefined,
+			newGuestId: undefined,
 		});
 		await captured?.onlineFn();
 		expect(setSpy).toHaveBeenCalledWith({
@@ -179,21 +188,29 @@ describe("AwardsSection (#1583)", () => {
 	});
 
 	// protects=an existing guest pick keeps its op shape; fails_when=guestId is
-	// dropped or the op is marked a member
+	// dropped or the op is marked a member; no_claim=the picker's eligibility
+	// scoping
 	it("set with an existing guest carries guestId and isGuest", async () => {
 		renderSection();
 		fireEvent.click(screen.getAllByRole("button", { name: "Set" })[0]);
 		fireEvent.click(await screen.findByText("Gia"));
-		expect(op()).toMatchObject({
+		expect(op()).toEqual({
 			type: "setAward",
+			opId: "op-fixed",
+			queuedAt: 1,
+			category: "best_speaker",
 			name: "Gia",
 			isGuest: true,
+			memberId: undefined,
 			guestId: "g-1",
+			newGuest: undefined,
+			newGuestId: undefined,
 		});
 	});
 
 	// protects=a new guest mints a client id so a drain replay is idempotent;
-	// fails_when=newGuestId is missing or the name is lost
+	// fails_when=newGuestId is missing or the name is lost; no_claim=that the
+	// guest row is created server-side
 	it("set with a new guest carries newGuest and a minted newGuestId", async () => {
 		renderSection();
 		fireEvent.click(screen.getAllByRole("button", { name: "Set" })[0]);
@@ -206,12 +223,56 @@ describe("AwardsSection (#1583)", () => {
 				.closest("form") as HTMLFormElement,
 		);
 		const o = op() as Extract<MinutesOp, { type: "setAward" }>;
-		expect(o).toMatchObject({
+		expect(typeof o.newGuestId).toBe("string");
+		expect(o.newGuestId).toBeTruthy();
+		expect(o).toEqual({
 			type: "setAward",
+			opId: "op-fixed",
+			queuedAt: 1,
+			category: "best_speaker",
 			name: "Zoe",
 			isGuest: true,
+			memberId: undefined,
+			guestId: undefined,
 			newGuest: { name: "Zoe" },
+			newGuestId: o.newGuestId,
 		});
-		expect(typeof o.newGuestId).toBe("string");
+	});
+
+	// protects=the list reads through the offline queue, so a tap that has not
+	// synced still moves the row (AC 5); fails_when=the component stops projecting
+	// the queue over the loader payload; no_claim=the drain or the server
+	it("shows a queued setAward as the winner before it syncs", () => {
+		renderSection({ canEdit: true }, [
+			{
+				type: "setAward",
+				opId: "q1",
+				queuedAt: 2,
+				category: "best_speaker",
+				name: "Ana",
+				isGuest: false,
+				memberId: "mem-ana",
+			},
+		]);
+		expect(screen.getByText(/Ana/)).toBeTruthy();
+		// Best Speaker is now set (Change), Best Table Topics alone is Set.
+		expect(screen.getAllByRole("button", { name: "Set" })).toHaveLength(1);
+		expect(screen.getAllByRole("button", { name: "Change" })).toHaveLength(2);
+	});
+
+	// protects=as above for Clear; fails_when=the projection is dropped, so the
+	// cleared winner still shows; no_claim=the drain or the server
+	it("shows a queued clearAward as Not set before it syncs", () => {
+		renderSection({ canEdit: true }, [
+			{
+				type: "clearAward",
+				opId: "q2",
+				queuedAt: 2,
+				category: "best_evaluator",
+			},
+		]);
+		expect(screen.queryByText(/Ben/)).toBeNull();
+		expect(screen.getAllByText("Not set")).toHaveLength(3);
+		expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
 	});
 });

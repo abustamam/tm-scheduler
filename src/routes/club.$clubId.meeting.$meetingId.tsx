@@ -1696,7 +1696,7 @@ function MeetingView() {
 											<AwardsSection
 												meetingId={meeting.id}
 												minutes={minutes.data}
-												canEdit={true}
+												canEdit
 												offline={offlineMinutes}
 												clubGuests={clubGuests}
 											/>

@@ -1060,6 +1060,25 @@ describe("VoteCounterPanel winner writes paused (#1583)", () => {
 		expect(dq.length).toBeGreaterThan(0);
 		for (const b of dq) expect((b as HTMLButtonElement).disabled).toBe(false);
 	});
+
+	// protects=Close voting stays usable while paused (criterion 8); fails_when=
+	// the pause reaches the close control of an OPEN category; no_claim=that the
+	// close succeeds
+	it("keeps Close voting enabled on an open category while paused", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana", 4)],
+				}),
+			}),
+		);
+		renderPanel({ winnerWritesPaused: true, canManageClub: true });
+		const speaker = card("Best Speaker");
+		await speaker.findByText("Saved changes are still syncing.");
+		const close = speaker.getByRole("button", { name: /Close voting/ });
+		expect((close as HTMLButtonElement).disabled).toBe(false);
+	});
 });
 
 // #1153. `toggle` had an onSuccess and nothing rendering its error, so a
