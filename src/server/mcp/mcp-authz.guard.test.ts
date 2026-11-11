@@ -311,7 +311,10 @@ describe("every MCP tool authorizes (#773)", () => {
 		// Widening this exempts a tool from the club check entirely, so it must
 		// break a test and be argued for rather than land as a one-line edit.
 		// `get-my-feedback.ts` joined in #987: a user-scoped READ of the caller's
-		// own notes, which names no club. `get-my-schedule.ts` joined in #1281 on the same terms. A write tool never belongs here.
+		// own notes, which names no club. `get-my-schedule.ts` joined in #1281 on the same terms.
+		// A write tool belongs here only when it is user-scoped and takes its subject from the
+		// credential: no member, person or club id in its input, so it can write nothing but the
+		// token user's own record. `set-my-contact-preference.ts` joined in #1602 on those terms.
 		expect(Object.keys(AUTHENTICATE_ONLY)).toEqual([
 			"whoami.ts",
 			"get-my-feedback.ts",
