@@ -73,7 +73,9 @@ export function MeetingTabs({
 	// then would undo the fragment (#1597). A tab click clears the claim.
 	useEffect(() => {
 		const claim = fragmentClaim.current;
-		if (claim && claim.hash === hashRef.current) {
+		// An empty fragment never holds a tab: it is "no fragment", which every
+		// fragment-less URL shares.
+		if (claim?.hash && claim.hash === hashRef.current?.replace(/^#/, "")) {
 			setCurrent(claim.tab);
 			return;
 		}
@@ -123,7 +125,8 @@ export function MeetingTabs({
 			const owner = panel?.getAttribute(PANEL_ATTR) as MeetingTab | null;
 			if (!owner || !tabsRef.current.includes(owner)) return;
 			pendingScrollId.current = id;
-			fragmentClaim.current = { hash: fromRouter ?? "", tab: owner };
+			// Keyed on the fragment itself, whichever source named it.
+			fragmentClaim.current = { hash: raw, tab: owner };
 			setCurrent(owner);
 			setScrollTick((t) => t + 1);
 		};
