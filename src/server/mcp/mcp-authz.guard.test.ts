@@ -108,6 +108,13 @@ const AUTHENTICATE_ONLY: Record<string, string> = {
 		"authorize against. It takes no member, person or club id; the subject " +
 		"is auth.user.id and the clubs are auth.clubs, which excludes archived " +
 		"ones. Its audience is member, the only door a plain member has.",
+	"set-my-contact-preference.ts":
+		"set_my_contact_preference is USER-scoped (#1570): the preference lives " +
+		"on the token owner's own Person, not on a club, so there is no one " +
+		"clubId to authorize against. It takes no member, person or club id; " +
+		"whose Person is written comes from the credential alone. It calls " +
+		"authenticateToken and re-checks mayUseConnector on every call, as " +
+		"get-my-feedback.ts does.",
 };
 
 /**
@@ -309,6 +316,7 @@ describe("every MCP tool authorizes (#773)", () => {
 			"whoami.ts",
 			"get-my-feedback.ts",
 			"get-my-schedule.ts",
+			"set-my-contact-preference.ts",
 		]);
 		for (const reason of Object.values(AUTHENTICATE_ONLY)) {
 			expect(reason.length).toBeGreaterThan(20);

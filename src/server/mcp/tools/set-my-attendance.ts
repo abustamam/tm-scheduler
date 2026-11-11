@@ -24,7 +24,10 @@ import { listRoles } from "#/lib/list-roles";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import { roleFreedDutyText } from "#/lib/role-duty-copy";
 import { setPlanStatus } from "#/server/attendance-plan-logic";
-import { releaseSlotsAndMarkUnavailable } from "#/server/availability-logic";
+import {
+	clearPlannedAttendanceCore,
+	releaseSlotsAndMarkUnavailable,
+} from "#/server/availability-logic";
 import { loadTmodMemberId } from "#/server/meeting-authz-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import {
@@ -46,7 +49,7 @@ const TOOL = "set_my_attendance";
 
 const inputSchema = {
 	meetingId: z.string().uuid().describe("From get_my_schedule."),
-	status: z.enum(["coming", "not_coming"]),
+	status: z.enum(["coming", "not_coming", "clear"]),
 	planHash: z
 		.string()
 		.optional()
@@ -58,7 +61,10 @@ const inputSchema = {
 interface Computed {
 	plan: {
 		meeting: ReturnType<typeof meetingPlanHeader>;
-		status: "coming" | "not_coming";
+		status: "coming" | "not_coming" | "clear";
+		/** `clear` only: the answer that would be removed. */
+		currentAnswer?: "coming" | "not_coming" | "reached_out" | null;
+		note?: string;
 		rolesToFree: string[];
 	};
 	planHash: string;
@@ -69,7 +75,7 @@ interface Computed {
 
 async function compute(
 	conn: DbOrTx,
-	args: { meetingId: string; status: "coming" | "not_coming" },
+	args: { meetingId: string; status: "coming" | "not_coming" | "clear" },
 	who: { clubId: string; userId: string; memberId: string },
 ): Promise<Computed> {
 	const facts = await loadMeetingFacts(conn, args.meetingId);
@@ -81,7 +87,27 @@ async function compute(
 		args.status === "not_coming" ? state.held.map((s) => s.label) : [];
 
 	const blocking = meetingStateBlocking(facts);
-	if (isAlreadyStatus(args.status, state) && blocking.length === 0) {
+	if (args.status === "clear") {
+		if (blocking.length === 0 && state.planStatus === null) {
+			blocking.push({
+				code: "ALREADY_THAT_STATUS",
+				message:
+					"You have no answer down for that meeting, so there is nothing to clear.",
+			});
+		} else if (
+			blocking.length === 0 &&
+			state.planStatus !== "coming" &&
+			state.planStatus !== "not_coming"
+		) {
+			// The floor's own refusal: an officer's `reached_out` is not the
+			// member's answer to take back.
+			blocking.push({
+				code: "CANNOT_CLEAR",
+				message:
+					"That answer was recorded by an officer, so you cannot clear it yourself.",
+			});
+		}
+	} else if (isAlreadyStatus(args.status, state) && blocking.length === 0) {
 		blocking.push({
 			code: "ALREADY_THAT_STATUS",
 			message:
@@ -94,6 +120,12 @@ async function compute(
 	const plan = {
 		meeting: meetingPlanHeader(facts),
 		status: args.status,
+		...(args.status === "clear"
+			? {
+					currentAnswer: state.planStatus,
+					note: "Clearing removes your answer. It does NOT give back any roles you released when you answered not coming.",
+				}
+			: {}),
 		rolesToFree,
 	};
 	return {
@@ -125,7 +157,7 @@ export const setMyAttendanceTool: McpToolDefinition = {
 		description:
 			"Tell the club whether the caller is coming to one meeting (the PLAN, not " +
 			"the record of who came: record_attendance, for officers, does that): the same as " +
-			'the app\'s "Can\'t make it" (not_coming) or "I\'m coming". Always the ' +
+			'the app\'s "Can\'t make it" (not_coming), "I\'m coming", or clear (back to no answer; roles already freed stay open). Always the ' +
 			"person this token belongs to; it takes no member id. Call " +
 			"get_my_schedule first to find the meetingId, and ask the user which " +
 			"meeting when more than one meeting or club matches. Call once WITHOUT " +
@@ -158,6 +190,19 @@ export const setMyAttendanceTool: McpToolDefinition = {
 			clubId: who.clubId,
 			compute: (conn) => compute(conn, a, who),
 			apply: async (tx, c, facts) => {
+				if (args.status === "clear") {
+					// The plan write class by name, as `coming` does. The core takes
+					// the connector proof and refuses anything but the token's own row.
+					assertMeetingAccepts(facts.status, "plan");
+					const { cleared } = await clearPlannedAttendanceCore(tx, {
+						memberId: who.memberId,
+						claimedActorMemberId: who.memberId,
+						meetingId: facts.meetingId,
+						clubId: who.clubId,
+						proof: "connector",
+					});
+					return { cleared, released: [], dutyText: null, draftMessage: null };
+				}
 				if (args.status === "coming") {
 					// The plan write class by name, ahead of the plan seam (#1135):
 					// `setPlanStatus` accepts a completed meeting and leaves it to its

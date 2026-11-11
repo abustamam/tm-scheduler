@@ -220,6 +220,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"set_contact_preference",
 			"set_member_standing",
 			"set_my_attendance",
+			"set_my_contact_preference",
 			"set_my_speech_details",
 			"update_meeting_schedule",
 			"upsert_agendas",
@@ -619,6 +620,8 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				meetingId: seed.meetingId,
 				status: "not_coming",
 			}),
+			// #1570. Preview only: the caller's own preference, no guest row.
+			toolsCall("set_my_contact_preference", { preferredContact: null }),
 			// #1303. The officer write: names another member, never a guest row.
 			// A preview only (no planHash), so nothing is written.
 			toolsCall("set_attendance", {

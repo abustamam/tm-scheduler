@@ -116,7 +116,9 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("attendance-plan", "setPlannedAttendance", "member", {
 		tool: ["set_my_attendance", "set_attendance"],
 	}),
-	row("attendance-plan", "clearPlannedAttendance", "member", { gap: true }),
+	row("attendance-plan", "clearPlannedAttendance", "member", {
+		tool: "set_my_attendance",
+	}),
 	row("mentorship", "setMyWillingToMentor", "self", { gap: true }),
 	row("mentorship", "setMyMentorBio", "self", { gap: true }),
 	row("mentorship", "requestMentor", "self", { gap: true }),
@@ -149,8 +151,12 @@ export const PARITY_ROWS: ParityRow[] = [
 			reason: "removing the logo pairs with the browser upload",
 		},
 	}),
-	row("availability", "setAvailability", "member", { gap: true }),
-	row("availability", "clearAvailability", "member", { gap: true }),
+	row("availability", "setAvailability", "member", {
+		tool: "set_my_attendance",
+	}),
+	row("availability", "clearAvailability", "member", {
+		tool: "set_my_attendance",
+	}),
 	row("availability", "markUnavailableReleasing", "member", {
 		tool: "set_my_attendance",
 	}),
@@ -546,7 +552,9 @@ export const PARITY_ROWS: ParityRow[] = [
 		gap: true,
 	}),
 	row("history-import", "importEasySpeakMentors", "admin", { gap: true }),
-	row("contact-preference", "setMyPreferredContact", "self", { gap: true }),
+	row("contact-preference", "setMyPreferredContact", "self", {
+		tool: "set_my_contact_preference",
+	}),
 	row("meeting-agenda-edit", "addAgendaRowFn", "admin", {
 		tool: "edit_agenda",
 	}),

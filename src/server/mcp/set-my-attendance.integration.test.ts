@@ -623,4 +623,173 @@ describe.skipIf(!hasTestDb)("set_my_attendance (#1283)", () => {
 			.where(eq(roleSlots.assignedMemberId, s.memberId));
 		expect(held).toHaveLength(1);
 	});
+
+	// Card (#1570): protects=a member can take back their own answer; preview
+	// writes nothing and says roles are not given back; apply deletes the row and
+	// logs plan_set with a null status; fails_when=the
+	// preview deletes, the row survives, the log lacks the null-status entry;
+	// no_claim=none beyond protects.
+	it("clear: previews, writes nothing, then deletes the row and logs plan_set null", async () => {
+		const s = await club();
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "coming",
+		});
+		const token = await tokenFor(s.memberUserId);
+		const p = (await preview(token, s.meetingId, "clear")) as Preview & {
+			plan: { currentAnswer: string; note: string };
+		};
+		expect(p.blocking).toEqual([]);
+		expect(p.plan.currentAnswer).toBe("coming");
+		expect(p.plan.note).toContain("does NOT give back");
+		expect(await planOf(s)).toBe("coming");
+		const out = await call(token, {
+			meetingId: s.meetingId,
+			status: "clear",
+			planHash: p.planHash,
+		});
+		expect(out).toMatchObject({ cleared: true, released: [] });
+		expect(await planOf(s)).toBeNull();
+		const rows = await testDb
+			.select({ action: activityLog.action, detail: activityLog.detail })
+			.from(activityLog)
+			.where(eq(activityLog.clubId, s.clubId));
+		// As the app's clear logs it: a null status (`clearPlanStatus` stamps no
+		// via/proof, a pre-existing property of the shared seam).
+		expect(rows.find((r) => r.action === "plan_set")?.detail).toMatchObject({
+			status: null,
+		});
+	});
+
+	// Card (#1570): protects=clearing after not_coming does not re-claim released
+	// roles; fails_when=the slots are taken back; no_claim=none.
+	it("clear after not_coming leaves the released slots open", async () => {
+		const s = await club();
+		const slotId = await holdSeededTimer(s);
+		const token = await tokenFor(s.memberUserId);
+		const p1 = await preview(token, s.meetingId, "not_coming");
+		await call(token, {
+			meetingId: s.meetingId,
+			status: "not_coming",
+			planHash: p1.planHash,
+		});
+		const p2 = await preview(token, s.meetingId, "clear");
+		await call(token, {
+			meetingId: s.meetingId,
+			status: "clear",
+			planHash: p2.planHash,
+		});
+		expect(await planOf(s)).toBeNull();
+		const [slot] = await testDb
+			.select({ a: roleSlots.assignedMemberId, st: roleSlots.status })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotId));
+		expect(slot).toEqual({ a: null, st: "open" });
+	});
+
+	// Card (#1570): protects=no answer to clear is "already done", and an
+	// officer-set reached_out is refused to a plain member, in preview and apply;
+	// fails_when=either is deleted or admitted; no_claim=none.
+	it("clear with no answer is ALREADY_THAT_STATUS; a reached_out row is refused and kept", async () => {
+		const s = await club();
+		const token = await tokenFor(s.memberUserId);
+		const none = await preview(token, s.meetingId, "clear");
+		expect(none.blocking[0]?.code).toBe("ALREADY_THAT_STATUS");
+
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "reached_out",
+		});
+		const p = await preview(token, s.meetingId, "clear");
+		expect(p.blocking[0]?.code).toBe("CANNOT_CLEAR");
+		await expectMcpError(
+			call(token, {
+				meetingId: s.meetingId,
+				status: "clear",
+				planHash: p.planHash,
+			}),
+			"BLOCKED",
+		);
+		expect(await planOf(s)).toBe("reached_out");
+	});
+
+	// Card (#1570): protects=the tool clears only the token's own row; fails_when=
+	// a second member's row is touched; no_claim=the input has no member id.
+	it("clear leaves another member's row untouched", async () => {
+		const s = await club();
+		for (const memberId of [s.memberId, s.adminMemberId]) {
+			await testDb.insert(meetingAttendancePlan).values({
+				memberId,
+				meetingId: s.meetingId,
+				status: "not_coming",
+			});
+		}
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "clear");
+		await call(token, {
+			meetingId: s.meetingId,
+			status: "clear",
+			planHash: p.planHash,
+		});
+		expect(await planOf(s)).toBeNull();
+		expect(await planOf(s, s.adminMemberId)).toBe("not_coming");
+	});
+
+	// Card (#1570): protects=a completed meeting's plan is a closed record, so a
+	// clear is refused and the row stays; fails_when=the clear deletes the row of
+	// a completed meeting; no_claim=a started or cancelled meeting (the coming
+	// test above covers the shared lifecycle answers).
+	it("clear on a completed meeting is refused and the plan row is untouched", async () => {
+		const s = await club();
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "coming",
+		});
+		await testDb
+			.update(meetings)
+			.set({ status: "completed" })
+			.where(eq(meetings.id, s.meetingId));
+		const token = await tokenFor(s.memberUserId);
+		expect(
+			(await preview(token, s.meetingId, "clear")).blocking.map((b) => b.code),
+		).toEqual(["MEETING_COMPLETED"]);
+		await expectMcpError(
+			Promise.resolve(
+				call(token, {
+					meetingId: s.meetingId,
+					status: "clear",
+					planHash: "x",
+				}),
+			),
+			"LOCKED",
+		);
+		expect(await planOf(s)).toBe("coming");
+	});
+
+	it("clear: a stale hash is PLAN_STALE and the row stays", async () => {
+		const s = await club();
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "coming",
+		});
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "clear");
+		await testDb
+			.update(meetingAttendancePlan)
+			.set({ status: "not_coming" })
+			.where(eq(meetingAttendancePlan.memberId, s.memberId));
+		await expectMcpError(
+			call(token, {
+				meetingId: s.meetingId,
+				status: "clear",
+				planHash: p.planHash,
+			}),
+			"PLAN_STALE",
+		);
+		expect(await planOf(s)).toBe("not_coming");
+	});
 });

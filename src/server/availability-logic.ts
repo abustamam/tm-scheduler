@@ -725,15 +725,33 @@ export async function clearPlannedAttendanceCore(
 		clubId: string;
 		/** The actor the CLIENT asserted, if any; the RAW claim. */
 		claimedActorMemberId?: string;
+		/** `"connector"` (#1570): a token call, whose subject must be the actor
+		 *  itself ({@link connectorActor}); it has no cookie session for
+		 *  `resolveActor` to read. Omitted: the session path, unchanged. The floor
+		 *  stays `clearFloor`'s `self` arm, so only `coming` / `not_coming` clear. */
+		proof?: "connector";
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
-	const resolved = await resolveActor({
-		clubId: args.clubId,
-		meetingId: args.meetingId,
-		memberId: args.memberId,
-		claimedActorMemberId: args.claimedActorMemberId,
-	});
-	assertSessionProof(resolved);
+	const resolved =
+		args.proof === "connector"
+			? connectorActor(args.memberId, args.claimedActorMemberId)
+			: await resolveActor({
+					clubId: args.clubId,
+					meetingId: args.meetingId,
+					memberId: args.memberId,
+					claimedActorMemberId: args.claimedActorMemberId,
+				});
+	if (args.proof === "connector") {
+		// Same gate as `releaseSlotsAndMarkUnavailable`: the write needs a proven
+		// session OR a connector acting on its own row, nothing else.
+		if (
+			!isConnectorSelf(resolved.proof, resolved.actorMemberId, args.memberId)
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+	} else {
+		assertSessionProof(resolved);
+	}
 	const { actorMemberId, via } = resolved;
 	return clearPlanStatus(database, {
 		memberId: args.memberId,
