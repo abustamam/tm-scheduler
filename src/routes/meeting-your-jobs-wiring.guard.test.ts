@@ -38,12 +38,28 @@ describe("MeetingYourJobs wiring (#1376)", () => {
 
 	// protects=no new server surface or private fields; fails_when=the card
 	// imports another server module; no_claim=the view's fields are public-safe.
-	it("imports only #/server/personal-meeting from src/server", () => {
+	it("imports only the personal-meeting view and confirmSlot from src/server", () => {
 		const raw = readFileSync(resolve(ROOT, CARD), "utf8");
-		const mods = [...raw.matchAll(/from\s+"(#\/server\/[^"]+)"/g)].map(
-			(m) => m[1],
-		);
+		const mods = [
+			...raw.matchAll(/(?:from\s+|import\()\s*"(#\/server\/[^"]+)"/g),
+		].map((m) => m[1]);
 		expect(mods.length).toBeGreaterThan(0);
-		expect(new Set(mods)).toEqual(new Set(["#/server/personal-meeting"]));
+		// #1612: plus `confirmSlot`, the holder arm (its server checks are the gate).
+		expect(new Set(mods)).toEqual(
+			new Set(["#/server/personal-meeting", "#/server/slots"]),
+		);
+	});
+
+	// protects=the card's Confirm acts as the page's resolved member, per slot;
+	// fails_when=the call drops memberId (selecting the officer arm) or loses
+	// the slot; no_claim=the server accepts it.
+	it("confirms through confirmSlot with the slot and the page's memberId (#1612)", () => {
+		const raw = readSource(CARD).replace(/\s+/g, " ");
+		expect(raw).toContain("await confirmSlot({ data: { slotId, memberId } });");
+		expect(raw).toContain(
+			"onClick={() => void confirmRole(role.slotId, role.roleName)}",
+		);
+		expect(raw).toMatch(/role\.status === "claimed" && canConfirm/);
+		expect(raw).toMatch(/view\.planStatus === "coming"/);
 	});
 });

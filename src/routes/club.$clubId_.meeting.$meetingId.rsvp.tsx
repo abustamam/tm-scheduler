@@ -41,6 +41,7 @@ import {
 import { resolveClubOrRedirect } from "#/lib/club-route";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { rsvpPageUrl } from "#/lib/lineup-blast";
+import { listRoles } from "#/lib/list-roles";
 import { mapLink } from "#/lib/map-link";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
@@ -55,6 +56,7 @@ import {
 	getPublicPersonalMeetingView,
 	type PersonalMeetingView,
 } from "#/server/personal-meeting";
+import { confirmSlot } from "#/server/slots";
 
 // Escapes the `/club/$clubId` shell (trailing `_`), like the ballot and the
 // feedback page: this is the page the lineup blast's "Coming Thursday? Tap here"
@@ -413,6 +415,27 @@ function RsvpControls({
 		React.ComponentProps<typeof CoverSheet>["slots"]
 	>([]);
 	const answered = view.planStatus;
+	// One in-flight flag for every Confirm button (#1612): one request per tap.
+	const confirmInFlight = useRef(false);
+	const [confirming, setConfirming] = useState<string | null>(null);
+	const confirmRole = async (slotId: string, roleName: string) => {
+		if (confirmInFlight.current) return;
+		confirmInFlight.current = true;
+		setConfirming(slotId);
+		try {
+			// The holder arm, selected by `memberId`: the answer is not touched.
+			await confirmSlot({ data: { slotId, memberId: view.member.id } });
+			toast.success(`Confirmed as ${roleName}.`);
+		} catch (err) {
+			showWriteError(err, "Couldn't confirm that role.");
+		} finally {
+			// A stale slot (released, reassigned, confirmed by an officer) also
+			// refetches, so the button disappears.
+			await onChanged().catch(() => undefined);
+			confirmInFlight.current = false;
+			setConfirming(null);
+		}
+	};
 	const heldRoles = view.roles.map((r) => r.roleName);
 	const meetingPath = promoMeetingPath(clubKey, meetingKey);
 
@@ -427,7 +450,7 @@ function RsvpControls({
 		setPending(coming ? "coming" : "not_coming");
 		try {
 			if (coming) {
-				await setPlannedAttendance({
+				const { confirmedRoles } = await setPlannedAttendance({
 					data: {
 						memberId: view.member.id,
 						meetingId: view.meeting.id,
@@ -435,7 +458,11 @@ function RsvpControls({
 						confirmHeldRoles: true,
 					},
 				});
-				toast.success("Great, see you there.");
+				toast.success(
+					confirmedRoles.length > 0
+						? `Great, you're confirmed as ${listRoles(confirmedRoles)}. See you there.`
+						: "Great, see you there.",
+				);
 			} else {
 				const { released } = await setPlannedAttendance({
 					data: {
@@ -472,9 +499,40 @@ function RsvpControls({
 	// Answered and not signed in: the answer stands until a session changes it.
 	const locked = answered !== null && !signedIn;
 
+	// Every held role with its status, in every state. A Confirm button only for
+	// a `claimed` role while the answer is Coming; this component is mounted only
+	// while the meeting accepts answers (not cancelled, not over).
+	const rolesBlock =
+		view.roles.length > 0 ? (
+			<ul className="space-y-2">
+				{view.roles.map((r) => (
+					<li key={r.slotId} className="space-y-1">
+						<p className="text-sm">
+							<span className="font-semibold">{r.roleName}</span>
+							<span className="text-muted-foreground">
+								{" "}
+								· {r.status === "confirmed" ? "Confirmed" : "Not confirmed yet"}
+							</span>
+						</p>
+						{r.status === "claimed" && answered === "coming" ? (
+							<Button
+								className="min-h-11 w-full"
+								disabled={confirming !== null}
+								aria-busy={confirming === r.slotId}
+								onClick={() => void confirmRole(r.slotId, r.roleName)}
+							>
+								Confirm {r.roleName}
+							</Button>
+						) : null}
+					</li>
+				))}
+			</ul>
+		) : null;
+
 	return (
 		<div className="space-y-4">
 			<p className="text-sm">Hi {view.member.name}.</p>
+			{rolesBlock}
 			{locked ? (
 				<div className="space-y-3">
 					<p className="text-base font-semibold">

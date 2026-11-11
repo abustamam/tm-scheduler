@@ -10,13 +10,24 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("#/server/personal-meeting", () => ({
 	getPublicPersonalMeetingView: vi.fn(),
 }));
 
+vi.mock("#/server/slots", () => ({ confirmSlot: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), message: vi.fn() } }));
+vi.mock("#/components/write-error-toast", () => ({ showWriteError: vi.fn() }));
+
+const { confirmSlot } = await import("#/server/slots");
 const { getPublicPersonalMeetingView } = await import(
 	"#/server/personal-meeting"
 );
@@ -417,5 +428,103 @@ describe("buildDutyContext", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("MeetingYourJobs confirm (#1612)", () => {
+	const claimed = (slotId: string, roleName: string) =>
+		role({ slotId, roleName, roleKey: "x", status: "claimed" });
+	const confirmBtn = (n: string) => screen.queryByRole("button", { name: n });
+
+	it("shows status per role and a Confirm button only for a claimed role", async () => {
+		vi.mocked(confirmSlot).mockResolvedValue({} as never);
+		await renderCard(
+			makeView({
+				planStatus: "coming",
+				roles: [
+					claimed("s1", "Timer"),
+					role({ slotId: "s2", roleName: "Grammarian", status: "confirmed" }),
+				],
+			}),
+		);
+		expect(await screen.findByText("Not confirmed yet")).toBeTruthy();
+		expect(screen.getByText("Confirmed")).toBeTruthy();
+		expect(confirmBtn("Confirm Timer")).toBeTruthy();
+		expect(confirmBtn("Confirm Grammarian")).toBeNull();
+	});
+
+	it("one tap calls confirmSlot with the slot and memberId, then refetches", async () => {
+		vi.mocked(confirmSlot).mockResolvedValue({} as never);
+		await renderCard(
+			makeView({
+				planStatus: "coming",
+				roles: [claimed("s1", "Timer"), claimed("s2", "Ah-Counter")],
+			}),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Confirm Timer" }),
+		);
+		await waitFor(() => expect(confirmSlot).toHaveBeenCalledTimes(1));
+		expect(confirmSlot).toHaveBeenCalledWith({
+			data: { slotId: "s1", memberId: MEMBER },
+		});
+		await waitFor(() => expect(mockView.mock.calls.length).toBeGreaterThan(1));
+	});
+
+	it("a double tap sends one confirmSlot", async () => {
+		let release: () => void = () => {};
+		vi.mocked(confirmSlot).mockReturnValue(
+			new Promise((r) => {
+				release = () => r({} as never);
+			}) as never,
+		);
+		await renderCard(
+			makeView({ planStatus: "coming", roles: [claimed("s1", "Timer")] }),
+		);
+		const btn = await screen.findByRole("button", { name: "Confirm Timer" });
+		fireEvent.click(btn);
+		fireEvent.click(btn);
+		release();
+		await waitFor(() => expect(confirmSlot).toHaveBeenCalledTimes(1));
+	});
+
+	it("a stale-slot error refetches the view", async () => {
+		vi.mocked(confirmSlot).mockRejectedValue(new Error("Role not claimed."));
+		await renderCard(
+			makeView({ planStatus: "coming", roles: [claimed("s1", "Timer")] }),
+		);
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Confirm Timer" }),
+		);
+		await waitFor(() => expect(mockView.mock.calls.length).toBeGreaterThan(1));
+	});
+
+	it.each([
+		["not_coming", {}],
+		["unanswered", { planStatus: null }],
+	] as const)("no Confirm when the answer is %s", async (label, over) => {
+		await renderCard(
+			makeView({
+				planStatus: label === "not_coming" ? "not_coming" : null,
+				roles: [claimed("s1", "Timer")],
+				...over,
+			}),
+		);
+		expect(await screen.findByText("Not confirmed yet")).toBeTruthy();
+		expect(confirmBtn("Confirm Timer")).toBeNull();
+	});
+
+	it.each([
+		["completed", { status: "completed" as const }, 7 * 86400000],
+		["past", {}, -3 * 86400000],
+	])("no Confirm on a %s meeting", async (_l, meeting, offset) => {
+		await renderCard(
+			makeView(
+				{ planStatus: "coming", roles: [claimed("s1", "Timer")] },
+				{ ...meeting, scheduledAt: new Date(Date.now() + offset) },
+			),
+		);
+		expect(await screen.findByText("Not confirmed yet")).toBeTruthy();
+		expect(confirmBtn("Confirm Timer")).toBeNull();
 	});
 });

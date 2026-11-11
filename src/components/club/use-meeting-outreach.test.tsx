@@ -96,6 +96,46 @@ describe("useMeetingOutreach", () => {
 		expect(data.actorMemberId).toBeUndefined();
 	});
 
+	it("marking YOURSELF coming sends confirmHeldRoles and names what was confirmed (#1612)", async () => {
+		setPlannedAttendance.mockResolvedValueOnce({
+			released: 0,
+			confirmedRoles: ["Timer", "Ah-Counter"],
+		} as never);
+		const { result } = setup();
+		await act(() => result.current.writeRung("me", "coming" as never));
+		expect(setPlannedAttendance).toHaveBeenLastCalledWith({
+			data: expect.objectContaining({ memberId: "me", confirmHeldRoles: true }),
+		});
+		expect(toastSuccess).toHaveBeenCalledWith(
+			expect.stringContaining("Timer and Ah-Counter"),
+		);
+	});
+
+	it("marking ANOTHER member coming (an officer) sends no confirm flag, and says nothing (#1612)", async () => {
+		const { result } = setup({ effectiveCanManage: true });
+		await act(() => result.current.writeRung("a", "coming" as never));
+		const data = (
+			setPlannedAttendance.mock.calls.at(-1)?.[0] as {
+				data: Record<string, unknown>;
+			}
+		).data;
+		expect(data).not.toHaveProperty("confirmHeldRoles");
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
+
+	it("marking yourself not coming sends no confirm flag (#1612)", async () => {
+		const { result } = setup({ declineFreesRoles: () => false });
+		await act(() => result.current.writeRung("me", "not_coming" as never));
+		const p = result.current.pendingDecline as never;
+		await act(() => result.current.confirmDecline(p));
+		const data = (
+			setPlannedAttendance.mock.calls.at(-1)?.[0] as {
+				data: Record<string, unknown>;
+			}
+		).data;
+		expect(data).not.toHaveProperty("confirmHeldRoles");
+	});
+
 	it("clearing a rung calls the clear write, not the set write", async () => {
 		const { result } = setup();
 		await act(() => result.current.writeRung("me", null));
