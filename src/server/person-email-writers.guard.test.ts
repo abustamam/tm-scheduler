@@ -151,6 +151,21 @@ const WAIVERS: Array<{
 			"an officer's correction of a guest's contact, on guest-only unbound Persons their club holds a guest row on (#1125)",
 		requiresGuestContactWritable: true,
 	},
+	// A guest merge filling the keeper Person's BLANK email from the absorbed,
+	// guest-only Person it is about to delete (#1609). Club-reachable (an admin's
+	// click). The UPDATE runs after the absorbed Person is gone, and carries
+	// `guestContactWritable(clubId)` (nobody signed in as the keeper, no
+	// membership, this club holds a guest row on it) AND `isNull(people.email)`
+	// in its own WHERE: a stored address is never overwritten, and a member's or
+	// signed-in Person is never written from a guest card.
+	{
+		file: "server/guest-merge-logic.ts",
+		fn: "applyMergeGuests",
+		sites: 1,
+		reason:
+			"fills a blank keeper-Person email from the absorbed guest-only Person (#1609)",
+		requiresGuestContactWritable: true,
+	},
 	// The anonymous guest book does NOT appear here since #1157: an address typed
 	// without a session is a club's note on its own guest row (`guests.book_email`),
 	// never a `people.email` write. `guest-book-email.guard.test.ts` holds that.

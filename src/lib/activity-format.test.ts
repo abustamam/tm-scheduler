@@ -96,6 +96,18 @@ describe("formatActivity", () => {
 		expect(summary).not.toBe("club_data_exported");
 	});
 
+	it("guest_merge renders human-readable text, not the raw enum", () => {
+		const e = {
+			...base,
+			targetType: "club",
+			action: "guest_merge",
+			actorName: "Faisal",
+		} as unknown as ActivityEntry;
+		const { summary } = formatActivity(e);
+		expect(summary).toMatch(/merged two guest records/i);
+		expect(summary).not.toBe("guest_merge");
+	});
+
 	it("claim names the role", () => {
 		const e = {
 			...base,

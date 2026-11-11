@@ -401,6 +401,11 @@ const MEETING_WRITERS: Record<string, Entry> = {
 		reason:
 			"Deleting a guest opens the slots they held, conditionally on the guest still holding them (the race guard that keeps a slot taken for a member), on past meetings as well. A person-level change, not a plan write.",
 	},
+	"src/server/guest-merge-logic.ts#applyMergeGuests": {
+		class: "exempt",
+		reason:
+			"Folds one guest record of the club into another (#1609): re-points the absorbed guest's attendance, Table Topics, awards, votes, ballot links, disqualifications, invites, RSVPs and role slots onto the keeper, on past meetings as well, so a person's history follows them. It changes whose record a row is, not what is planned, so the meeting's status does not decide it; the club write lock and admin standing are asked inside the transaction.",
+	},
 	"src/server/guest-pipeline-logic.ts#applyLinkGuestToMember": {
 		class: "exempt",
 		reason: GUEST_REPOINT,
