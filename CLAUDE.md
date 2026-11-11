@@ -235,10 +235,10 @@ been shown to pay, release ceremony is zero, deferred debt is not logged. `/ship
 
 | To… | Use |
 |---|---|
-| Shape a feature | brainstorming or `/grilling`, then **always `/spec`** → `ready-for-agent` issues citing files. `/plan-eng-review` only if `/spec` emits three or more. |
+| Shape a feature | brainstorming or `/grilling`, then **always `/spec`** → `ready-for-agent` issues citing files. `/autoplan` only if `/spec` emits three or more. |
 | Triage the room's issues | `/triage` |
 | Plan a wave | `bun run batch:issues`, acted on per the `dispatching-issue-waves` project skill |
-| Debug | `/investigate` (satisfies superpowers' systematic-debugging gate) |
+| Debug | superpowers' `systematic-debugging` (gstack retired `/investigate` in v1.98) |
 | Open a PR | `gh pr create`. The agent stops there. |
 | Review a PR | `/review-pr N` from the main session; gstack `/review` in the PR's worktree **as well** for a risk category (below). |
 | Land | `gh pr merge --squash --auto` (needs "Allow auto-merge" ON). `gh pr update-branch N` only for a real conflict. |
@@ -291,13 +291,13 @@ satisfies superpowers' brainstorming gate. writing-plans and subagent-driven-dev
 retired here.
 
 ```
-room → file issues → /triage → ready-for-agent → batch:issues → worktree → /investigate → implement
+room → file issues → /triage → ready-for-agent → batch:issues → worktree → debug → implement
                             │                                                → gh pr create → /review-pr → merge → /qa-only (per wave)
                             ├→ ready-for-human → /grilling → /spec → ready-for-agent
                             └→ needs-info → wait
 idea → [brainstorming | /grilling] → /spec → ready-for-agent issues → (as above)
 ```
 
-`/investigate` before implementing: given "the banner says the wrong thing", an agent patches the
-banner; #448's cause was one line two functions away. `/browse` needs
-`GSTACK_CHROMIUM_NO_SANDBOX=1` here.
+Find the root cause (`systematic-debugging`) before implementing: given "the banner says the
+wrong thing", an agent patches the banner; #448's cause was one line two functions away.
+`/browse` needs `GSTACK_CHROMIUM_NO_SANDBOX=1` here.
