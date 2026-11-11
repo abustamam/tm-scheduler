@@ -21,7 +21,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { members, roleDefinitions, roleSlots } from "#/db/schema";
+import { members, roleSlots } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
 import { lockClubForWrite } from "#/server/club-write-lock";
 import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
@@ -38,14 +38,16 @@ import {
 	loadLabelledSlots,
 	loadMeetingFacts,
 	type MemberBlockingItem,
+	meetingPlanHeader,
 	meetingStateBlocking,
+	PLAN_STALE_MESSAGE,
 	type Tx,
 	throwIfLocked,
 } from "../member-meeting";
 import type { McpToolDefinition } from "../tool";
-import { isoInTimezone } from "./get-my-schedule";
 
 const TOOL = "release_my_role";
+const NO_LONGER_HELD = "You no longer hold that role.";
 
 const inputSchema = {
 	meetingId: z.string().uuid().describe("From get_my_schedule."),
@@ -173,34 +175,25 @@ async function compute(
 		}
 	}
 
+	// `releaseSlotCore` / `reassignSlotCore` null the slot's `speechId` whatever the
+	// role, so the warning keys on the link, not on the role being a speaker role.
 	let speech: string | null = null;
+	let speechId: string | null = null;
 	if (chosen) {
 		const [row] = await conn
-			.select({
-				speechId: roleSlots.speechId,
-				isSpeakerRole: roleDefinitions.isSpeakerRole,
-			})
+			.select({ speechId: roleSlots.speechId })
 			.from(roleSlots)
-			.innerJoin(
-				roleDefinitions,
-				eq(roleDefinitions.id, roleSlots.roleDefinitionId),
-			)
 			.where(eq(roleSlots.id, chosen.slotId))
 			.limit(1);
-		if (row?.isSpeakerRole && row.speechId) {
-			speech = args.toMemberId
-				? "This slot has a speech attached. Handing the slot to another member unlinks it; the speech stays with you, unscheduled."
-				: "This slot has a speech attached. Releasing unlinks it; the speech stays with you, unscheduled, and is not deleted.";
+		speechId = row?.speechId ?? null;
+		if (speechId) {
+			speech =
+				"This slot has a speech linked. This unlinks it from the slot; the speech is not deleted and stays with its owner.";
 		}
 	}
 
 	const plan = {
-		meeting: {
-			meetingId: facts.meetingId,
-			clubName: facts.clubName,
-			startsAt: isoInTimezone(facts.scheduledAt, facts.timezone),
-			status: facts.status,
-		},
+		meeting: meetingPlanHeader(facts),
 		slotLabel: chosen?.label ?? null,
 		action: args.toMemberId ? ("handoff" as const) : ("release" as const),
 		toMember,
@@ -216,6 +209,7 @@ async function compute(
 				...plan,
 				state: {
 					slotId: chosen?.slotId ?? null,
+					speechId,
 					toMemberId: args.toMemberId ?? null,
 					matching: matching
 						.map((s) => ({
@@ -292,11 +286,11 @@ export const releaseMyRoleTool: McpToolDefinition = {
 			throwIfLocked(facts);
 			const c = await compute(tx, args, who);
 			if (c.planHash !== hash) {
-				throw new McpError(
-					"PLAN_STALE",
-					"That meeting changed since you previewed it. Review the fresh plan and ask the user again.",
-					{ plan: c.plan, planHash: c.planHash, blocking: c.blocking },
-				);
+				throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE, {
+					plan: c.plan,
+					planHash: c.planHash,
+					blocking: c.blocking,
+				});
 			}
 			const first = c.blocking[0];
 			if (first || !c.slotId || !c.plan.slotLabel) {
@@ -311,11 +305,11 @@ export const releaseMyRoleTool: McpToolDefinition = {
 			}
 			// From the locked row, not the read above: only the caller's own role.
 			if ((await lockedHolder(tx, c.slotId)) !== who.memberId) {
-				throw new McpError("BLOCKED", "You no longer hold that role.", {
+				throw new McpError("BLOCKED", NO_LONGER_HELD, {
 					blocking: [
 						{
 							code: "NOT_YOURS",
-							message: "You no longer hold that role.",
+							message: NO_LONGER_HELD,
 						},
 					],
 				});

@@ -8,7 +8,7 @@
  * no_claim=tokens are minted directly (no OAuth round trip).
  */
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -17,6 +17,7 @@ import {
 	meetings,
 	members,
 	roleSlots,
+	speeches,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -368,5 +369,192 @@ describe.skipIf(!hasTestDb)("release_my_role (#1568)", () => {
 			planHash: expect.any(String),
 		});
 		expect((await slotRow(s))?.holder).toBe(s.memberId);
+	});
+
+	/** A second Timer slot (same meeting, same role) held by `holder`. */
+	async function secondTimer(s: SeededClub, holder: string | null) {
+		const [base] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.id, s.slotId));
+		if (!base) throw new Error("seed slot missing");
+		const { id: _id, ...rest } = base;
+		const [row] = await testDb
+			.insert(roleSlots)
+			.values({
+				...rest,
+				slotIndex: base.slotIndex + 1,
+				assignedMemberId: holder,
+				status: holder ? "claimed" : "open",
+			})
+			.returning({ id: roleSlots.id });
+		if (!row) throw new Error("insert returned no row");
+		return row.id;
+	}
+	async function holderOf(slotId: string) {
+		const [row] = await testDb
+			.select({ holder: roleSlots.assignedMemberId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slotId));
+		return row?.holder ?? null;
+	}
+
+	it("another member's slotId is refused even when the caller holds a slot with the same label", async () => {
+		const s = await club();
+		await hold(s, s.memberId);
+		const theirs = await secondTimer(s, s.adminMemberId);
+		const token = await tokenFor(s.memberUserId);
+		const args = { meetingId: s.meetingId, role: "Timer", slotId: theirs };
+		const p = await preview(token, args);
+		expect(p.blocking.map((b) => b.code)).toEqual(["NOT_YOURS"]);
+		expect(p.plan.slotLabel).toBeNull();
+		await expectMcpError(
+			Promise.resolve(call(token, { ...args, planHash: p.planHash })),
+			"BLOCKED",
+		);
+		expect(await holderOf(theirs)).toBe(s.adminMemberId);
+		expect(await slotRow(s)).toEqual({ holder: s.memberId, status: "claimed" });
+		expect(await log(s, "release")).toEqual([]);
+	});
+
+	it("a change of holder on another matching slot alone (plan text identical) is PLAN_STALE", async () => {
+		const s = await club();
+		await hold(s, s.memberId);
+		const other = await secondTimer(s, s.adminMemberId);
+		const token = await tokenFor(s.memberUserId);
+		const args = { meetingId: s.meetingId, role: "Timer", slotId: s.slotId };
+		const p = await preview(token, args);
+		expect(p.blocking).toEqual([]);
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: null, status: "open" })
+			.where(eq(roleSlots.id, other));
+		const fresh = await preview(token, args);
+		expect(fresh.plan).toEqual(p.plan);
+		await expectMcpError(
+			Promise.resolve(call(token, { ...args, planHash: p.planHash })),
+			"PLAN_STALE",
+		);
+		expect(await slotRow(s)).toEqual({ holder: s.memberId, status: "claimed" });
+		expect(await log(s, "release")).toEqual([]);
+	});
+
+	it("a linked speech warns whatever the role, is unlinked on apply and never deleted; a swapped speech is PLAN_STALE", async () => {
+		const s = await club();
+		await hold(s, s.memberId);
+		const [adminRow] = await testDb
+			.select({ personId: members.personId })
+			.from(members)
+			.where(eq(members.id, s.adminMemberId));
+		const personId = adminRow?.personId ?? "";
+		const mk = async (title: string) => {
+			const [row] = await testDb
+				.insert(speeches)
+				.values({ personId, title })
+				.returning({ id: speeches.id });
+			if (!row) throw new Error("insert returned no row");
+			return row.id;
+		};
+		const first = await mk("Ice Breaker");
+		const second = await mk("Second");
+		const link = (id: string) =>
+			testDb
+				.update(roleSlots)
+				.set({ speechId: id })
+				.where(eq(roleSlots.id, s.slotId));
+		await link(first);
+		const token = await tokenFor(s.memberUserId);
+		const args = { meetingId: s.meetingId, role: "Timer" };
+		const p = await preview(token, args);
+		expect(p.plan.speech).toContain("unlinks it from the slot");
+		expect(p.plan.speech).toContain("not deleted");
+
+		// Swap the linked speech: same plan text, different hash.
+		await link(second);
+		await expectMcpError(
+			Promise.resolve(call(token, { ...args, planHash: p.planHash })),
+			"PLAN_STALE",
+		);
+		expect((await slotRow(s))?.holder).toBe(s.memberId);
+
+		const q = await preview(token, args);
+		await call(token, { ...args, planHash: q.planHash });
+		const [slot] = await testDb
+			.select({
+				speechId: roleSlots.speechId,
+				holder: roleSlots.assignedMemberId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, s.slotId));
+		expect(slot).toEqual({ speechId: null, holder: null });
+		const kept = await testDb
+			.select({ id: speeches.id })
+			.from(speeches)
+			.where(eq(speeches.personId, personId));
+		expect(kept.map((r) => r.id).sort()).toEqual([first, second].sort());
+	});
+
+	it("the holder is re-checked under the slot row's lock: a holder who changes while the apply waits blocks it", async () => {
+		const s = await club();
+		await hold(s, s.memberId);
+		const token = await tokenFor(s.memberUserId);
+		const args = { meetingId: s.meetingId, role: "Timer" };
+		const p = await preview(token, args);
+
+		// Connection A takes the slot row's lock and moves the role to the admin,
+		// uncommitted. The apply (connection B) takes the club lock, recomputes
+		// against the OLD holder (READ COMMITTED), so the hash still matches, and
+		// then blocks in `lockedHolder`'s FOR UPDATE until A commits.
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		let locked: () => void = () => {};
+		const hasLock = new Promise<void>((r) => {
+			locked = r;
+		});
+		const a = testDb.transaction(async (tx) => {
+			await tx
+				.select({ id: roleSlots.id })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, s.slotId))
+				.for("update");
+			await tx
+				.update(roleSlots)
+				.set({ assignedMemberId: s.adminMemberId })
+				.where(eq(roleSlots.id, s.slotId));
+			locked();
+			await gate;
+		});
+		await hasLock;
+		const apply = call(token, { ...args, planHash: p.planHash }).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		// Wait until the apply is genuinely blocked on the row lock.
+		const deadline = Date.now() + 10_000;
+		for (;;) {
+			const res = await testDb.execute(
+				sql`select count(*)::int as n from pg_stat_activity
+					where wait_event_type = 'Lock' and datname = current_database()
+					and query ilike '%role_slots%for update%'`,
+			);
+			if (Number((res.rows[0] as { n: number }).n) > 0) break;
+			if (Date.now() > deadline) throw new Error("apply never blocked");
+			await new Promise((r) => setTimeout(r, 25));
+		}
+		release();
+		await a;
+		const err = await apply;
+		expect(err).toBeInstanceOf(McpError);
+		expect((err as InstanceType<typeof McpError>).code).toBe("BLOCKED");
+		expect((err as InstanceType<typeof McpError>).detail).toMatchObject({
+			blocking: [expect.objectContaining({ code: "NOT_YOURS" })],
+		});
+		expect(await slotRow(s)).toEqual({
+			holder: s.adminMemberId,
+			status: "claimed",
+		});
+		expect(await log(s, "release")).toEqual([]);
 	});
 });

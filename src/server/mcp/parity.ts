@@ -34,8 +34,8 @@
  * an `"officer"` tool, `member` and `self` a `"member"` tool; `areaDirector`,
  * `superadmin` and `public` have no connector audience, so such a row cannot be
  * a `tool` row. A member-gated function whose only connector counterpart is an
- * officer tool (`reassignSlot` vs `assign_roles`) is a `gap`: the member-scoped
- * tool is what is missing.
+ * officer tool is a `gap`: the
+ * member-scoped tool is what is missing.
  *
  * Mixed-audience note: a `gap` row's audience is the maintainer's to confirm when
  * the tool is built.

@@ -52,7 +52,9 @@
  * the meeting's club, resolved by `authorizeTokenForMeeting` from a verified
  * `tmk_` or OAuth credential. It is accepted ONLY where actor === subject
  * ({@link isConnectorSelf}); the session-only rulings (votes, ballots, slot
- * confirm, minutes) never admit it.
+ * confirm, minutes) never admit it. One exception: `release_my_role`'s hand-off
+ * calls `reassignSlotCore` with `connector` where the subject is the recipient
+ * (maintainer decision 2026-11-09, #1568).
  */
 export type WriteProof = "session" | "asserted" | "connector";
 
