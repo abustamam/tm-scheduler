@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("#/server/personal-meeting", () => ({
 	getPublicPersonalMeetingView: vi.fn(),
 }));
+vi.mock("#/server/slots", () => ({ confirmSlot: vi.fn() }));
 vi.mock("#/server/availability", () => ({
 	markUnavailableReleasing: vi.fn(async () => ({ ok: true, released: 1 })),
 }));

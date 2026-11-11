@@ -59,6 +59,7 @@ vi.mock("#/server/personal-meeting", () => ({
 vi.mock("#/server/role-definitions", () => ({
 	getPublicClubRoles: vi.fn().mockResolvedValue([]),
 }));
+vi.mock("#/server/slots", () => ({ confirmSlot: vi.fn() }));
 vi.mock("#/lib/club-route", () => ({ resolveClubOrRedirect: vi.fn() }));
 vi.mock("#/server/club-logo", () => ({ getClubLogoMeta: vi.fn() }));
 vi.mock("#/server/voting", () => ({
