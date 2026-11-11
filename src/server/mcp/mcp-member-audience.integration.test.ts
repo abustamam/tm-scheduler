@@ -368,6 +368,16 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		).resolves.toMatchObject({
 			blocking: [expect.objectContaining({ code: "NO_SUCH_ROLE" })],
 		});
+		// #1568: release_my_role is a member tool; the seeded meeting has no
+		// "Toastmaster", so the preview blocks rather than writes.
+		await expect(
+			call("release_my_role", token, {
+				meetingId: s.meetingId,
+				role: "Toastmaster",
+			}),
+		).resolves.toMatchObject({
+			blocking: [expect.objectContaining({ code: "NO_SUCH_ROLE" })],
+		});
 	});
 
 	/**

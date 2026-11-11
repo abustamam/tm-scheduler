@@ -35,6 +35,7 @@ import { listMeetingsTool } from "./list-meetings";
 import { recordAttendanceTool } from "./record-attendance";
 import { recordGuestBookTool } from "./record-guest-book";
 import { recordTableTopicsTool } from "./record-table-topics";
+import { releaseMyRoleTool } from "./release-my-role";
 import { reopenMeetingTool } from "./reopen-meeting";
 import { requestCoverTool } from "./request-cover";
 import { rescheduleMeetingTool } from "./reschedule-meeting";
@@ -64,6 +65,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	recordAttendanceTool,
 	claimOpenRoleTool,
 	requestCoverTool,
+	releaseMyRoleTool,
 	findPeopleTool,
 	recordGuestBookTool,
 	assignRolesTool,
