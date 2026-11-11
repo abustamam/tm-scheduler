@@ -6,6 +6,7 @@ import {
 	createRouter,
 	RouterProvider,
 	useLocation,
+	useSearch,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
@@ -323,5 +324,44 @@ describe("MeetingTabs (#1582)", () => {
 		expect(hashchanges, "memory history fires no hashchange").toBe(0);
 		expect(visibleTabs(container)).toEqual(["minutes"]);
 		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+	});
+	it("a hash-only navigation that drops ?tab= from a non-Roles tab still shows Minutes", async () => {
+		// protects=the toolbar's Minutes button clicked from Ballots (the link drops
+		// `search`, so `active` goes ballots -> roles while `hash` goes "" ->
+		// minutes) ends on Minutes, not Roles (#1597); fails_when=the [active] sync
+		// overwrites the fragment's tab; no_claim=real browser or scrolling
+		function Page() {
+			const search = useSearch({ strict: false }) as { tab?: string };
+			const hash = useLocation({ select: (l) => l.hash });
+			const active = (search.tab as MeetingTab | undefined) ?? "roles";
+			return (
+				<MeetingTabs
+					tabs={ALL}
+					active={active}
+					onSelect={() => {}}
+					hash={hash}
+					panels={panels()}
+				/>
+			);
+		}
+		const root = createRootRoute({ component: Page });
+		const index = createRoute({
+			getParentRoute: () => root,
+			path: "/",
+			validateSearch: (s: Record<string, unknown>) =>
+				typeof s.tab === "string" ? { tab: s.tab } : {},
+		});
+		const router = createRouter({
+			routeTree: root.addChildren([index]),
+			history: createMemoryHistory({ initialEntries: ["/?tab=ballots"] }),
+		});
+		await router.load();
+		const { container } = render(<RouterProvider router={router} />);
+		await act(async () => {});
+		expect(visibleTabs(container)).toEqual(["ballots"]);
+		await act(async () => {
+			await router.navigate({ to: "/", hash: "minutes", search: {} });
+		});
+		expect(visibleTabs(container)).toEqual(["minutes"]);
 	});
 });
