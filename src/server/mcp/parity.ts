@@ -34,8 +34,8 @@
  * an `"officer"` tool, `member` and `self` a `"member"` tool; `areaDirector`,
  * `superadmin` and `public` have no connector audience, so such a row cannot be
  * a `tool` row. A member-gated function whose only connector counterpart is an
- * officer tool (`reassignSlot` vs `assign_roles`) is a `gap`: the member-scoped
- * tool is what is missing.
+ * officer tool is a `gap`: the
+ * member-scoped tool is what is missing.
  *
  * Mixed-audience note: a `gap` row's audience is the maintainer's to confirm when
  * the tool is built.
@@ -58,6 +58,7 @@ export type NotOnConnectorCategory =
 	| "public path"
 	| "confirm-link step"
 	| "UI-only state"
+	| "session-bound ruling"
 	| "sign-in flow"
 	| "connector management"
 	| "superadmin only";
@@ -495,10 +496,25 @@ export const PARITY_ROWS: ParityRow[] = [
 		},
 	}),
 	row("slots", "claimSlot", "member", { tool: "claim_open_role" }),
-	row("slots", "releaseSlot", "member", { gap: true }),
-	row("slots", "confirmSlot", "member", { gap: true }),
-	row("slots", "unconfirmSlot", "admin", { gap: true }),
-	row("slots", "reassignSlot", "member", { gap: true }),
+	// `release_my_role` is own-role-only by the 2026-11-09 decision (#1568): the
+	// app lets any signed-in member release or reassign any role, the connector
+	// tool acts only on a slot the token owner holds. Others stay `assign_roles`.
+	row("slots", "releaseSlot", "member", { tool: "release_my_role" }),
+	row("slots", "confirmSlot", "member", {
+		notOnConnector: {
+			category: "session-bound ruling",
+			reason:
+				"confirmSlotCore refuses a connector proof on purpose (#1283): confirming a held role needs a session bound to the holder",
+		},
+	}),
+	row("slots", "unconfirmSlot", "admin", {
+		notOnConnector: {
+			category: "session-bound ruling",
+			reason:
+				"pairs with confirmSlot, which stays off the connector (#1283, 2026-11-09)",
+		},
+	}),
+	row("slots", "reassignSlot", "member", { tool: "release_my_role" }),
 	// Own-slot-only: the tool writes a speaker slot the caller holds. Editing
 	// another member's or a guest's speech stays in the app (#1571).
 	row("slots", "updateSpeakerDetails", "member", {

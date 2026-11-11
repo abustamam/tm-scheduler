@@ -212,6 +212,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"record_attendance",
 			"record_guest_book",
 			"record_table_topics",
+			"release_my_role",
 			"reopen_meeting",
 			"request_cover",
 			"reschedule_meeting",
@@ -646,6 +647,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				role: "Toastmaster",
 				action: "release",
 				kind: "dropped",
+			}),
+			// #1568. Preview only: the caller's own role, never a guest row.
+			toolsCall("release_my_role", {
+				meetingId: seed.meetingId,
+				role: "Toastmaster",
 			}),
 			// #1571. Preview only: the caller's own speaker slot, never a guest row.
 			toolsCall("set_my_speech_details", {
