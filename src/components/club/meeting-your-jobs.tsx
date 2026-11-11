@@ -8,17 +8,14 @@
 // No attendance, no `reached_out`, no contact details.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
-import { useRef, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
-import { showWriteError } from "#/components/write-error-toast";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import { type DutyTarget, dutiesForRole } from "#/lib/role-duties";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
-import { confirmSlot } from "#/server/slots";
 import { RoleCalendarButton } from "./add-to-calendar-button";
 import { buildDutyContext } from "./duty-context";
 import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
+import { useConfirmOwnRole } from "./use-confirm-own-role";
 
 export function MeetingYourJobs({
 	clubId,
@@ -54,31 +51,14 @@ export function MeetingYourJobs({
 
 	const queryClient = useQueryClient();
 	const router = useRouter();
-	// Confirm buttons share one in-flight flag (#1612): one request per double
-	// tap. A ref guards the tap itself; the state only drives `disabled`.
-	const inFlight = useRef(false);
-	const [confirming, setConfirming] = useState<string | null>(null);
-
-	async function confirmRole(slotId: string, roleName: string) {
-		if (inFlight.current || !memberId) return;
-		inFlight.current = true;
-		setConfirming(slotId);
-		try {
-			await confirmSlot({ data: { slotId, memberId } });
-			toast.success(`Confirmed as ${roleName}.`);
-		} catch (err) {
-			showWriteError(err, "Couldn't confirm that role.");
-		} finally {
-			// Success or stale slot (released, reassigned, confirmed by an
-			// officer): refetch either way so the button reflects the truth.
-			await Promise.all([
+	const { confirm, confirming } = useConfirmOwnRole({
+		memberId,
+		refetch: () =>
+			Promise.all([
 				queryClient.invalidateQueries({ queryKey: ["personal-meeting"] }),
 				router.invalidate(),
-			]).catch(() => undefined);
-			inFlight.current = false;
-			setConfirming(null);
-		}
-	}
+			]),
+	});
 
 	// No identity, pending, error, rejected member: no card. The card is
 	// secondary to the agenda and must never break it.
@@ -87,10 +67,11 @@ export function MeetingYourJobs({
 	if (view.meeting.status === "cancelled") return null;
 	if (view.roles.length === 0) return null;
 
-	// Same "answers are open" rule as `/me`: never offer Confirm on a closed
-	// meeting or over the member's own decline.
+	// Never offer Confirm over the member's own decline or on a closed meeting.
+	// An unanswered member gets it: the server's holder arm turns a blank answer
+	// into Coming without overwriting an answer (ADR-0026).
 	const canConfirm =
-		view.planStatus === "coming" &&
+		view.planStatus !== "not_coming" &&
 		!isMeetingOver({
 			status: view.meeting.status,
 			scheduledAt: view.meeting.scheduledAt,
@@ -129,7 +110,7 @@ export function MeetingYourJobs({
 								className="mt-2 min-h-11"
 								disabled={confirming !== null}
 								aria-busy={confirming === role.slotId}
-								onClick={() => void confirmRole(role.slotId, role.roleName)}
+								onClick={() => void confirm(role.slotId, role.roleName)}
 							>
 								Confirm {role.roleName}
 							</Button>

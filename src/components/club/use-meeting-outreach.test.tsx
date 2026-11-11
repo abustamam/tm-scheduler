@@ -96,6 +96,10 @@ describe("useMeetingOutreach", () => {
 		expect(data.actorMemberId).toBeUndefined();
 	});
 
+	// protects=answering Coming for yourself sends confirmHeldRoles and the toast
+	// names what was confirmed, in the shared copy; fails_when=the flag is
+	// dropped, the toast loses the role names or the shared sentence; no_claim=
+	// the server confirming anything (setPlannedAttendance is stubbed).
 	it("marking YOURSELF coming sends confirmHeldRoles and names what was confirmed (#1612)", async () => {
 		setPlannedAttendance.mockResolvedValueOnce({
 			released: 0,
@@ -107,10 +111,34 @@ describe("useMeetingOutreach", () => {
 			data: expect.objectContaining({ memberId: "me", confirmHeldRoles: true }),
 		});
 		expect(toastSuccess).toHaveBeenCalledWith(
-			expect.stringContaining("Timer and Ah-Counter"),
+			"Great, you're confirmed as Timer and Ah-Counter. See you there.",
 		);
 	});
 
+	// protects=the "Your jobs" card stops offering Confirm for a role the strip
+	// just confirmed; fails_when=the ["personal-meeting"] invalidation is dropped
+	// or fires when nothing was confirmed; no_claim=the card's own refetch.
+	it("confirming roles from the strip invalidates the personal-meeting query; confirming none does not (#1612)", async () => {
+		setPlannedAttendance.mockResolvedValueOnce({
+			released: 0,
+			confirmedRoles: ["Timer"],
+		} as never);
+		const { result } = setup();
+		const spy = vi.spyOn(qc, "invalidateQueries");
+		await act(() => result.current.writeRung("me", "coming" as never));
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["personal-meeting"] });
+		spy.mockClear();
+		setPlannedAttendance.mockResolvedValueOnce({
+			released: 0,
+			confirmedRoles: [],
+		} as never);
+		await act(() => result.current.writeRung("me", "coming" as never));
+		expect(spy).not.toHaveBeenCalledWith({ queryKey: ["personal-meeting"] });
+	});
+
+	// protects=an officer's tap for someone else sends no confirm flag and
+	// confirms nothing; fails_when=the flag leaks to another member's write;
+	// no_claim=the server ignoring the flag unless actor == subject.
 	it("marking ANOTHER member coming (an officer) sends no confirm flag, and says nothing (#1612)", async () => {
 		const { result } = setup({ effectiveCanManage: true });
 		await act(() => result.current.writeRung("a", "coming" as never));
@@ -123,6 +151,8 @@ describe("useMeetingOutreach", () => {
 		expect(toastSuccess).not.toHaveBeenCalled();
 	});
 
+	// protects=declining never asks to confirm roles; fails_when=the flag is
+	// sent with not_coming; no_claim=the decline's release-roles behaviour.
 	it("marking yourself not coming sends no confirm flag (#1612)", async () => {
 		const { result } = setup({ declineFreesRoles: () => false });
 		await act(() => result.current.writeRung("me", "not_coming" as never));

@@ -43,18 +43,18 @@ describe("meeting route RSVP wiring (#1442)", () => {
 		);
 	});
 
-	// protects=the RSVP page's Confirm acts as the page's member, per slot, and
-	// only while the answer is Coming; fails_when=memberId is dropped, the slot
-	// is swapped, or the Coming gate goes; no_claim=the server accepts it.
-	it("the RSVP page confirms through confirmSlot with memberId (#1612)", () => {
+	// protects=the RSVP page feeds the shared Confirm hook its own member and
+	// confirms per slot, only while the answer is Coming; fails_when=another id
+	// is passed, the slot is swapped, or the Coming gate goes; no_claim=the
+	// server accepts it (the hook's confirmSlot call is pinned in
+	// meeting-your-jobs-wiring.guard.test.ts).
+	it("the RSVP page confirms through the shared hook with its member (#1612)", () => {
 		const rsvp = squash(
 			readSource(
 				resolve(__dirname, "club.$clubId_.meeting.$meetingId.rsvp.tsx"),
 			),
 		);
-		expect(rsvp).toContain(
-			"await confirmSlot({ data: { slotId, memberId: view.member.id } });",
-		);
+		expect(rsvp).toContain("useConfirmOwnRole({ memberId: view.member.id,");
 		expect(rsvp).toContain(
 			"onClick={() => void confirmRole(r.slotId, r.roleName)}",
 		);
@@ -62,7 +62,8 @@ describe("meeting route RSVP wiring (#1442)", () => {
 	});
 
 	// protects=the meeting page's own Coming confirms held roles for the viewer
-	// only; fails_when=the flag is sent for another member or dropped.
+	// only; fails_when=the flag is sent for another member or dropped;
+	// no_claim=the server ignoring the flag unless actor == subject.
 	it("the outreach hook sends confirmHeldRoles only for the viewer's own Coming (#1612)", () => {
 		const hook = squash(
 			readSource(

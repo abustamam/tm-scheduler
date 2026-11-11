@@ -18,6 +18,7 @@ import { CancelledMeetingNotice } from "#/components/club/cancelled-meeting-noti
 import { CoverSheet } from "#/components/club/cover-sheet";
 import { PickNameForm } from "#/components/club/pick-name-form";
 import { ThemeToggle } from "#/components/club/theme-toggle";
+import { useConfirmOwnRole } from "#/components/club/use-confirm-own-role";
 import { MeetingNotFound } from "#/components/meeting-not-found";
 import { PublicFooter } from "#/components/public-footer";
 import { Button } from "#/components/ui/button";
@@ -39,9 +40,9 @@ import {
 	toIcs,
 } from "#/lib/calendar";
 import { resolveClubOrRedirect } from "#/lib/club-route";
+import { confirmedRolesToast } from "#/lib/confirmed-roles-toast";
 import { utcToZonedWallTime } from "#/lib/datetime";
 import { rsvpPageUrl } from "#/lib/lineup-blast";
-import { listRoles } from "#/lib/list-roles";
 import { mapLink } from "#/lib/map-link";
 import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import { isMeetingOver } from "#/lib/meeting-lifecycle";
@@ -56,7 +57,6 @@ import {
 	getPublicPersonalMeetingView,
 	type PersonalMeetingView,
 } from "#/server/personal-meeting";
-import { confirmSlot } from "#/server/slots";
 
 // Escapes the `/club/$clubId` shell (trailing `_`), like the ballot and the
 // feedback page: this is the page the lineup blast's "Coming Thursday? Tap here"
@@ -416,26 +416,14 @@ function RsvpControls({
 	>([]);
 	const answered = view.planStatus;
 	// One in-flight flag for every Confirm button (#1612): one request per tap.
-	const confirmInFlight = useRef(false);
-	const [confirming, setConfirming] = useState<string | null>(null);
-	const confirmRole = async (slotId: string, roleName: string) => {
-		if (confirmInFlight.current) return;
-		confirmInFlight.current = true;
-		setConfirming(slotId);
-		try {
-			// The holder arm, selected by `memberId`: the answer is not touched.
-			await confirmSlot({ data: { slotId, memberId: view.member.id } });
-			toast.success(`Confirmed as ${roleName}.`);
-		} catch (err) {
-			showWriteError(err, "Couldn't confirm that role.");
-		} finally {
-			// A stale slot (released, reassigned, confirmed by an officer) also
-			// refetches, so the button disappears.
-			await onChanged().catch(() => undefined);
-			confirmInFlight.current = false;
-			setConfirming(null);
-		}
-	};
+	// The holder arm of `confirmSlot` (selected by `memberId`) confirms the slot
+	// and does not write the member's answer, except that a signed-in holder
+	// acting from a stale tab can move their own decline to Coming via the
+	// holder floor (ADR-0026); the server is the gate, not this page.
+	const { confirm: confirmRole, confirming } = useConfirmOwnRole({
+		memberId: view.member.id,
+		refetch: onChanged,
+	});
 	const heldRoles = view.roles.map((r) => r.roleName);
 	const meetingPath = promoMeetingPath(clubKey, meetingKey);
 
@@ -460,7 +448,7 @@ function RsvpControls({
 				});
 				toast.success(
 					confirmedRoles.length > 0
-						? `Great, you're confirmed as ${listRoles(confirmedRoles)}. See you there.`
+						? confirmedRolesToast(confirmedRoles)
 						: "Great, see you there.",
 				);
 			} else {
@@ -507,12 +495,9 @@ function RsvpControls({
 			<ul className="space-y-2">
 				{view.roles.map((r) => (
 					<li key={r.slotId} className="space-y-1">
-						<p className="text-sm">
-							<span className="font-semibold">{r.roleName}</span>
-							<span className="text-muted-foreground">
-								{" "}
-								· {r.status === "confirmed" ? "Confirmed" : "Not confirmed yet"}
-							</span>
+						<p className="text-sm font-semibold">
+							You're {r.roleName}:{" "}
+							{r.status === "confirmed" ? "confirmed" : "not confirmed yet"}
 						</p>
 						{r.status === "claimed" && answered === "coming" ? (
 							<Button

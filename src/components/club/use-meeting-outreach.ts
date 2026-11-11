@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { showWriteError } from "#/components/write-error-toast";
 import { clearRefusedMessage, type PlanStatus } from "#/lib/attendance-panel";
-import { listRoles } from "#/lib/list-roles";
+import { confirmedRolesToast } from "#/lib/confirmed-roles-toast";
 import { notComingToast } from "#/lib/role-duty-copy";
 import {
 	clearPlannedAttendance,
@@ -273,9 +273,10 @@ export function useMeetingOutreach(args: {
 			const confirmedRoles =
 				"confirmedRoles" in written ? written.confirmedRoles : [];
 			if (confirmedRoles.length > 0) {
-				toast.success(
-					`Great — you're confirmed as ${listRoles(confirmedRoles)}. See you there.`,
-				);
+				toast.success(confirmedRolesToast(confirmedRoles));
+				// The personal-meeting query feeds the "Your jobs" card: refresh it
+				// so a role just confirmed here stops offering Confirm.
+				void queryClient.invalidateQueries({ queryKey: ["personal-meeting"] });
 			}
 			if (memberId === myId && next === "not_coming") {
 				// The viewer's own decline (#1280): the strip chip and the roster land

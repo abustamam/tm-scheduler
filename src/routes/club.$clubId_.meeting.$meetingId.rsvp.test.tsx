@@ -14,6 +14,7 @@ import {
 	RouterProvider,
 } from "@tanstack/react-router";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -149,7 +150,9 @@ function view(
 	} as any;
 }
 
-async function renderPage() {
+async function renderPage(
+	meeting: { status?: string; scheduledAt?: string } = {},
+) {
 	vi.spyOn(Route, "useLoaderData").mockReturnValue({
 		clubId: CLUB_ID,
 		clubName: "Downtown Toastmasters",
@@ -160,6 +163,7 @@ async function renderPage() {
 			scheduledAt: SOON,
 			lengthMinutes: 90,
 			theme: null,
+			...meeting,
 		},
 		// biome-ignore lint/suspicious/noExplicitAny: stubbed hook return
 	} as any);
@@ -703,6 +707,10 @@ describe("rsvp page: member confirms a held role (#1612)", () => {
 		vi.clearAllMocks();
 	});
 
+	// protects=the page names every held role with its status before any answer
+	// and offers no Confirm yet; fails_when=the list is dropped, the status
+	// words change, or Confirm shows for an unanswered member; no_claim=the
+	// answered and locked states, pinned by the tests below.
 	it("names every held role with its status when unanswered, no Confirm yet", async () => {
 		signedOutAs(true);
 		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
@@ -714,12 +722,17 @@ describe("rsvp page: member confirms a held role (#1612)", () => {
 			}),
 		);
 		await renderPage();
-		expect(await screen.findByText("Toastmaster")).toBeTruthy();
-		expect(screen.getByText(/Not confirmed yet/)).toBeTruthy();
-		expect(screen.getByText(/· Confirmed/)).toBeTruthy();
+		expect(
+			await screen.findByText("You're Toastmaster: not confirmed yet"),
+		).toBeTruthy();
+		expect(screen.getByText("You're Timer: confirmed")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /^Confirm / })).toBeNull();
 	});
 
+	// protects=the signed-out locked page confirms the slot as the page's
+	// member and never rewrites the answer; fails_when=memberId is dropped, the
+	// button is hidden when locked, or the answer write is called; no_claim=the
+	// server accepting a session-less holder confirm.
 	it("signed out, locked, Coming + claimed: Confirm calls confirmSlot with memberId and leaves the answer alone", async () => {
 		signedOutAs(true);
 		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
@@ -737,35 +750,84 @@ describe("rsvp page: member confirms a held role (#1612)", () => {
 		expect(screen.getByText("Sign in to change it")).toBeTruthy();
 	});
 
-	it("with two claimed roles confirms only the tapped one", async () => {
+	// protects=a tap confirms only its own slot, and the page then shows the
+	// refetched truth; fails_when=the wrong slot is sent, both roles are
+	// confirmed, or the refetch is dropped; no_claim=the server's confirm.
+	it("with two claimed roles confirms only the tapped one and shows the result", async () => {
 		signedIn();
-		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+		const mock = vi.mocked(getPublicPersonalMeetingView);
+		mock.mockResolvedValue(
 			view({
 				planStatus: "coming",
 				roles: [claimed("s1", "Toastmaster"), claimed("s2", "Timer")],
 			}),
 		);
 		await renderPage();
-		fireEvent.click(
-			await screen.findByRole("button", { name: "Confirm Timer" }),
+		const button = await screen.findByRole("button", {
+			name: "Confirm Timer",
+		});
+		mock.mockResolvedValue(
+			view({
+				planStatus: "coming",
+				roles: [
+					claimed("s1", "Toastmaster"),
+					{ slotId: "s2", roleName: "Timer", status: "confirmed" },
+				],
+			}),
 		);
+		fireEvent.click(button);
 		await waitFor(() => expect(confirmSlot).toHaveBeenCalledTimes(1));
 		expect(vi.mocked(confirmSlot).mock.calls[0][0]).toEqual({
 			data: { slotId: "s2", memberId: MEMBER_ID },
 		});
+		expect(await screen.findByText("You're Timer: confirmed")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Confirm Timer" })).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Confirm Toastmaster" }),
+		).toBeTruthy();
 	});
 
+	// protects=Confirm is never offered over the member's own decline;
+	// fails_when=the answered === "coming" gate is dropped; no_claim=the card's
+	// gate, which also offers it to an unanswered member.
 	it("never offers Confirm over a not_coming answer", async () => {
 		signedIn();
 		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
 			view({ planStatus: "not_coming", roles: [claimed("s1", "Toastmaster")] }),
 		);
 		await renderPage();
-		expect(await screen.findByText(/Not confirmed yet/)).toBeTruthy();
+		expect(
+			await screen.findByText("You're Toastmaster: not confirmed yet"),
+		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /^Confirm / })).toBeNull();
 	});
 
-	it("a double tap sends one confirmSlot", async () => {
+	// protects=no Confirm and no role list once the meeting stopped taking
+	// answers; fails_when=the controls mount on a completed or past meeting;
+	// no_claim=the cancelled notice.
+	it.each([
+		["completed", { status: "completed" }],
+		[
+			"past",
+			{ scheduledAt: new Date(Date.now() - 3 * 86_400_000).toISOString() },
+		],
+	])("no Confirm on a %s meeting", async (_label, meeting) => {
+		signedIn();
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({ planStatus: "coming", roles: [claimed("s1", "Toastmaster")] }),
+		);
+		await renderPage(meeting);
+		expect(
+			await screen.findByText(/This meeting has already happened/),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Confirm / })).toBeNull();
+	});
+
+	// protects=two taps landing before React re-renders send one request (the
+	// ref guard; `disabled` cannot help, the DOM is not yet disabled);
+	// fails_when=the in-flight ref guard is removed; no_claim=`disabled`, pinned
+	// by the next test.
+	it("two taps in one tick send one confirmSlot", async () => {
 		signedIn();
 		let release: () => void = () => {};
 		vi.mocked(confirmSlot).mockReturnValue(
@@ -780,30 +842,77 @@ describe("rsvp page: member confirms a held role (#1612)", () => {
 		const btn = await screen.findByRole("button", {
 			name: "Confirm Toastmaster",
 		});
-		fireEvent.click(btn);
-		fireEvent.click(btn);
+		await act(async () => {
+			fireEvent.click(btn);
+			fireEvent.click(btn);
+		});
 		release();
 		await waitFor(() => expect(confirmSlot).toHaveBeenCalledTimes(1));
 	});
 
-	it("a stale-slot error refetches the view", async () => {
+	// protects=every Confirm is disabled while one is in flight; fails_when=
+	// `disabled` is dropped from the button; no_claim=the ref guard, pinned by
+	// the previous test.
+	it("disables every Confirm while one is in flight", async () => {
 		signedIn();
+		let release: () => void = () => {};
+		vi.mocked(confirmSlot).mockReturnValue(
+			new Promise((r) => {
+				release = () => r({} as never);
+			}) as never,
+		);
+		vi.mocked(getPublicPersonalMeetingView).mockResolvedValue(
+			view({
+				planStatus: "coming",
+				roles: [claimed("s1", "Toastmaster"), claimed("s2", "Timer")],
+			}),
+		);
+		await renderPage();
+		const first = await screen.findByRole("button", {
+			name: "Confirm Toastmaster",
+		});
+		const second = screen.getByRole("button", { name: "Confirm Timer" });
+		fireEvent.click(first);
+		await waitFor(() =>
+			expect((first as HTMLButtonElement).disabled).toBe(true),
+		);
+		expect((second as HTMLButtonElement).disabled).toBe(true);
+		release();
+		await waitFor(() =>
+			expect((second as HTMLButtonElement).disabled).toBe(false),
+		);
+	});
+
+	// protects=a stale-slot error shows the write error and refetches so the
+	// button goes; fails_when=the catch swallows the error or the refetch is
+	// dropped; no_claim=which message the server sends.
+	it("a stale-slot error shows the error and refetches the view", async () => {
+		signedIn();
+		const { toast } = await import("sonner");
+		const errorToast = vi.spyOn(toast, "error");
 		vi.mocked(confirmSlot).mockRejectedValue(new Error("Role not claimed."));
 		const mock = vi.mocked(getPublicPersonalMeetingView);
-		mock.mockResolvedValueOnce(
+		mock.mockResolvedValue(
 			view({ planStatus: "coming", roles: [claimed("s1", "Toastmaster")] }),
 		);
-		mock.mockResolvedValue(view({ planStatus: "coming", roles: [] }));
 		await renderPage();
-		fireEvent.click(
-			await screen.findByRole("button", { name: "Confirm Toastmaster" }),
-		);
+		const button = await screen.findByRole("button", {
+			name: "Confirm Toastmaster",
+		});
+		// Nothing else fetches from here on, so any new call is the deliberate one.
+		const before = mock.mock.calls.length;
+		mock.mockResolvedValue(view({ planStatus: "coming", roles: [] }));
+		fireEvent.click(button);
+		await waitFor(() => expect(errorToast).toHaveBeenCalled());
+		await waitFor(() => expect(mock.mock.calls.length).toBeGreaterThan(before));
 		await waitFor(() =>
 			expect(screen.queryByRole("button", { name: /^Confirm / })).toBeNull(),
 		);
-		expect(mock.mock.calls.length).toBeGreaterThan(1);
 	});
 
+	// protects=I'm coming names the roles it confirmed, in the shared sentence;
+	// fails_when=the toast ignores confirmedRoles or uses other copy; no_claim=
+	// the server confirming the roles (setPlannedAttendance is stubbed).
 	it("I'm coming names the confirmed roles in the toast", async () => {
 		signedIn();
 		const { toast } = await import("sonner");
@@ -821,7 +930,7 @@ describe("rsvp page: member confirms a held role (#1612)", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "I'm coming" }));
 		await waitFor(() =>
 			expect(spy).toHaveBeenCalledWith(
-				expect.stringContaining("Toastmaster and Timer"),
+				"Great, you're confirmed as Toastmaster and Timer. See you there.",
 			),
 		);
 	});
