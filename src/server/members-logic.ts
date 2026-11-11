@@ -29,10 +29,12 @@ import {
 	meetings,
 	members,
 	people,
+	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
+import { acceptedStatuses } from "#/lib/meeting-lifecycle";
 import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import { isOnRoster } from "#/lib/membership-status";
@@ -59,7 +61,10 @@ import {
 	soleHoldingClub,
 } from "./account-link-logic";
 import { logActivity } from "./activity";
-import { deletePlanRowsOfEndedMember } from "./attendance-plan-logic";
+import {
+	deletePlanRowsOfEndedMember,
+	listMyAttendanceForMeetings,
+} from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
@@ -185,7 +190,20 @@ async function assertKeepsAnActiveAdmin(
 	exceptMemberId: string,
 	message: string,
 ): Promise<void> {
-	const others = await tx
+	if (!(await hasOtherActiveAdmin(tx, clubId, exceptMemberId))) {
+		throw new Error(message);
+	}
+}
+
+/** Whether some membership other than `exceptMemberId` is an ACTIVE admin. The
+ *  one query behind `assertKeepsAnActiveAdmin` and the write-free standing
+ *  verdict, so the preview and the refusal read the same thing. */
+async function hasOtherActiveAdmin(
+	conn: Tx | typeof db,
+	clubId: string,
+	exceptMemberId: string,
+): Promise<boolean> {
+	const others = await conn
 		.select({ id: members.id })
 		.from(members)
 		.where(
@@ -197,7 +215,7 @@ async function assertKeepsAnActiveAdmin(
 			),
 		)
 		.limit(1);
-	if (others.length === 0) throw new Error(message);
+	return others.length > 0;
 }
 
 /**
@@ -755,8 +773,10 @@ type SetStatusInput = z.infer<typeof setStatusSchema> & RosterActor;
  *  until something sets `status` back. That is why this fn may leave it alone
  *  and convert may not. If a third reactivation path ever appears, it has to
  *  choose one of these two meanings explicitly — and say which, here. */
-export async function applySetMemberStatus(input: SetStatusInput) {
-	await db.transaction(async (tx) => {
+export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
+	// `conn`: run inside the caller's transaction (`applyMemberStanding`), so a
+	// later refusal in the same call rolls this write back too.
+	await withConn(conn, async (tx) => {
 		// The club write lock (#1327), FIRST, as the merge takes it: it serializes
 		// this with every other status and role change in the club, so the
 		// last-admin count below cannot be taken against a snapshot two admins
@@ -789,16 +809,10 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		if (!current) throw new Error("Member not found.");
 		// Same → same (including former → former) is a no-op: no write, no log.
 		if (current.status === input.status) return;
-		const deactivating =
-			current.status === "active" && input.status === "inactive";
-		// Leaving the roster for good (#1239): same release of upcoming slots as
-		// going inactive, plus the end date and the open officer terms.
-		const ending = isOnRoster(current.status) && input.status === "former";
-		const releasing = deactivating || ending;
-		// #1340: a membership that ends, or comes back from former, holds role
-		// `member`. Ending is when the permission stops; coming back is never a
-		// promotion, so a stale `admin` on a former row is not restored.
-		const demotes = ending || current.status === "former";
+		const { deactivating, ending, releasing, demotes } = statusTransition(
+			current.status,
+			input.status,
+		);
 		const now = new Date();
 		// Guardrail (#187): deactivating an admin must not strand the club with
 		// zero active admins — that would silently bypass the demote guard. Only an
@@ -813,9 +827,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 				tx,
 				input.clubId,
 				input.memberId,
-				ending
-					? "You can't end the membership of the club's last admin — promote another member to admin first."
-					: "You can't deactivate the club's last admin — promote another member to admin first.",
+				ending ? LAST_ADMIN_END_MESSAGE : LAST_ADMIN_DEACTIVATE_MESSAGE,
 			);
 		}
 		// `ended_at` is the club-local day the membership ended; any move away from
@@ -856,20 +868,7 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 		// and a completed meeting's slots stay assigned (history preserved).
 		// A cancelled future meeting is released too (#1057, #1154).
 		if (releasing) {
-			const upcoming = await tx
-				.select({ id: roleSlots.id })
-				.from(roleSlots)
-				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-				.where(
-					and(
-						eq(roleSlots.assignedMemberId, input.memberId),
-						gte(meetings.scheduledAt, new Date()),
-					),
-				)
-				// In slot-id order, the order `applyMoveSlot` writes a pair in, so an
-				// End and a reorder of the member's slots cannot wait on each other
-				// (#1327).
-				.orderBy(asc(roleSlots.id));
+			const upcoming = await upcomingSlotsOf(tx, input.memberId);
 			for (const s of upcoming) {
 				// Unlink any speech (speech_id → NULL); the speech persists
 				// Person-owned and unscheduled (ADR-0009 — never destroyed).
@@ -954,6 +953,73 @@ export async function applySetMemberStatus(input: SetStatusInput) {
 	return { ok: true as const, status: input.status };
 }
 
+/** Runs `fn` on the caller's transaction, or in a fresh one. */
+const withConn = <T>(
+	conn: Tx | undefined,
+	fn: (tx: Tx) => Promise<T>,
+): Promise<T> => (conn ? fn(conn) : db.transaction(fn));
+
+export const LAST_ADMIN_END_MESSAGE =
+	"You can't end the membership of the club's last admin — promote another member to admin first.";
+export const LAST_ADMIN_DEACTIVATE_MESSAGE =
+	"You can't deactivate the club's last admin — promote another member to admin first.";
+export const LAST_ADMIN_DEMOTE_MESSAGE =
+	"You can't remove the club's last admin — promote another member to admin first.";
+export const FORMER_MEMBER_ROLE_MESSAGE =
+	"A former member holds no club role — reactivate them first.";
+
+/** What a status change does, from the member's current status to the target.
+ *  The one place `applySetMemberStatus` and the standing verdict agree on it. */
+function statusTransition(
+	from: "active" | "inactive" | "former",
+	to: "active" | "inactive" | "former",
+) {
+	const deactivating = from === "active" && to === "inactive";
+	// Leaving the roster for good (#1239): same release of upcoming slots as
+	// going inactive, plus the end date and the open officer terms.
+	const ending = isOnRoster(from) && to === "former";
+	// #1340: a membership that ends, or comes back from former, holds role
+	// `member`. Ending is when the permission stops; coming back is never a
+	// promotion, so a stale `admin` on a former row is not restored.
+	const demotes = ending || from === "former";
+	return { deactivating, ending, releasing: deactivating || ending, demotes };
+}
+
+/** The member's upcoming slots that going inactive or former releases: the
+ *  SELECT `applySetMemberStatus` releases from, shared with the standing
+ *  verdict. A meeting that no longer accepts a plan write (completed) is not in
+ *  it, the same predicate the release UPDATE carries. In slot-id order, the
+ *  order `applyMoveSlot` writes a pair in, so an End and a reorder of the
+ *  member's slots cannot wait on each other (#1327). */
+async function upcomingSlotsOf(conn: Tx | typeof db, memberId: string) {
+	return conn
+		.select({
+			id: roleSlots.id,
+			meetingId: roleSlots.meetingId,
+			meetingDate: meetings.scheduledAt,
+			role: roleDefinitions.name,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.innerJoin(
+			roleDefinitions,
+			eq(roleDefinitions.id, roleSlots.roleDefinitionId),
+		)
+		.where(
+			and(
+				eq(roleSlots.assignedMemberId, memberId),
+				gte(meetings.scheduledAt, new Date()),
+				meetingAcceptsWrite(
+					conn,
+					"plan",
+					roleSlots.meetingId,
+					PLAN_ACCEPTING_CANCELLED,
+				),
+			),
+		)
+		.orderBy(asc(roleSlots.id));
+}
+
 export const setRoleSchema = z.object({
 	clubId: z.string().uuid(),
 	memberId: z.string().uuid(),
@@ -969,8 +1035,8 @@ type SetRoleInput = z.infer<typeof setRoleSchema> & RosterActor;
  * ≥1-active-admin invariant on the demote path (admin→member) and logs
  * member_edit with the role before/after.
  */
-export async function applySetMemberRole(input: SetRoleInput) {
-	return db.transaction(async (tx) => {
+export async function applySetMemberRole(input: SetRoleInput, conn?: Tx) {
+	return withConn(conn, async (tx) => {
 		// The club write lock (#1327), first: the last-admin check below reads
 		// other rows, so it runs serialized with every status change in the club.
 		await lockClubForWrite(tx, input.clubId);
@@ -990,9 +1056,7 @@ export async function applySetMemberRole(input: SetRoleInput) {
 		// A former member holds no role (#1340): ending one writes `member`, and
 		// reactivating restores `member`; a role is set on an active or inactive row.
 		if (current.status === "former") {
-			throw new Error(
-				"A former member holds no club role — reactivate them first.",
-			);
+			throw new Error(FORMER_MEMBER_ROLE_MESSAGE);
 		}
 		// Idempotent: nothing changed → nothing to write or log.
 		if (current.clubRole === input.clubRole) {
@@ -1008,7 +1072,7 @@ export async function applySetMemberRole(input: SetRoleInput) {
 				tx,
 				input.clubId,
 				input.memberId,
-				"You can't remove the club's last admin — promote another member to admin first.",
+				LAST_ADMIN_DEMOTE_MESSAGE,
 			);
 		}
 		await tx
@@ -1027,6 +1091,207 @@ export async function applySetMemberRole(input: SetRoleInput) {
 			},
 		});
 		return { ok: true as const, clubRole: input.clubRole };
+	});
+}
+
+export interface MemberStandingInput {
+	clubId: string;
+	memberId: string;
+	status?: "active" | "inactive" | "former";
+	clubRole?: "admin" | "member";
+}
+
+export type MemberStandingBlockCode = "LAST_ADMIN" | "FORMER_MEMBER_ROLE";
+
+/**
+ * What `applyMemberStanding` would do to one member, computed WITHOUT writing:
+ * the connector's preview (`set_member_standing`, #1577). It reads through the
+ * same helpers the appliers write through (`statusTransition`,
+ * `upcomingSlotsOf`, `hasOtherActiveAdmin`, the plan-answer meeting set), so
+ * the preview names the roles and answers the apply will touch.
+ *
+ * Applies status first, then role, as the apply does: the role step is judged
+ * against the member as the status step leaves them. Returns null for a member
+ * who is not on this club's roster.
+ */
+export async function memberStandingVerdict(
+	conn: Tx | typeof db,
+	input: MemberStandingInput,
+) {
+	const [current] = await conn
+		.select({
+			id: members.id,
+			name: members.name,
+			status: members.status,
+			clubRole: members.clubRole,
+		})
+		.from(members)
+		.where(
+			and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+		);
+	if (!current) return null;
+
+	const blocked: { code: MemberStandingBlockCode; message: string }[] = [];
+	const statusAfter = input.status ?? current.status;
+	const statusChanges = statusAfter !== current.status;
+	const t = statusTransition(current.status, statusAfter);
+	const isActiveAdmin =
+		current.clubRole === "admin" && current.status === "active";
+
+	let roleAfterStatus = current.clubRole;
+	if (statusChanges) {
+		if (t.demotes) roleAfterStatus = "member";
+		if (
+			(t.deactivating || t.ending) &&
+			isActiveAdmin &&
+			!(await hasOtherActiveAdmin(conn, input.clubId, input.memberId))
+		) {
+			blocked.push({
+				code: "LAST_ADMIN",
+				message: t.ending
+					? LAST_ADMIN_END_MESSAGE
+					: LAST_ADMIN_DEACTIVATE_MESSAGE,
+			});
+		}
+	}
+
+	let roleAfter = roleAfterStatus;
+	if (input.clubRole !== undefined) {
+		if (statusAfter === "former") {
+			blocked.push({
+				code: "FORMER_MEMBER_ROLE",
+				message: FORMER_MEMBER_ROLE_MESSAGE,
+			});
+		} else {
+			roleAfter = input.clubRole;
+			if (
+				roleAfterStatus === "admin" &&
+				input.clubRole === "member" &&
+				statusAfter === "active" &&
+				!(await hasOtherActiveAdmin(conn, input.clubId, input.memberId))
+			) {
+				blocked.push({
+					code: "LAST_ADMIN",
+					message: LAST_ADMIN_DEMOTE_MESSAGE,
+				});
+			}
+		}
+	}
+
+	const releasedRoles =
+		t.releasing && statusChanges
+			? (await upcomingSlotsOf(conn, input.memberId)).map((r) => ({
+					slotId: r.id,
+					meetingId: r.meetingId,
+					meetingDate: r.meetingDate,
+					role: r.role,
+				}))
+			: [];
+
+	// The answers `deletePlanRowsOfEndedMember` deletes: this member's rows on a
+	// meeting that still accepts a plan write (cancelled included, #1342).
+	let deletedPlanAnswers: {
+		meetingId: string;
+		meetingDate: Date;
+		status: string;
+	}[] = [];
+	if (t.ending && statusChanges) {
+		const open = await conn
+			.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, input.clubId),
+					inArray(
+						meetings.status,
+						acceptedStatuses("plan", PLAN_ACCEPTING_CANCELLED.accept),
+					),
+				),
+			);
+		const dateOf = new Map(open.map((m) => [m.id, m.scheduledAt]));
+		const { plan } = await listMyAttendanceForMeetings(conn, {
+			meetingIds: open.map((m) => m.id),
+			memberIds: [input.memberId],
+		});
+		deletedPlanAnswers = plan
+			.map((p) => ({
+				meetingId: p.meetingId,
+				meetingDate: dateOf.get(p.meetingId) as Date,
+				status: p.status as string,
+			}))
+			.sort(
+				(a, b) =>
+					a.meetingDate.getTime() - b.meetingDate.getTime() ||
+					a.meetingId.localeCompare(b.meetingId),
+			);
+	}
+
+	return {
+		member: { id: current.id, name: current.name },
+		status: { before: current.status, after: statusAfter },
+		clubRole: { before: current.clubRole, after: roleAfter },
+		statusChanges,
+		roleChanges: roleAfter !== current.clubRole,
+		releasedRoles,
+		deletedPlanAnswers,
+		blocked,
+	};
+}
+
+export type MemberStandingVerdict = NonNullable<
+	Awaited<ReturnType<typeof memberStandingVerdict>>
+>;
+
+/** Thrown by `applyMemberStanding` when `assertFresh` rejects the verdict taken
+ *  under the lock; carries it so the caller can show the fresh plan. */
+export class MemberStandingStaleError extends Error {
+	constructor(public readonly verdict: MemberStandingVerdict | null) {
+		super("The member changed since the preview.");
+	}
+}
+
+/**
+ * Change a member's status and/or club role in ONE transaction, through the
+ * roster's own appliers (#1577): status first, then role. A refusal by the
+ * second rolls the first back. `assertFresh` is handed the verdict read under
+ * the club write lock, before anything is written; returning false aborts with
+ * `MemberStandingStaleError` and nothing written, so a role claimed after the
+ * preview is never released silently.
+ */
+export async function applyMemberStanding(
+	input: MemberStandingInput & RosterActor,
+	opts: { assertFresh?: (v: MemberStandingVerdict | null) => boolean } = {},
+) {
+	await db.transaction(async (tx) => {
+		await lockClubForWrite(tx, input.clubId);
+		await lockMembershipsAgainstMerge(tx, [input.memberId]);
+		if (opts.assertFresh) {
+			const verdict = await memberStandingVerdict(tx, input);
+			if (!opts.assertFresh(verdict))
+				throw new MemberStandingStaleError(verdict);
+		}
+		if (input.status !== undefined) {
+			await applySetMemberStatus(
+				{
+					clubId: input.clubId,
+					memberId: input.memberId,
+					status: input.status,
+					actorMemberId: input.actorMemberId,
+				},
+				tx,
+			);
+		}
+		if (input.clubRole !== undefined) {
+			await applySetMemberRole(
+				{
+					clubId: input.clubId,
+					memberId: input.memberId,
+					clubRole: input.clubRole,
+					actorMemberId: input.actorMemberId,
+				},
+				tx,
+			);
+		}
 	});
 }
 

@@ -69,6 +69,7 @@ describe("MCP tool annotations", () => {
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",
+			"set_member_standing",
 			"set_my_attendance",
 			"set_my_speech_details",
 			"update_meeting_schedule",

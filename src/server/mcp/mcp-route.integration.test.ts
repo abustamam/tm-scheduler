@@ -218,6 +218,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",
+			"set_member_standing",
 			"set_my_attendance",
 			"set_my_speech_details",
 			"update_meeting_schedule",
@@ -682,6 +683,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				clubId: seed.clubId,
 				memberIds: [seed.memberId],
 				method: "email",
+			}),
+			// #1577. A preview only (no planHash): names the member and the roles and
+			// answers a status change touches, never a contact detail.
+			toolsCall("set_member_standing", {
+				clubId: seed.clubId,
+				memberId: seed.memberId,
+				status: "inactive",
 			}),
 			// #1563. Previews only: a new name, and a name-only edit (which shows
 			// only the changed field, never the contact detail).
