@@ -83,8 +83,10 @@ describe("MCP tool annotations", () => {
 			.sort();
 		expect(idempotent).toEqual([
 			"cancel_meeting",
+			"create_meetings",
 			"edit_member",
 			"record_attendance",
+			"reopen_meeting",
 			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",

@@ -195,6 +195,8 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"assign_roles",
 			"cancel_meeting",
 			"claim_open_role",
+			"complete_meeting",
+			"create_meetings",
 			"edit_agenda",
 			"edit_meeting",
 			"edit_member",
@@ -210,6 +212,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"record_attendance",
 			"record_guest_book",
 			"record_table_topics",
+			"reopen_meeting",
 			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",
@@ -682,6 +685,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			}),
 			// #1563. Previews only: a new name, and a name-only edit (which shows
 			// only the changed field, never the contact detail).
+			// #1572. A preview only (no planHash): dates and a location, never a guest.
+			toolsCall("create_meetings", {
+				clubId: seed.clubId,
+				dates: ["2031-03-04T19:00"],
+			}),
 			toolsCall("add_members", {
 				clubId: seed.clubId,
 				rows: [{ name: "Zed Newcomer" }],
@@ -691,10 +699,22 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				memberId: seed.memberId,
 				name: "Renamed Member",
 			}),
+			// #1572. LAST: completing needs a meeting whose date has arrived (the
+			// loop below moves it into the past first) and freezes it; reopen puts
+			// it back. Neither reads a guest row; both are in the sweep because it
+			// is derived.
+			toolsCall("complete_meeting", { meetingId: seed.meetingId }),
+			toolsCall("reopen_meeting", { meetingId: seed.meetingId }),
 		];
 		const rawByTool = new Map<string, string>();
 		const bodyByTool = new Map<string, unknown>();
 		for (const call of calls) {
+			if (call.params.name === "complete_meeting") {
+				await testDb
+					.update(meetings)
+					.set({ scheduledAt: new Date(Date.now() - 2 * 86_400_000) })
+					.where(eq(meetings.id, seed.meetingId));
+			}
 			const { raw, body } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);

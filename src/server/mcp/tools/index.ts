@@ -18,6 +18,8 @@ import { addMembersTool } from "./add-members";
 import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
+import { completeMeetingTool } from "./complete-meeting";
+import { createMeetingsTool } from "./create-meetings";
 import { editAgendaTool } from "./edit-agenda";
 import { editMeetingTool } from "./edit-meeting";
 import { editMemberTool } from "./edit-member";
@@ -33,6 +35,7 @@ import { listMeetingsTool } from "./list-meetings";
 import { recordAttendanceTool } from "./record-attendance";
 import { recordGuestBookTool } from "./record-guest-book";
 import { recordTableTopicsTool } from "./record-table-topics";
+import { reopenMeetingTool } from "./reopen-meeting";
 import { rescheduleMeetingTool } from "./reschedule-meeting";
 import { restoreMeetingTool } from "./restore-meeting";
 import { setAttendanceTool } from "./set-attendance";
@@ -68,6 +71,9 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	editSpeakerSlotsTool,
 	cancelMeetingTool,
 	restoreMeetingTool,
+	createMeetingsTool,
+	completeMeetingTool,
+	reopenMeetingTool,
 	rescheduleMeetingTool,
 	updateMeetingScheduleTool,
 	setContactPreferenceTool,
