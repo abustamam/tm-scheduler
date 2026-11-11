@@ -84,7 +84,11 @@ interface Plan {
 		meetingId: string;
 		meetingDate: string;
 		role: string;
+		/** The speech linked to this role is unlinked; it stays with its owner. */
+		hasLinkedSpeech: boolean;
 	}[];
+	/** Open officer terms the End closes, by position. */
+	closedOfficerTerms: string[];
 	deletedPlanAnswers: {
 		meetingId: string;
 		meetingDate: string;
@@ -110,7 +114,9 @@ function planOf(v: MemberStandingVerdict): Plan {
 			meetingId: r.meetingId,
 			meetingDate: r.meetingDate.toISOString(),
 			role: r.role,
+			hasLinkedSpeech: r.hasLinkedSpeech,
 		})),
+		closedOfficerTerms: v.closedOfficerTerms,
 		deletedPlanAnswers: v.deletedPlanAnswers.map((a) => ({
 			meetingId: a.meetingId,
 			meetingDate: a.meetingDate.toISOString(),
@@ -139,7 +145,8 @@ export const setMemberStandingTool: McpToolDefinition = {
 			"find_people. inactive is the reversible way to stand someone down; " +
 			"former is for someone who has left. Neither deletes the person. Going " +
 			"inactive or former releases their upcoming roles; going former also " +
-			"deletes their planned-attendance answers on meetings not yet completed. " +
+			"deletes their planned-attendance answers on meetings not yet completed " +
+			"and closes their open officer terms. " +
 			"Making someone an admin lets them edit the roster, meetings and club " +
 			"settings. A club always keeps one active admin, and a former member " +
 			"holds no role. Call once WITHOUT planHash to preview: it writes " +

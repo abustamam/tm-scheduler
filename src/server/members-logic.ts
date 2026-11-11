@@ -28,13 +28,13 @@ import {
 	meetingAwards,
 	meetings,
 	members,
+	officerTerms,
 	people,
 	roleDefinitions,
 	roleSlots,
 	tableTopicsSpeakers,
 } from "#/db/schema";
 import { MEMBERSHIP_ENDED_CHANGE } from "#/lib/activity-format";
-import { acceptedStatuses } from "#/lib/meeting-lifecycle";
 import { localDateKey } from "#/lib/meeting-url";
 import { pastAgendaRemoveRefusal } from "#/lib/member-remove";
 import { isOnRoster } from "#/lib/membership-status";
@@ -64,6 +64,7 @@ import { logActivity } from "./activity";
 import {
 	deletePlanRowsOfEndedMember,
 	listMyAttendanceForMeetings,
+	lockMemberAttendance,
 } from "./attendance-plan-logic";
 import { isReadableClub } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
@@ -71,7 +72,7 @@ import { loadClubDefaultCountryCode } from "./clubs-logic";
 import { contactMethodAvailableSql } from "./contact-preference-logic";
 import { withDeadlockRetry } from "./deadlock-retry";
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
-import { meetingAcceptsWrite } from "./meeting-write-gate";
+import { meetingAcceptsWrite, meetingRowAccepts } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import {
 	collapseMemberships,
@@ -872,12 +873,13 @@ export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
 			for (const s of upcoming) {
 				// Unlink any speech (speech_id → NULL); the speech persists
 				// Person-owned and unscheduled (ADR-0009 — never destroyed).
-				// The meeting's status rides in the UPDATE (#1154): `scheduledAt >= now` is an
-				// instant, `completeMeeting` closes by the club-local day, so a meeting completed
-				// this afternoon and scheduled for this evening matches the SELECT above. The
-				// UPDATE refuses it, so the release keeps its status, claimedAt and speechId.
-				// A cancelled future meeting is still released (#1057). The log follows
-				// RETURNING, so it names only the slots actually released.
+				// The meeting's status rides in the UPDATE (#1154) as the guard for the
+				// race only: `upcomingSlotsOf` already filters by status in the SELECT, so
+				// the UPDATE refuses a slot only when its meeting completed (or the slot
+				// was reassigned) after that SELECT, and the release then keeps its status,
+				// claimedAt and speechId. A cancelled future meeting is still released
+				// (#1057). The log follows RETURNING, so it names only the slots actually
+				// released.
 				const released = await tx
 					.update(roleSlots)
 					.set({
@@ -998,6 +1000,7 @@ async function upcomingSlotsOf(conn: Tx | typeof db, memberId: string) {
 			meetingId: roleSlots.meetingId,
 			meetingDate: meetings.scheduledAt,
 			role: roleDefinitions.name,
+			speechId: roleSlots.speechId,
 		})
 		.from(roleSlots)
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
@@ -1097,8 +1100,8 @@ export async function applySetMemberRole(input: SetRoleInput, conn?: Tx) {
 export interface MemberStandingInput {
 	clubId: string;
 	memberId: string;
-	status?: "active" | "inactive" | "former";
-	clubRole?: "admin" | "member";
+	status?: z.infer<typeof setStatusSchema>["status"];
+	clubRole?: z.infer<typeof setRoleSchema>["clubRole"];
 }
 
 export type MemberStandingBlockCode = "LAST_ADMIN" | "FORMER_MEMBER_ROLE";
@@ -1185,45 +1188,60 @@ export async function memberStandingVerdict(
 					meetingId: r.meetingId,
 					meetingDate: r.meetingDate,
 					role: r.role,
+					// The release unlinks the speech (it persists, unscheduled).
+					hasLinkedSpeech: r.speechId !== null,
 				}))
 			: [];
 
+	// The open officer terms an End closes (`endOfficerTermsOfEndedMember`).
+	const closedOfficerTerms =
+		t.ending && statusChanges
+			? (
+					await conn
+						.select({ position: officerTerms.position })
+						.from(officerTerms)
+						.where(
+							and(
+								eq(officerTerms.membershipId, input.memberId),
+								isNull(officerTerms.termEnd),
+							),
+						)
+						.orderBy(asc(officerTerms.position), asc(officerTerms.id))
+				).map((o) => o.position)
+			: [];
+
 	// The answers `deletePlanRowsOfEndedMember` deletes: this member's rows on a
-	// meeting that still accepts a plan write (cancelled included, #1342).
-	let deletedPlanAnswers: {
+	// meeting that still accepts a plan write (cancelled included, #1342). The
+	// meeting set comes from `planAcceptingMeetings`, the same class and options
+	// the delete's `meetingAcceptsWrite` carries (the store itself is reached only
+	// through the attendance seam).
+	const deletedPlanAnswers: {
 		meetingId: string;
 		meetingDate: Date;
 		status: string;
 	}[] = [];
 	if (t.ending && statusChanges) {
-		const open = await conn
-			.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.clubId, input.clubId),
-					inArray(
-						meetings.status,
-						acceptedStatuses("plan", PLAN_ACCEPTING_CANCELLED.accept),
-					),
-				),
-			);
+		const open = await planAcceptingMeetings(conn, input.clubId);
 		const dateOf = new Map(open.map((m) => [m.id, m.scheduledAt]));
 		const { plan } = await listMyAttendanceForMeetings(conn, {
 			meetingIds: open.map((m) => m.id),
 			memberIds: [input.memberId],
 		});
-		deletedPlanAnswers = plan
-			.map((p) => ({
-				meetingId: p.meetingId,
-				meetingDate: dateOf.get(p.meetingId) as Date,
-				status: p.status as string,
-			}))
-			.sort(
-				(a, b) =>
-					a.meetingDate.getTime() - b.meetingDate.getTime() ||
-					a.meetingId.localeCompare(b.meetingId),
-			);
+		for (const p of plan) {
+			const meetingDate = dateOf.get(p.meetingId);
+			if (meetingDate) {
+				deletedPlanAnswers.push({
+					meetingId: p.meetingId,
+					meetingDate,
+					status: p.status,
+				});
+			}
+		}
+		deletedPlanAnswers.sort(
+			(x, y) =>
+				x.meetingDate.getTime() - y.meetingDate.getTime() ||
+				x.meetingId.localeCompare(y.meetingId),
+		);
 	}
 
 	return {
@@ -1233,9 +1251,27 @@ export async function memberStandingVerdict(
 		statusChanges,
 		roleChanges: roleAfter !== current.clubRole,
 		releasedRoles,
+		closedOfficerTerms,
 		deletedPlanAnswers,
 		blocked,
 	};
+}
+
+/** The club's meetings that still accept a plan write, cancelled included
+ *  (#1342), in id order: the meeting set the End's plan-answer delete runs over
+ *  (`deletePlanRowsOfEndedMember`), for the verdict's list and the apply's
+ *  attendance locks alike. */
+async function planAcceptingMeetings(conn: Tx | typeof db, clubId: string) {
+	return conn
+		.select({ id: meetings.id, scheduledAt: meetings.scheduledAt })
+		.from(meetings)
+		.where(
+			and(
+				eq(meetings.clubId, clubId),
+				meetingRowAccepts("plan", PLAN_ACCEPTING_CANCELLED),
+			),
+		)
+		.orderBy(asc(meetings.id));
 }
 
 export type MemberStandingVerdict = NonNullable<
@@ -1265,6 +1301,28 @@ export async function applyMemberStanding(
 	await db.transaction(async (tx) => {
 		await lockClubForWrite(tx, input.clubId);
 		await lockMembershipsAgainstMerge(tx, [input.memberId]);
+		if (input.status === "former") {
+			// An End deletes the plan answers on every meeting that still accepts a
+			// plan write; take each meeting's attendance key (the one a decline or a
+			// session-less answer takes FIRST) so an answer cannot land between the
+			// preview check and the delete. Before the row lock: a claim takes
+			// attendance -> merge -> row, so the order cannot cycle. Meeting-id order.
+			const open = await planAcceptingMeetings(tx, input.clubId);
+			for (const m of open)
+				await lockMemberAttendance(tx, m.id, input.memberId);
+		}
+		// The member row, NO KEY UPDATE, BEFORE the verdict: a slot claim takes only
+		// the shared merge lock and this row FOR SHARE, so without this a claim could
+		// commit between the freshness check and the release, and the release would
+		// drop a role the preview never listed. The nested appliers below re-take the
+		// same locks in the same order (reentrant within this transaction).
+		await tx
+			.select({ id: members.id })
+			.from(members)
+			.where(
+				and(eq(members.id, input.memberId), eq(members.clubId, input.clubId)),
+			)
+			.for("no key update");
 		if (opts.assertFresh) {
 			const verdict = await memberStandingVerdict(tx, input);
 			if (!opts.assertFresh(verdict))

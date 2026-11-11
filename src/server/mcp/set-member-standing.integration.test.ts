@@ -13,7 +13,9 @@ import {
 	meetingAttendancePlan,
 	meetings,
 	members,
+	officerTerms,
 	roleSlots,
+	speeches,
 } from "#/db/schema";
 import {
 	cleanup,
@@ -68,7 +70,13 @@ interface Plan {
 		status: { before: string; after: string };
 		clubRole: { before: string; after: string };
 		unchanged: string[];
-		releasedRoles: { slotId: string; role: string; meetingDate: string }[];
+		releasedRoles: {
+			slotId: string;
+			role: string;
+			meetingDate: string;
+			hasLinkedSpeech: boolean;
+		}[];
+		closedOfficerTerms: string[];
 		deletedPlanAnswers: { meetingId: string; status: string }[];
 		adminNote: string | null;
 		blocking: { code: string; message: string }[];
@@ -439,6 +447,175 @@ describe.skipIf(!hasTestDb)("set_member_standing (#1577)", () => {
 				run(adminToken, { clubId: s.clubId, memberId: s.memberId }),
 			),
 		).toMatchObject({ ok: false, code: "VALIDATION" });
+	});
+
+	it("a claim in flight when the apply starts is waited for: PLAN_STALE, and the claim is not released", async () => {
+		const { s, adminToken } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			memberId: s.memberId,
+			status: "inactive",
+		};
+		const p = (await run(adminToken, input)) as Plan;
+		const m3 = await meeting(s.clubId, 28);
+		let claimed = "";
+		let held!: () => void;
+		const isHeld = new Promise<void>((r) => {
+			held = r;
+		});
+		let commit!: () => void;
+		const gate = new Promise<void>((r) => {
+			commit = r;
+		});
+		// A slot claim on a second connection: the member row FOR SHARE, then the
+		// slot, not yet committed when the apply takes its verdict.
+		const claim = testDb.transaction(async (tx) => {
+			await tx
+				.select({ id: members.id })
+				.from(members)
+				.where(eq(members.id, s.memberId))
+				.for("share");
+			const [slot] = await tx
+				.insert(roleSlots)
+				.values({
+					meetingId: m3,
+					roleDefinitionId: s.roleDefinitionId,
+					status: "claimed",
+					assignedMemberId: s.memberId,
+					claimedAt: new Date(),
+				})
+				.returning({ id: roleSlots.id });
+			claimed = slot?.id ?? "";
+			held();
+			await gate;
+		});
+		await isHeld;
+		const apply = outcome(run(adminToken, { ...input, planHash: p.planHash }));
+		await new Promise((r) => setTimeout(r, 500));
+		commit();
+		await claim;
+		const res = await apply;
+		expect(res).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		expect(await holder(claimed)).toBe(s.memberId);
+		expect((await memberOf(s.memberId))?.status).toBe("active");
+	});
+
+	it("a stale verdict with no member behind it is NOT_FOUND", async () => {
+		const { s, adminToken } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			memberId: s.memberId,
+			status: "inactive",
+		};
+		const p = (await run(adminToken, input)) as Plan;
+		const spy = vi
+			.spyOn(membersLogic, "applyMemberStanding")
+			.mockRejectedValueOnce(new membersLogic.MemberStandingStaleError(null));
+		const res = await outcome(
+			run(adminToken, { ...input, planHash: p.planHash }),
+		);
+		spy.mockRestore();
+		expect(res).toMatchObject({ ok: false, code: "NOT_FOUND" });
+	});
+
+	it("a cancelled future meeting: its role is released and its answer deleted, in preview and apply", async () => {
+		const { s, adminToken } = await fixture();
+		const cancelled = await meeting(s.clubId, 35, "cancelled");
+		const slot = await hold(s.roleDefinitionId, cancelled, s.memberId);
+		await answer(cancelled, s.memberId);
+		const input = { clubId: s.clubId, memberId: s.memberId, status: "former" };
+		const p = (await run(adminToken, input)) as Plan;
+		expect(p.plan.releasedRoles.map((r) => r.slotId)).toContain(slot);
+		expect(p.plan.deletedPlanAnswers.map((a) => a.meetingId)).toContain(
+			cancelled,
+		);
+		expect(
+			(await outcome(run(adminToken, { ...input, planHash: p.planHash }))).ok,
+		).toBe(true);
+		expect(await holder(slot)).toBeNull();
+		expect(await answersOf(s.memberId)).not.toContain(cancelled);
+	});
+
+	it("an answer given after the preview is PLAN_STALE", async () => {
+		const { s, adminToken } = await fixture();
+		const input = { clubId: s.clubId, memberId: s.memberId, status: "former" };
+		const p = (await run(adminToken, input)) as Plan;
+		const m3 = await meeting(s.clubId, 28);
+		await answer(m3, s.memberId);
+		const res = await outcome(
+			run(adminToken, { ...input, planHash: p.planHash }),
+		);
+		expect(res).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		const fresh = (res as { err: { detail: Plan } }).err.detail;
+		expect(fresh.plan.deletedPlanAnswers.map((a) => a.meetingId)).toContain(m3);
+		expect((await memberOf(s.memberId))?.status).toBe("active");
+		expect(await answersOf(s.memberId)).toContain(m3);
+	});
+
+	it("going inactive and demoting the only admin in one call is blocked in preview and apply", async () => {
+		const { s, adminToken } = await fixture();
+		const input = {
+			clubId: s.clubId,
+			memberId: s.adminMemberId,
+			status: "inactive",
+			clubRole: "member",
+		};
+		const p = (await run(adminToken, input)) as Plan;
+		expect(p.plan.blocking.map((b) => b.code)).toContain("LAST_ADMIN");
+		expect(
+			await outcome(run(adminToken, { ...input, planHash: p.planHash })),
+		).toMatchObject({ ok: false, code: "BLOCKED" });
+		const admin = await memberOf(s.adminMemberId);
+		expect([admin?.status, admin?.clubRole]).toEqual(["active", "admin"]);
+	});
+
+	it("an End lists the open officer terms it closes and a linked speech it unlinks; a term added later is PLAN_STALE", async () => {
+		const { s, adminToken, slotA } = await fixture();
+		const person = (await memberOf(s.memberId))?.personId as string;
+		const [speech] = await testDb
+			.insert(speeches)
+			.values({ personId: person, title: "Ice Breaker" })
+			.returning({ id: speeches.id });
+		await testDb
+			.update(roleSlots)
+			.set({ speechId: speech?.id })
+			.where(eq(roleSlots.id, slotA));
+		await testDb
+			.insert(officerTerms)
+			.values({ membershipId: s.memberId, position: "treasurer" });
+		await testDb.insert(officerTerms).values({
+			membershipId: s.memberId,
+			position: "secretary",
+			termEnd: new Date(Date.now() - DAY),
+		});
+		const input = { clubId: s.clubId, memberId: s.memberId, status: "former" };
+		const p = (await run(adminToken, input)) as Plan;
+		expect(p.plan.closedOfficerTerms).toEqual(["treasurer"]);
+		expect(
+			p.plan.releasedRoles.find((r) => r.slotId === slotA)?.hasLinkedSpeech,
+		).toBe(true);
+		const inactive = (await run(adminToken, {
+			...input,
+			status: "inactive",
+		})) as Plan;
+		expect(inactive.plan.closedOfficerTerms).toEqual([]);
+
+		await testDb
+			.insert(officerTerms)
+			.values({ membershipId: s.memberId, position: "sergeant_at_arms" });
+		expect(
+			await outcome(run(adminToken, { ...input, planHash: p.planHash })),
+		).toMatchObject({ ok: false, code: "PLAN_STALE" });
+		const fresh = (await run(adminToken, input)) as Plan;
+		expect(
+			(await outcome(run(adminToken, { ...input, planHash: fresh.planHash })))
+				.ok,
+		).toBe(true);
+		const open = await testDb
+			.select()
+			.from(officerTerms)
+			.where(eq(officerTerms.membershipId, s.memberId));
+		expect(open.every((t) => t.termEnd !== null)).toBe(true);
 	});
 
 	it("promoting a member logs member_edit crediting the calling officer", async () => {
