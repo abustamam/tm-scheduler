@@ -23,6 +23,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 
 const ROUTE = resolve(
 	dirname(fileURLToPath(import.meta.url)),
@@ -52,8 +53,13 @@ const ALL_HANDLER_FILES = [
 	),
 ];
 
-/** The rail's scroller lives here, not on the route's `<aside>` — see the
- *  cap/scroller pair below. */
+/** The tab shell (#1582). */
+const TABS = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"../components/club/meeting-tabs.tsx",
+);
+
+/** The panel's card: it carries no height cap or scroller since #1582. */
 const PANEL = resolve(
 	dirname(fileURLToPath(import.meta.url)),
 	"../components/club/meeting-attendance-panel.tsx",
@@ -87,16 +93,6 @@ describe("attendance panel route wiring (PR 2)", () => {
 	const panelTagAt = src.indexOf("<MeetingAttendancePanel");
 	const panelTagEnd = src.indexOf("/>", panelTagAt);
 	const panelProps = src.slice(panelTagAt, panelTagEnd);
-
-	// The pinned rail's own wrapper, windowed the same way and for the same
-	// reason: this route carries dozens of `className` strings, and a whole-file
-	// `toContain` on a utility class matches whichever element happens to have
-	// it. Ends at the opening tag's `>` — `readSource` blanks the JSX comment
-	// that sits between `<aside` and `className`, so the first `>` after the tag
-	// name is the tag's own.
-	const asideTagAt = src.indexOf("<aside");
-	const asideTagEnd = src.indexOf(">", asideTagAt);
-	const asideTag = src.slice(asideTagAt, asideTagEnd);
 
 	it("finds the panel's call site at all", () => {
 		// The window every prop assertion below reads from. Without this, a
@@ -312,7 +308,12 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// (`showPlanPanel` for `upcoming`, `showRollPanel` on meeting day), and
 		// the TMOD-fetch guard has to sit outside that choice or a failed ladder
 		// fetch would still render an empty plan panel.
-		expect(src).toContain("{showPanel && !tmodPanelUnavailable ? (");
+		// Now the Attendance tab's gate (#1582): the tab is offered only when the
+		// panel would have rendered, so the TMOD-fetch guard still sits outside the
+		// plan/roll choice.
+		expect(src.replace(/\s+/g, " ")).toContain(
+			"attendance: showPanel && !tmodPanelUnavailable,",
+		);
 	});
 
 	it("evicts the Toastmaster's cached contact roster when the viewer changes", () => {
@@ -330,8 +331,14 @@ describe("attendance panel route wiring (PR 2)", () => {
 		);
 	});
 
-	it("keeps the agenda column shrinkable so the rail cannot be pushed off", () => {
-		expect(src).toContain("min-w-0 flex-1");
+	it("keeps every tab panel shrinkable so a wide row cannot push the page sideways", () => {
+		// #1582: the two-column row is gone; the panels are the tab shell's.
+		// protects=a wide row cannot push the page sideways; fails_when=min-w-0 is
+		// dropped from the <TabsContent> tag itself (a mention elsewhere in the file
+		// does not count); no_claim=measures no layout, the geometry suites do
+		const cls = tagClassName(openingTag(readSource(TABS), "TabsContent"));
+		expect(cls, "<TabsContent> has no className").not.toBeNull();
+		expect(cls?.split(/\s+/)).toContain("min-w-0");
 	});
 
 	// Task 7: the personal strip's rung is the member's OWN answer, read from the
@@ -558,13 +565,16 @@ describe("attendance panel route wiring (PR 2)", () => {
 		);
 	});
 
-	it("I5: the panel sits above the agenda on mobile and beside it on desktop (D4)", () => {
-		// The banner/header/toolbar/announcements block runs full width OUTSIDE
-		// the two-column row, so it can never be pushed below the panel on
-		// desktop; within the row, mobile order is reversed so the panel lands
-		// directly beneath the toolbar rather than after the whole agenda column.
-		expect(src).toContain("order-1 lg:order-2");
-		expect(src).toContain("order-2 min-w-0 flex-1");
+	it("the panel is the Attendance tab's content, not a side rail (#1582)", () => {
+		// Replaces the D4 "above on mobile, beside on desktop" guard: there is one
+		// column now and the panel is the Attendance tab's panel.
+		expect(src).toContain("<MeetingTabs");
+		expect(src).not.toContain("lg:order-2");
+		const attendanceAt = src.indexOf("attendance: (");
+		expect(attendanceAt).toBeGreaterThan(-1);
+		expect(src.indexOf("<MeetingAttendancePanel")).toBeGreaterThan(
+			attendanceAt,
+		);
 	});
 
 	// PR 3 Task 5 — roll mode. Same reason as everything above: the route does
@@ -810,68 +820,19 @@ describe("attendance panel route wiring (PR 2)", () => {
 		expect(panelJsx).toContain("onRemoveGuest={removeRollGuest}");
 	});
 
-	it("caps the pinned rail's height and gives it its own scroller", () => {
-		// The headline reachability fix of this diff, and it was gated by nothing:
-		// deleting both classes left 244/244 route tests green. `lg:sticky` with no
-		// cap makes the rail's own height a wall — rows are ~81px, so a 40-member
-		// club is a ~3,240px column pinned inside a ~950px viewport, and everything
-		// past row ~10 is unreachable because the PAGE scrolls and the pinned rail
-		// does not. The cap plus the scroller is what makes the bottom rows
-		// reachable at all.
-		//
-		// Both, not either — but the two halves now live in different files. The
-		// SCROLLER moved into the panel's card body (`MeetingAttendancePanel`), so
-		// that the card header stays put while the rows move; this element keeps
-		// the CAP and became the flex column the card fills. Each is still inert
-		// without the other: a cap with nothing scrolling inside it CLIPS the
-		// bottom rows outright, and a scroller inside an uncapped column never
-		// overflows, so it scrolls nothing.
-		//
-		// The cross-file half is asserted below rather than here, and the GEOMETRY
-		// both halves exist for is asserted by neither: see
-		// `src/components/pinned-column-reachability.test.ts`, which lays this
-		// column out in headless Chrome and checks that row 40 is reachable and
-		// the header survives the trip. This file still earns its place — it pins
-		// WHICH element and WHICH file the classes live on, which geometry cannot
-		// see, and it runs without a browser.
-		expect(
-			asideTagAt,
-			"expected the pinned rail to still be an <aside …> element",
-		).toBeGreaterThan(-1);
-		expect(
-			asideTagEnd,
-			"expected the <aside> opening tag to close",
-		).toBeGreaterThan(asideTagAt);
-		// The cap and the pin read ONE offset, the shell's `--shell-pinned-top`
-		// (#999): a cap sized for a pin the rail no longer has leaves its bottom
-		// below the viewport. `roster-action-row-geometry.test.ts` measures both
-		// with the impersonation banner up and down.
-		expect(asideTag).toContain(
-			"lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)]",
-		);
-		expect(asideTag).toContain("lg:top-[var(--shell-pinned-top,6rem)]");
-		expect(asideTag).toContain("lg:flex-col");
-	});
-
-	it("keeps the rail's scroller on the panel card's body", () => {
-		// The other half of the pair above, in the file it moved to. Read
-		// comment-blind: the `<aside>`'s own comment in the route explains this
-		// move and names `overflow-y-auto`, and the panel's comment names the
-		// `lg:` coupling — either would satisfy a raw-text search with the real
-		// attribute gone.
+	it("no longer pins or caps the attendance list (#1582)", () => {
+		// With the `<aside>` gone the list flows with the page. A leftover height
+		// cap with no scroller would CLIP the bottom rows, and a leftover scroller
+		// with no bounded parent is a box inside a box, so both halves must be gone.
+		expect(src).not.toContain("<aside");
+		expect(src).not.toContain("lg:max-h-[calc(100vh");
+		expect(src).not.toContain("lg:sticky");
+		// protects=the panel's Card and CardContent tags carry no className (the
+		// rail's scroller and cap lived on them); fails_when=either tag gains a
+		// className; no_claim=says nothing about the classes of other elements
 		const panel = readSource(PANEL);
-		const at = panel.indexOf("<CardContent");
-		expect(
-			at,
-			"expected the panel to still render a <CardContent>",
-		).toBeGreaterThan(-1);
-		const cls = /className="([^"]*)"/.exec(panel.slice(at))?.[1] ?? "";
-		expect(cls).toContain("lg:overflow-y-auto");
-		// `min-h-0` is not decoration. A flex item defaults to `min-height: auto`,
-		// which refuses to shrink below its content — so without it the body grows
-		// to fit all 40 rows, the cap pushes the overflow out of the card, and
-		// `lg:overflow-y-auto` scrolls nothing at all while still being present.
-		expect(cls).toContain("lg:min-h-0");
+		expect(tagClassName(openingTag(panel, "CardContent"))).toBeNull();
+		expect(tagClassName(openingTag(panel, "Card"))).toBeNull();
 	});
 });
 

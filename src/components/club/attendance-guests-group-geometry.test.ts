@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GUEST_TEXT_MAX } from "#/lib/guest-profile";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 import {
 	buildAppCss,
 	candidatesIn,
@@ -44,6 +45,7 @@ const TOGGLE = resolve(HERE, "attendance-mode-toggle.tsx");
 const PANEL = resolve(HERE, "meeting-attendance-panel.tsx");
 const BADGE = resolve(HERE, "../ui/badge.tsx");
 const CARD = resolve(HERE, "../ui/card.tsx");
+const MEETING_TABS = resolve(HERE, "meeting-tabs.tsx");
 const MEETING_ROUTE = resolve(
 	HERE,
 	"../../routes/club.$clubId.meeting.$meetingId.tsx",
@@ -54,16 +56,6 @@ const MEETING_ROUTE = resolve(
  * element here carries a long comment that quotes its own class names, and
  * matching one would measure documentation rather than the shipped attribute.
  */
-
-/** First `className="…"` after an opening tag. */
-function classAfterTag(file: string, tag: string): string {
-	const src = readSource(file);
-	const at = src.indexOf(tag);
-	expect(at, `\`${tag}\` not found in ${file}`).toBeGreaterThan(-1);
-	const m = /className="([^"]*)"/.exec(src.slice(at));
-	expect(m, `no className after \`${tag}\``).not.toBeNull();
-	return m?.[1] ?? "";
-}
 
 /** The unique `className="…"` CONTAINING `fragment`. Uniqueness is asserted,
  *  because a fragment that started matching two elements would silently
@@ -142,10 +134,10 @@ const NAME = "Nadia Farouk";
 /** A name that does not fit the rail beside the toggle on its own. */
 const LONG_NAME = "Alexandria Konstantinopoulos-Vanderbilt";
 
-/** Desktop: `lg:` applies and `xl:` does not, so the route's real `<aside>` is
- *  340px wide, the narrowest it gets and the width the review measured. */
+/** Desktop: `lg:` applies and `xl:` does not. The Attendance tab is as wide as
+ *  the page's content box (#1582 removed the rail). */
 const VIEWPORT = { width: 1024, height: 800 };
-/** `xl:` applies: the same `<aside>` is 384px wide. */
+/** `xl:` applies. */
 const XL_VIEWPORT = { width: 1440, height: 800 };
 
 type Measure = {
@@ -172,12 +164,13 @@ type Measure = {
 };
 
 describe.skipIf(!hasChrome)(
-	"a guest's badge inside the attendance rail (#1080)",
+	"a guest's badge inside the attendance tab (#1080)",
 	{ timeout: CHROME_TEST_TIMEOUT_MS },
 	() => {
 		let css = "";
 		const cls = {
-			rail: "",
+			container: "",
+			tabPanel: "",
 			cardBase: "",
 			card: "",
 			cardBodyBase: "",
@@ -262,9 +255,12 @@ describe.skipIf(!hasChrome)(
 			return `<div class="${cls.cardBase} ${cls.card}"><div class="${cls.cardBodyBase} ${cls.cardBody}" data-body><section class="space-y-2"><h3 class="font-semibold text-sm">Guests</h3><div class="${cls.group}" data-group>${inner}</div></section></div></div>`;
 		}
 
-		/** The meeting page's pinned rail: the route's real `<aside>`. */
+		/** The Attendance tab at desktop: the route's real content container
+		 *  around the tab shell's real panel class, the card at full width. The
+		 *  fixture has no shell sidebar, so it is wider than the real page; the
+		 *  375px and 768px cases below are the narrow ones. */
 		const desktopFixture = (inner: string) =>
-			`<div class="flex gap-4"><main class="min-w-0 flex-1">main</main><aside class="${cls.rail}">${panelAround(inner)}</aside></div>`;
+			`<div class="${cls.container}"><div class="${cls.tabPanel}" data-state="active">${panelAround(inner)}</div></div>`;
 		/** Below `lg:` the panel is as wide as the page. Headless Chrome lays no
 		 *  window out narrower than 500px, so the page is pinned instead; the
 		 *  `lg:` classes on the card body still apply and change no width. */
@@ -395,11 +391,34 @@ describe.skipIf(!hasChrome)(
 		}
 
 		beforeAll(async () => {
-			cls.rail = classAfterTag(MEETING_ROUTE, "<aside");
+			// Anchored on the route's `containerClass`, as `roll-row` does.
+			const container =
+				/const containerClass = canManage\s*\?\s*"([^"]*)"/.exec(
+					readSource(MEETING_ROUTE),
+				)?.[1];
+			expect(
+				container,
+				"containerClass (the manager arm) not found",
+			).toBeTruthy();
+			cls.container = container ?? "";
+			cls.tabPanel =
+				tagClassName(openingTag(readSource(MEETING_TABS), "TabsContent")) ?? "";
+			expect(cls.tabPanel, "<TabsContent> className not found").not.toBe("");
 			cls.cardBase = cnBaseOf(CARD, "Card");
-			cls.card = classAfterTag(PANEL, "<Card ");
+			// The panel's card and body carry no className since #1582. Each tag is
+			// read on its own.
+			const panelSrc = readSource(PANEL);
+			expect(
+				tagClassName(openingTag(panelSrc, "Card")),
+				"<Card> gained a className",
+			).toBeNull();
+			expect(
+				tagClassName(openingTag(panelSrc, "CardContent")),
+				"<CardContent> gained a className",
+			).toBeNull();
+			cls.card = "";
 			cls.cardBodyBase = cnBaseOf(CARD, "CardContent");
-			cls.cardBody = classAfterTag(PANEL, "<CardContent");
+			cls.cardBody = "";
 			cls.group = classContaining(GROUP, "flex flex-wrap gap-2");
 			cls.badgeBase = classLiteralContaining(BADGE, "inline-flex w-fit");
 			cls.badgeSecondary = classLiteralContaining(
@@ -465,16 +484,18 @@ describe.skipIf(!hasChrome)(
 			expect(cls.namePlain).toContain("truncate");
 			expect(cls.nameButton).toContain("min-w-0");
 			expect(cls.nameButtonText).toContain("truncate");
-			expect(cls.rail).toMatch(/lg:w-\[\d+px\]/);
-			expect(cls.rail).toMatch(/xl:w-96/);
+			expect(cls.container, "route container not found").toContain(
+				"max-w-workspace",
+			);
+			expect(cls.tabPanel).toContain("min-w-0");
 			expect(cls.cardBodyBase).toContain("px-6");
 			expect(cls.toggle).toContain("shrink-0");
 		});
 
 		describe("a guest speaker with a 120-character home club, as an officer sees them", () => {
 			for (const [where, fixture, viewport] of [
-				["on the 340px desktop rail", desktopFixture, VIEWPORT],
-				["on the 384px xl rail", desktopFixture, XL_VIEWPORT],
+				["in the full-width tab at 1024px", desktopFixture, VIEWPORT],
+				["in the full-width tab at 1440px", desktopFixture, XL_VIEWPORT],
 				["on a 375px phone", phoneFixture, VIEWPORT],
 				["on a 768px tablet", tabletFixture, VIEWPORT],
 			] as const) {
@@ -526,7 +547,7 @@ describe.skipIf(!hasChrome)(
 			expect(short.badgeWidth).toBeLessThan(short.groupClientWidth);
 		});
 
-		describe("a name too long for the rail", () => {
+		describe("a name too long for the panel (measured at 375px: the full-width desktop tab is wide enough to hold this name whole)", () => {
 			// Pre-#1080 such a badge overflowed the rail (399px in 290px) and the
 			// card body scrolled sideways to it. With the badge capped, the name
 			// must TRUNCATE rather than push the toggle and the remove control past
@@ -535,7 +556,7 @@ describe.skipIf(!hasChrome)(
 				const how = nameAsControl ? "as the edit control" : "as plain text";
 				it(`${how}, with no caption: truncates and keeps both controls reachable`, () => {
 					const m = measure(
-						desktopFixture(
+						phoneFixture(
 							badge(shipped(), {
 								name: LONG_NAME,
 								caption: null,
@@ -555,7 +576,7 @@ describe.skipIf(!hasChrome)(
 
 			it("with a caption too: the caption goes first, then the name, controls intact", () => {
 				const m = measure(
-					desktopFixture(officerView(shipped(), false, LONG_NAME)),
+					phoneFixture(officerView(shipped(), false, LONG_NAME)),
 				);
 				expectInsideTheRail(m, "long name + caption");
 				expect(m.captionWidth).toBe(0);
@@ -576,7 +597,7 @@ describe.skipIf(!hasChrome)(
 
 			it("without `truncate` on the caption, the caption cannot shrink and the controls are clipped", () => {
 				const c = { ...shipped(), caption: strip(cls.caption, "truncate") };
-				const m = measure(desktopFixture(officerView(c, false)));
+				const m = measure(phoneFixture(officerView(c, false)));
 				expect(m.badgeScrollWidth).toBeGreaterThan(m.badgeClientWidth);
 				expect(m.toggleOverhang).toBeGreaterThan(0);
 				expect(m.removeOverhang).toBeGreaterThan(0);
@@ -586,7 +607,7 @@ describe.skipIf(!hasChrome)(
 				// Basis `auto` shrinks name and caption in proportion to their
 				// content, so a 72px name loses most of itself to a 797px caption.
 				const c = { ...shipped(), caption: strip(cls.caption, "flex-1") };
-				const m = measure(desktopFixture(officerView(c, false)));
+				const m = measure(phoneFixture(officerView(c, false)));
 				expect(m.nameScrollWidth).toBeGreaterThan(m.nameClientWidth);
 				expect(m.captionWidth).toBeGreaterThan(0);
 			});
@@ -594,7 +615,7 @@ describe.skipIf(!hasChrome)(
 			it("without `truncate` on the plain name, a long name clips the controls", () => {
 				const c = { ...shipped(), namePlain: strip(cls.namePlain, "truncate") };
 				const m = measure(
-					desktopFixture(
+					phoneFixture(
 						badge(c, {
 							name: LONG_NAME,
 							caption: null,
@@ -616,7 +637,7 @@ describe.skipIf(!hasChrome)(
 					nameButton: strip(cls.nameButton, "min-w-0"),
 				};
 				const m = measure(
-					desktopFixture(
+					phoneFixture(
 						badge(c, {
 							name: LONG_NAME,
 							caption: null,
@@ -636,7 +657,7 @@ describe.skipIf(!hasChrome)(
 					nameButtonText: strip(cls.nameButtonText, "truncate"),
 				};
 				const m = measure(
-					desktopFixture(
+					phoneFixture(
 						badge(c, {
 							name: LONG_NAME,
 							caption: null,

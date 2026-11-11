@@ -116,9 +116,12 @@ describe("meeting route: cancel wiring (#1057)", () => {
 		expect(readSource(OUTREACH_HOOK).replace(/\s+/g, " ")).toContain(
 			"const canLineupBlast = !cancelled && (effectiveCanManage ||",
 		);
+		// The one named gate (#1582): the ballots tab's offer and its panel both
+		// read it, and it is false on a cancelled meeting.
 		expect(src).toContain(
-			"(isVoteCounter || effectiveCanManage) && !cancelled ?",
+			"const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;",
 		);
+		expect(src).toContain("{ballotsShown ? (");
 	});
 
 	it("the banner comes FIRST in the status chain and carries the officer controls", () => {
@@ -203,8 +206,10 @@ describe("meeting route: cancel wiring (#1057)", () => {
 	});
 
 	it("the minutes card is read-only and the banner says it once on a cancelled meeting (G)", () => {
-		expect(src).toContain(
-			"canEdit={effectiveCanManage && minutes.canEdit && !cancelled}",
+		// Whitespace-blind: the Minutes card now sits inside a tab panel, so the
+		// formatter wraps the prop at a deeper indent (#1582); the prop is unchanged.
+		expect(src.replace(/\s+/g, "")).toContain(
+			"canEdit={effectiveCanManage&&minutes.canEdit&&!cancelled}",
 		);
 		expect(src).toMatch(
 			/<span className="font-semibold">\s*\{MEETING_CANCELLED_MESSAGE\}\s*<\/span>\{" "\}\s*Everyone keeps their role\./,

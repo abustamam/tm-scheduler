@@ -3,21 +3,21 @@
  *
  * ONE LINE (#1309) wherever the panel sits beside its controls: name, role
  * chip, status trigger and contact-menu trigger share a line and the row is at
- * most 48px tall. That is the 340px `lg` rail, the 384px `xl` rail and a
- * full-width tablet panel. ON A PHONE (#1420) the status line drops UNDER the
+ * most 48px tall. That is the full-width Attendance tab at `lg`/`xl` (the rail is
+ * gone, #1582) and a full-width tablet panel. ON A PHONE (#1420) the status line drops UNDER the
  * identity (name and role chip), so the name gets the row instead of the ~57px
  * (beside "TD") or ~24px (beside "TOASTM") the controls left it.
  *
  * jsdom performs no layout and loads no stylesheet, so the component tests can
  * only see that a class is present, which is the half that is not the bug: a
  * `flex-wrap` that comes back, a name that stops being the shrinkable item, a
- * status track a few px too wide, a restack condition that reaches the rail,
+ * status track a few px too wide, a restack condition that reaches the wide tab,
  * each satisfy every grep. Only a browser tells them apart.
  *
  * The class strings come out of the real source files (comment-blind), so
  * stripping any one of them from the component fails this. The wrappers are the
- * REAL page's: the route's `containerClass` gutter, its `flex flex-col gap-5
- * lg:flex-row` column wrapper and its `<aside>`, read from the route file. The
+ * REAL page's: the route's `containerClass` gutter and the tab shell's panel
+ * class, read from source. The
  * markup BETWEEN the panel's classes and the contents of a row are synthetic:
  * mounting the real panel needs the router, the server fns and the offline
  * queue. Pair it with `meeting-attendance-panel.test.tsx`, which pins what
@@ -32,18 +32,18 @@
  * A Present row also carries the in-person/online toggle (#1049) on its own
  * line, so it is taller by design; its height is not measured, only where the
  * toggle sits horizontally (left with the status on a phone, right on the
- * rail).
+ * wide tab).
  *
  * The CONTROLS are what let the rest fail: the old two-line shape rebuilt from
  * the same classes must measure taller than 48px, the viewport-keyed track
- * (`md:`, no container, 24px of card padding) must leave the real rail's
- * identity box under its floor, and the phone page WITHOUT the restack must
+ * (`md:`, no container) is held by the source test at the foot of the file, and the phone page WITHOUT the restack must
  * leave the name its old ~57px / ~24px.
  */
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { readSource } from "#/test/guard-source";
+import { openingTag, tagClassName } from "#/test/jsx-tag";
 import {
 	buildAppCss,
 	candidatesIn,
@@ -58,6 +58,7 @@ const BADGE = resolve(HERE, "../ui/badge.tsx");
 const BUTTON = resolve(HERE, "../ui/button.tsx");
 const CARD = resolve(HERE, "../ui/card.tsx");
 const TOGGLE = resolve(HERE, "attendance-mode-toggle.tsx");
+const MEETING_TABS = resolve(HERE, "meeting-tabs.tsx");
 const ROUTE = resolve(HERE, "../../routes/club.$clubId.meeting.$meetingId.tsx");
 
 /** First `className="…"` after `tag`, in comment-stripped source. */
@@ -124,12 +125,11 @@ const PHONE_GUTTER_PX = 32;
 const TABLET_GUTTER_PX = 56;
 /** Tailwind's `md` breakpoint; the phone cases assert the window is below it. */
 const MD_PX = 768;
-/** The two viewports that fix the rail's width: `lg` (1024px) makes the aside
- *  340px, `xl` (1280px, tested at 1440) makes it 384px. */
+/** The desktop viewports the full-width Attendance tab is measured at: `lg`
+ *  (1024px) and `xl` (1440px). #1582 removed the rail, so the panel is as wide
+ *  as the page's content box at both and its list is far past `@md` (28rem). */
 const LG_VIEWPORT = { width: 1024, height: 800 };
 const XL_VIEWPORT = { width: 1440, height: 800 };
-const LG_RAIL_PX = 340;
-const XL_RAIL_PX = 384;
 /** A full-width tablet panel: `md` is on, `lg` is off, so the panel is the page
  *  less the gutters, and its list is wide enough for the `@md` (28rem) query. */
 const TABLET_VIEWPORT = { width: 800, height: 800 };
@@ -137,8 +137,6 @@ const TABLET_VIEWPORT = { width: 800, height: 800 };
 const CONTAINER_MD_PX = 448;
 /** Card border (1px a side) plus `px-6` (24px a side) below `lg`. */
 const CARD_CHROME_PX = 50;
-/** At `lg` the card's body is `lg:px-4`: border plus 16px a side. */
-const CARD_CHROME_LG_PX = 34;
 
 type Shape = "roll" | "twoLine" | "plan";
 /** The widest label a plan trigger shows (an assumed Coming), and a long role
@@ -152,8 +150,8 @@ const PLAN_CODE = "TOASTM";
 /** The widest label a roll trigger shows. */
 const ROLL_LABEL = "Excused";
 /** A short name: one word, so it fits one line even in the narrowest name box
- *  the single-line cases produce (24px, beside the widest role chip in a 340px
- *  rail). The one-line height cases use it; a two-word name wraps in that rail
+ *  the single-line cases produce (24px, beside the widest role chip in a narrow
+ *  name box). The one-line height cases use it; a two-word name wraps in that
  *  box, by design (#1420). */
 const NAME = "Al";
 /** A short TWO-word name (#1420 AC3): one line on a phone, beside any chip. */
@@ -167,8 +165,8 @@ const LONG_NAME =
 
 type Measure = {
 	innerWidth: number;
-	/** The `<aside>` the panel sits in. */
-	railWidth: number;
+	/** The Attendance tab panel the card sits in. */
+	panelWidth: number;
 	/** The `<ul>` every row's width (and the `@md:` track) is measured against. */
 	listWidth: number;
 	/** The identity box (name + role chip): what the controls leave of the row. */
@@ -216,9 +214,7 @@ type Measure = {
 
 const CLASS_KEYS = [
 	"pageBox",
-	"columns",
-	"leftColumn",
-	"aside",
+	"tabPanel",
 	"cardBase",
 	"card",
 	"cardHeaderBase",
@@ -280,8 +276,6 @@ describe.skipIf(!hasChrome)(
 	() => {
 		let css = "";
 		const cls = Object.fromEntries(CLASS_KEYS.map((k) => [k, ""])) as Classes;
-		/** The classes as they were before the track followed the panel's width. */
-		let preFix: Classes;
 		/** The phone page without the restack: the controls stay beside the name. */
 		let unstacked: Classes;
 
@@ -325,11 +319,11 @@ describe.skipIf(!hasChrome)(
 		}
 
 		/** The meeting page's wrappers around the panel's card, every class read
-		 *  from the route: container gutter, column wrapper, `<aside>`. */
+		 *  from source: the route's container gutter and the tab shell's panel. */
 		function pageHtml(o: MeasureOptions & RowOptions): string {
 			const c = o.c ?? cls;
 			const card = `<div class="${c.cardBase} ${c.card}"><div class="${c.cardHeaderBase} ${c.cardHeader}" data-header>Planned attendance</div><div class="${c.cardBodyBase} ${c.cardBody}" data-body>${rowHtml(o)}</div></div>`;
-			const page = `<div class="${c.pageBox}"><div class="${c.columns}"><div class="${c.leftColumn}"></div><aside class="${c.aside}" data-rail>${card}</aside></div></div>`;
+			const page = `<div class="${c.pageBox}"><div class="${c.tabPanel}" data-state="active" data-panel>${card}</div></div>`;
 			const boxed =
 				o.pagePx === undefined
 					? page
@@ -344,7 +338,7 @@ describe.skipIf(!hasChrome)(
 			function fail(why) { document.title = "ERROR:" + why; }
 			var q = function (s) { return document.querySelector(s); };
 			var row = q("[data-row]"), nm = q("[data-name]"), chip = q("[data-chip]");
-			var st = q("[data-status]"), menu = q("[data-menu]"), rail = q("[data-rail]");
+			var st = q("[data-status]"), menu = q("[data-menu]"), rail = q("[data-panel]");
 			var ident = q("[data-identity]"), list = q("[data-list]");
 			var header = q("[data-header]"), body = q("[data-body]");
 			if (!row || !nm || !st || !menu || !rail || !ident || !list || !header || !body) return fail("missing element");
@@ -352,7 +346,7 @@ describe.skipIf(!hasChrome)(
 			var mid = function (el) { return Math.round(r(el).top + r(el).height / 2); };
 			var out = {
 				innerWidth: window.innerWidth,
-				railWidth: Math.round(r(rail).width),
+				panelWidth: Math.round(r(rail).width),
 				listWidth: Math.round(r(list).width),
 				identityWidth: Math.round(r(ident).width),
 				headerInset: parseFloat(getComputedStyle(header).paddingLeft),
@@ -483,7 +477,7 @@ describe.skipIf(!hasChrome)(
 			const n = (k: string) => Number(kv.get(k) ?? "NaN");
 			return {
 				innerWidth: n("innerWidth"),
-				railWidth: n("railWidth"),
+				panelWidth: n("panelWidth"),
 				listWidth: n("listWidth"),
 				identityWidth: n("identityWidth"),
 				headerInset: n("headerInset"),
@@ -537,30 +531,32 @@ describe.skipIf(!hasChrome)(
 		}
 
 		beforeAll(async () => {
-			// The route's own wrappers: gutter, column wrapper, left column, aside.
+			// The route's own gutter and the tab shell's panel.
 			cls.pageBox = capture(
 				ROUTE,
 				/const containerClass = canManage\s*\?\s*"([^"]*)"/,
 				"containerClass (the manager arm)",
 			);
-			cls.columns = capture(
-				ROUTE,
-				/className="(flex flex-col gap-5 lg:flex-row[^"]*)"/,
-				"the column wrapper className",
-			);
-			cls.leftColumn = capture(
-				ROUTE,
-				/className="(order-2 min-w-0 flex-1[^"]*)"/,
-				"the left column className",
-				"flex flex-col gap-5 lg:flex-row",
-			);
-			cls.aside = classAfterTag(ROUTE, "<aside");
+			cls.tabPanel =
+				tagClassName(openingTag(readSource(MEETING_TABS), "TabsContent")) ?? "";
+			expect(cls.tabPanel, "<TabsContent> className not found").not.toBe("");
 			cls.cardBase = cnBaseOf(CARD, "Card");
-			cls.card = classAfterTag(PANEL, "<Card ");
+			// The panel's card and body carry no className since #1582 (the rail's
+			// cap and scroller went). Each tag is read on its own.
+			const panelSrc = readSource(PANEL);
+			expect(
+				tagClassName(openingTag(panelSrc, "Card")),
+				"<Card> gained a className",
+			).toBeNull();
+			expect(
+				tagClassName(openingTag(panelSrc, "CardContent")),
+				"<CardContent> gained a className",
+			).toBeNull();
+			cls.card = "";
 			cls.cardHeaderBase = cnBaseOf(CARD, "CardHeader");
 			cls.cardHeader = classAfterTag(PANEL, "<CardHeader");
 			cls.cardBodyBase = cnBaseOf(CARD, "CardContent");
-			cls.cardBody = classAfterTag(PANEL, "<CardContent");
+			cls.cardBody = "";
 			cls.list = classAfterTag(PANEL, '<ul role="list"');
 			cls.row = classAfterTag(PANEL, "function PanelRow");
 			cls.mainLine = classAfterTag(PANEL, "function PanelMainLine");
@@ -668,31 +664,13 @@ describe.skipIf(!hasChrome)(
 				"menu trigger className",
 				'layout === "menu"',
 			);
-			// `swap`/`drop` fail when the shipped class is not there to change, so a
+			// `drop` fails when the shipped class is not there to remove, so a
 			// control cannot quietly measure the shipped markup twice.
-			const swap = (value: string, from: string, to: string) => {
-				const was = value.replace(/\s+/g, " ").trim();
-				const out = was.replace(from, to).replace(/\s+/g, " ").trim();
-				expect(out, `\`${from}\` is not in "${was}"`).not.toBe(was);
-				return out;
-			};
 			const drop = (value: string, re: RegExp) => {
 				const was = value.replace(/\s+/g, " ").trim();
 				const out = was.replace(re, "").replace(/\s+/g, " ").trim();
 				expect(out, `${re} is not in "${was}"`).not.toBe(was);
 				return out;
-			};
-			// The pre-fix shape, for the CONTROLS: every class the rail fix moved,
-			// put back.
-			preFix = {
-				...cls,
-				aside: swap(cls.aside, " xl:w-96", ""),
-				cardHeader: swap(cls.cardHeader, "lg:px-4", ""),
-				cardBody: swap(cls.cardBody, "lg:px-4", ""),
-				list: swap(cls.list, "@container", ""),
-				status: swap(cls.status, "@md:w-44", "md:w-44"),
-				planStatus: swap(cls.planStatus, "@md:w-44", "md:w-44"),
-				qualifier: swap(cls.qualifier, "@md:inline", "md:inline"),
 			};
 			// The phone page as #1420's clamp alone left it: no restack.
 			unstacked = {
@@ -702,11 +680,7 @@ describe.skipIf(!hasChrome)(
 			};
 			css = await buildAppCss(
 				candidatesIn(
-					[
-						...Object.values(cls),
-						...Object.values(preFix),
-						...Object.values(unstacked),
-					]
+					[...Object.values(cls), ...Object.values(unstacked)]
 						.concat([
 							"flex flex-col gap-1.5",
 							"size-3.5",
@@ -745,7 +719,7 @@ describe.skipIf(!hasChrome)(
 					expect(m.innerWidth, "the md: breakpoint must be off").toBeLessThan(
 						MD_PX,
 					);
-					expect(m.railWidth, "the <aside>, at the route's gutter").toBe(
+					expect(m.panelWidth, "the tab panel, at the route's gutter").toBe(
 						PANEL_PX,
 					);
 					expect(m.listWidth).toBe(LIST_PX);
@@ -926,8 +900,8 @@ describe.skipIf(!hasChrome)(
 		/**
 		 * THE RESTACK'S BOUNDARY, on both axes. A phone's list is under 28rem
 		 * (stacked); a window narrower than `lg` whose list is 28rem or more (a
-		 * tablet panel) is not; the 340px `lg` rail, whose list is narrower than
-		 * the phone's, is not either (the rail cases below).
+		 * tablet panel) is not; the full-width desktop tab is not either (the
+		 * cases below).
 		 */
 		describe("where the restack applies", () => {
 			const pageFor = (list: number) => list + CARD_CHROME_PX + PHONE_GUTTER_PX;
@@ -944,6 +918,24 @@ describe.skipIf(!hasChrome)(
 					expect(at.stacked, "448px: one line").toBe(false);
 					expect(at.statusWidth).toBe(176);
 					expect(at.rowHeight).toBeLessThanOrEqual(48);
+				});
+
+				// The one configuration at desktop width where `@md:` (the panel's own
+				// width) and `md:` (the viewport) DISAGREE: the window is 1024px, so
+				// `md` and `lg` are on, but the panel is pinned narrower than 28rem.
+				// The real page cannot produce it now the rail is gone, so this is a
+				// synthetic control; without it the full-width cases below pass for
+				// `md:w-44` as well as `@md:w-44` and cannot fail on that bug.
+				it(`${shape}: with the window at lg but the panel under 28rem the track follows the PANEL (144px), not the viewport, and the row is not restacked`, () => {
+					const m = measure(shape, {
+						viewport: LG_VIEWPORT,
+						// `sm:` is on at 1024px, so the gutter is the tablet's.
+						pagePx: CONTAINER_MD_PX - 1 + CARD_CHROME_PX + TABLET_GUTTER_PX,
+					});
+					expect(m.innerWidth, "md and lg are on").toBeGreaterThanOrEqual(1024);
+					expect(m.listWidth).toBe(CONTAINER_MD_PX - 1);
+					expect(m.stacked, "lg is on: no restack").toBe(false);
+					expect(m.statusWidth, "the track follows the panel").toBe(144);
 				});
 
 				// Long-name pressure at the same boundary (#1309): beside the widest
@@ -1010,43 +1002,43 @@ describe.skipIf(!hasChrome)(
 		});
 
 		/**
-		 * The rails, at the widths the bug in #1309 lived at: the route's real
-		 * `<aside>`, 340px at `lg` (1024px) and 384px at `xl` (1440px), narrower
-		 * than a phone's list is wide. `lg` is ON here, so the phone restack must
-		 * NOT reach them: the viewport half of its condition is what holds that,
-		 * since the rail's 306px list is under 28rem too.
-		 *
-		 * `identityWidth` is what the fixed controls leave of the row, so it does
-		 * not depend on the font: list (rail - 2px border - 2 x 16px padding) - 8px
-		 * gap - the 144px track - 12px gap - the 32px menu. The floors sit a few px
-		 * under what that measures.
+		 * The full-width Attendance tab, at the widths the bug in #1309 lived at
+		 * (#1582 removed the rail, so the panel is the page's content box at `lg`
+		 * (1024px) and `xl` (1440px)). `lg` is ON here, so the phone restack must
+		 * NOT reach it; the list is past 28rem, so the track is the 176px `@md`
+		 * arm. The fixture has no shell sidebar, so it is wider than the real page
+		 * beside the 248px nav; the 800px tablet cases above are the narrow
+		 * desktop-class panel. At this width `@md` and `md` agree, so the track
+		 * width here cannot tell them apart; the "window at lg, panel under 28rem"
+		 * case above and the source-class test at the foot of the file do.
 		 */
-		for (const [where, viewport, railPx, identityFloor] of [
-			["the 340px lg rail", LG_VIEWPORT, LG_RAIL_PX, 104],
-			["the 384px xl rail", XL_VIEWPORT, XL_RAIL_PX, 148],
+		for (const [where, viewport] of [
+			["the full-width tab at 1024px", LG_VIEWPORT],
+			["the full-width tab at 1440px", XL_VIEWPORT],
 		] as const) {
 			describe(where, () => {
 				for (const shape of ["roll", "plan"] as const) {
-					it(`${shape}: the track stays 144px, the row stays ONE line (not restacked), the identity box keeps >= ${identityFloor}px, header and rows share one 16px inset`, () => {
+					it(`${shape}: the track is 176px, the row stays ONE line (not restacked), the identity box is wide, header and rows share one inset`, () => {
 						const m = measure(shape, { viewport });
 						const at = `${where}, ${shape}`;
-						expect(m.railWidth, `${at}: the aside's width`).toBe(railPx);
 						expect(m.listWidth, `${at}: the list's width`).toBe(
-							railPx - CARD_CHROME_LG_PX,
-						);
-						expect(m.headerInset, `${at}: header padding`).toBe(16);
-						expect(m.bodyInset, `${at}: body padding`).toBe(16);
-						expect(m.stacked, `${at}: the phone restack reached the rail`).toBe(
-							false,
+							m.panelWidth - CARD_CHROME_PX,
 						);
 						expect(
-							m.statusWidth,
-							`${at}: the viewport must not widen the track`,
-						).toBe(144);
+							m.listWidth,
+							`${at}: the list is past the @md query`,
+						).toBeGreaterThanOrEqual(CONTAINER_MD_PX);
+						expect(m.headerInset, `${at}: header and body padding agree`).toBe(
+							m.bodyInset,
+						);
+						expect(m.stacked, `${at}: the phone restack reached it`).toBe(
+							false,
+						);
+						expect(m.statusWidth, `${at}: the @md track`).toBe(176);
 						expect(
 							m.identityWidth,
 							`${at}: identity is ${m.identityWidth}px`,
-						).toBeGreaterThanOrEqual(identityFloor);
+						).toBeGreaterThanOrEqual(m.listWidth / 2);
 						expect(
 							m.rowHeight,
 							`${at}: row is ${m.rowHeight}px tall`,
@@ -1068,8 +1060,8 @@ describe.skipIf(!hasChrome)(
 							`${at}: page scrolls sideways`,
 						).toBeLessThanOrEqual(0);
 						if (shape === "plan") {
-							expect(m.labelText, `${at}: assumed is hidden under 28rem`).toBe(
-								PLAN_STATUS,
+							expect(m.labelText, `${at}: assumed shows from 28rem`).toBe(
+								PLAN_LABEL,
 							);
 						}
 					});
@@ -1087,7 +1079,7 @@ describe.skipIf(!hasChrome)(
 							});
 							const at = `${where}, ${shape}, ${tag}`;
 							expect(m.stacked, `${at}: restacked`).toBe(false);
-							expect(m.statusWidth, `${at}: track`).toBe(144);
+							expect(m.statusWidth, `${at}: track`).toBe(176);
 							expect(
 								m.nameLines,
 								`${at}: ${m.nameLines} lines`,
@@ -1124,8 +1116,8 @@ describe.skipIf(!hasChrome)(
 		// A Present row's #1049 toggle stays right-aligned wherever the row is
 		// not restacked: its right edge is the row's content-right.
 		for (const [where, viewport] of [
-			["the 340px lg rail", LG_VIEWPORT],
-			["the 384px xl rail", XL_VIEWPORT],
+			["the full-width tab at 1024px", LG_VIEWPORT],
+			["the full-width tab at 1440px", XL_VIEWPORT],
 			["the 800px tablet panel", TABLET_VIEWPORT],
 		] as const) {
 			it(`${where}: a Present row's mode toggle is right-aligned`, () => {
@@ -1140,24 +1132,6 @@ describe.skipIf(!hasChrome)(
 				);
 			});
 		}
-
-		it("CONTROL: the pre-fix classes (viewport-keyed track, 24px card padding, no container) leave the real rail's identity box under the floor", () => {
-			for (const [viewport, railPx] of [
-				[LG_VIEWPORT, LG_RAIL_PX],
-				[XL_VIEWPORT, LG_RAIL_PX],
-			] as const) {
-				const m = measure("plan", { viewport, c: preFix });
-				// The old rail is 340px at BOTH viewports (no `xl:w-96`), and its track
-				// followed the viewport: 176px, the widest, in a rail narrower than a phone.
-				expect(m.railWidth).toBe(railPx);
-				expect(m.statusWidth, "the old track followed the viewport").toBe(176);
-				expect(m.labelText, "and showed the assumed suffix").toBe(PLAN_LABEL);
-				expect(
-					m.identityWidth,
-					`identity is ${m.identityWidth}px`,
-				).toBeLessThan(104);
-			}
-		});
 
 		it("CONTROL: the pre-#1309 two-line shape fails the one-line measurement", () => {
 			const m = measure("twoLine", { viewport: LG_VIEWPORT });
@@ -1232,7 +1206,7 @@ describe.skipIf(!hasChrome)(
 // source (the recorded chip and the plan trigger). The third is the unrecorded
 // suggestion pair's wrapper, a `div` the harness does not measure, and a
 // mutation check found `@md:w-44` -> `md:w-44` on it survives every measurement:
-// that row's track would follow the VIEWPORT again (176px in a 340px rail) while
+// that row's track would follow the VIEWPORT again (176px in a narrow panel) while
 // the other two follow the panel. This needs no browser, so it also runs where
 // the suite above skips.
 describe("every status track in the attendance panel follows the panel, not the viewport", () => {

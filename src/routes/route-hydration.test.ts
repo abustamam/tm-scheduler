@@ -691,6 +691,10 @@ describe("route hydration gate (#1000)", () => {
 		// The admin's pages again with "Preview as member" on (#1113), kept apart
 		// from `results` so the one-result-per-COVERED-route count above holds.
 		const previewResults: RouteResult[] = [];
+		// The meeting page at `?tab=minutes` (#1582): the tab is read during SSR,
+		// so the server and the client must render the same one.
+		let tabResult: RouteResult | undefined;
+		let tabPanelsVisible: Record<string, boolean> = {};
 
 		beforeAll(async () => {
 			fixture = await seedFixture(instant);
@@ -745,6 +749,13 @@ describe("route hydration gate (#1000)", () => {
 					// cookie set the way the server would (path `/`). The server reads
 					// it by name, so a script-set copy exercises the same SSR path.
 					if (index === 0) {
+						tabResult = await b.sweep(
+							base,
+							`/club/${fixture.slug}/meeting/${fixture.pastMeetingId}?tab=minutes`,
+						);
+						tabPanelsVisible = await b.evaluate<Record<string, boolean>>(
+							`Object.fromEntries([...document.querySelectorAll("[data-meeting-tab-panel]")].map((el) => [el.getAttribute("data-meeting-tab-panel"), el.getAttribute("data-state") === "active"]))`,
+						);
 						await b.evaluate(
 							'document.cookie = "view_as=member; path=/"; document.cookie',
 						);
@@ -879,6 +890,22 @@ describe("route hydration gate (#1000)", () => {
 					[],
 				);
 			}
+		});
+
+		it("the meeting page hydrates cleanly at ?tab=minutes and shows only that panel (#1582)", () => {
+			// protects=the tab named in the URL is the one rendered on the server and
+			//   after hydration; fails_when=the server and client pick different tabs
+			//   (a hydration mismatch) or the wrong panel ends up visible;
+			// no_claim=HTML rendered for one ?tab= and hydrated at another (the
+			//   offline-cache case) is NOT covered: this harness cannot serve one
+			//   URL's HTML at another, so that is checked by hand, offline, in /qa-only
+			if (ONLY.length) return;
+			expect(tabResult, "the ?tab= sweep did not run").toBeDefined();
+			const r = tabResult as RouteResult;
+			expect(r.hydrated, "never hydrated").toBe(true);
+			expect(r.mismatches.map((m) => describeMismatch(r.path, m))).toEqual([]);
+			expect(tabPanelsVisible.minutes, "minutes panel hidden").toBe(true);
+			expect(tabPanelsVisible.roles, "roles panel still visible").toBe(false);
 		});
 
 		it("hydrates every route without a mismatch", () => {

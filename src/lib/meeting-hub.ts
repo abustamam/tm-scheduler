@@ -64,6 +64,8 @@ export function meetingFeedbackUrlFor(
  */
 export interface MeetingRoomSearch {
 	room?: string | number;
+	/** The page's tab (#1582). Read, never coerced: see the validator below. */
+	tab?: string | number;
 }
 
 /**
@@ -88,4 +90,42 @@ export function validateMeetingRoomSearch(
  *  `search` object may carry. */
 export function isInRoom(search: MeetingRoomSearch): boolean {
 	return search.room === 1 || search.room === "1";
+}
+
+/** The search key that names the meeting page's tab (#1582). */
+export const MEETING_TAB_PARAM = "tab";
+
+export type MeetingTab = "roles" | "attendance" | "ballots" | "minutes";
+
+/**
+ * The tabs a viewer is offered, in the one fixed order: Roles, Attendance,
+ * Ballots, Minutes. Roles is always first and always there. The three gates are
+ * the conditions that decide today whether each section renders at all, so a
+ * tab can never offer a section the viewer does not already get.
+ */
+export function meetingTabsFor(gates: {
+	attendance: boolean;
+	ballots: boolean;
+	minutes: boolean;
+}): MeetingTab[] {
+	const tabs: MeetingTab[] = ["roles"];
+	if (gates.attendance) tabs.push("attendance");
+	if (gates.ballots) tabs.push("ballots");
+	if (gates.minutes) tabs.push("minutes");
+	return tabs;
+}
+
+/**
+ * The tab the URL names, among those offered. Absent, unknown, non-string and
+ * not-offered values all answer `"roles"`: a link to a tab this viewer is not
+ * offered shows the page as they would otherwise see it, with no redirect.
+ */
+export function meetingTabFrom(
+	search: MeetingRoomSearch,
+	offered: MeetingTab[],
+): MeetingTab {
+	const value = search.tab;
+	if (typeof value !== "string") return "roles";
+	const match = offered.find((t) => t === value);
+	return match ?? "roles";
 }

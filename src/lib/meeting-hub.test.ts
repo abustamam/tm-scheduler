@@ -8,8 +8,11 @@ import { describe, expect, it } from "vitest";
 import {
 	isInRoom,
 	type MeetingRoomSearch,
+	type MeetingTab,
 	meetingFeedbackUrlFor,
 	meetingHubUrlFor,
+	meetingTabFrom,
+	meetingTabsFor,
 	validateMeetingRoomSearch,
 } from "./meeting-hub";
 
@@ -134,5 +137,61 @@ describe("validateMeetingRoomSearch — the SSR no-redirect contract", () => {
 		const { request, rebuilt } = rebuiltHref(coerce, href);
 		expect(rebuilt).not.toBe(request);
 		expect(rebuilt).toContain("%221%22");
+	});
+});
+
+describe("meetingTabsFor (#1582)", () => {
+	// protects=the fixed tab order and Roles always present; fails_when=a gate is
+	// swapped, an order differs, or Roles is dropped; no_claim=says nothing about
+	// which conditions the route feeds in (meeting-tabs-wiring.guard.test.ts).
+	const cases: [boolean, boolean, boolean, MeetingTab[]][] = [
+		[false, false, false, ["roles"]],
+		[true, false, false, ["roles", "attendance"]],
+		[false, true, false, ["roles", "ballots"]],
+		[false, false, true, ["roles", "minutes"]],
+		[true, true, false, ["roles", "attendance", "ballots"]],
+		[true, false, true, ["roles", "attendance", "minutes"]],
+		[false, true, true, ["roles", "ballots", "minutes"]],
+		[true, true, true, ["roles", "attendance", "ballots", "minutes"]],
+	];
+	it.each(
+		cases,
+	)("attendance=%s ballots=%s minutes=%s", (attendance, ballots, minutes, expected) => {
+		expect(meetingTabsFor({ attendance, ballots, minutes })).toEqual(expected);
+	});
+});
+
+describe("meetingTabFrom (#1582)", () => {
+	// protects=an unusable ?tab= shows Roles; fails_when=it throws, returns the
+	// raw value, or names a tab the viewer is not offered; no_claim=does not
+	// touch the URL.
+	const all = meetingTabsFor({
+		attendance: true,
+		ballots: true,
+		minutes: true,
+	});
+	it("is Roles when absent", () => {
+		expect(meetingTabFrom({}, all)).toBe("roles");
+	});
+	it("is Roles for an unknown string", () => {
+		expect(meetingTabFrom({ tab: "nope" }, all)).toBe("roles");
+	});
+	it("is Roles for a number", () => {
+		expect(meetingTabFrom({ tab: 1 }, all)).toBe("roles");
+	});
+	it("is Roles for a tab offered elsewhere but not here", () => {
+		expect(meetingTabFrom({ tab: "ballots" }, ["roles", "minutes"])).toBe(
+			"roles",
+		);
+	});
+	it("is the named tab when offered", () => {
+		expect(meetingTabFrom({ tab: "ballots" }, all)).toBe("ballots");
+	});
+});
+
+describe("validateMeetingRoomSearch with tab (#1582)", () => {
+	it("still returns the same reference", () => {
+		const parsed = { room: 1, tab: "minutes", from: "share" };
+		expect(validateMeetingRoomSearch(parsed)).toBe(parsed);
 	});
 });

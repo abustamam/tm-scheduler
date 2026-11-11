@@ -3,6 +3,7 @@ import {
 	createFileRoute,
 	Link,
 	notFound,
+	useLocation,
 	useRouter,
 } from "@tanstack/react-router";
 import {
@@ -41,6 +42,7 @@ import { MeetingNavStrip } from "#/components/club/meeting-nav-strip";
 import { MeetingPersonalStrip } from "#/components/club/meeting-personal-strip";
 import { MeetingReadinessPanel } from "#/components/club/meeting-readiness-panel";
 import { MeetingRoomStrip } from "#/components/club/meeting-room-strip";
+import { MeetingTabs } from "#/components/club/meeting-tabs";
 import {
 	MeetingToolbar,
 	stripIsPrimary,
@@ -104,6 +106,10 @@ import { isMeetingNotFoundError } from "#/lib/meeting-errors";
 import {
 	isInRoom,
 	MEETING_AGENDA_ANCHOR_ID,
+	MEETING_TAB_PARAM,
+	type MeetingTab,
+	meetingTabFrom,
+	meetingTabsFor,
 	validateMeetingRoomSearch,
 } from "#/lib/meeting-hub";
 import {
@@ -374,6 +380,10 @@ function MeetingView() {
 	const urlKey = canonicalUrlKey;
 	const router = useRouter();
 	const search = Route.useSearch();
+	const navigate = Route.useNavigate();
+	// The fragment, from the router: an in-app `<Link hash>` is a pushState and
+	// fires no `hashchange` (#1582 AC 10).
+	const locationHash = useLocation({ select: (l) => l.hash });
 	const online = useOnlineStatus();
 	// #176 / DP3: ONE offline-write-queue instance per meeting, shared by
 	// <MeetingMinutes> below and (PR 3) the attendance panel's roll-mode
@@ -969,10 +979,31 @@ function MeetingView() {
 	// for a manager (null for an impersonator), the effective member otherwise.
 	const agendaMemberId = effectiveCanManage ? managerActorId : myId;
 	const publicCountsEl = (
-		<p className="order-1 text-sm text-muted-foreground lg:order-2 lg:w-[340px] lg:shrink-0 xl:w-96">
+		<p className="text-sm text-muted-foreground">
 			{publicCountsLine(comingCount, guestRsvpCount)}
 		</p>
 	);
+	// The three conditions that decide today whether each section renders at all
+	// (`meeting-tabs-wiring.guard.test.ts` pins them): a tab is offered exactly
+	// when its section is, never on a new rule.
+	const ballotsShown = (isVoteCounter || effectiveCanManage) && !cancelled;
+	const minutesShown = Boolean(minutes.visible && minutes.data);
+	const offeredTabs = meetingTabsFor({
+		attendance: showPanel && !tmodPanelUnavailable,
+		ballots: ballotsShown,
+		minutes: minutesShown || effectiveCanManage,
+	});
+	const activeTab = meetingTabFrom(search, offeredTabs);
+	const selectTab = (tab: MeetingTab) => {
+		void navigate({
+			search: (prev) => {
+				const { [MEETING_TAB_PARAM]: _dropped, ...rest } = prev;
+				return tab === "roles" ? rest : { ...rest, [MEETING_TAB_PARAM]: tab };
+			},
+			replace: true,
+			resetScroll: false,
+		});
+	};
 	const containerClass = canManage
 		? "max-w-workspace px-4 pt-5 pb-10 sm:px-7 sm:pt-7 space-y-5"
 		: "mx-auto w-full max-w-reading p-4 pb-8 md:p-6 space-y-5";
@@ -1348,335 +1379,93 @@ function MeetingView() {
 				) : null}
 			</header>
 
-			<MeetingAnnouncements text={meeting.reminders} />
+			<MeetingTabs
+				tabs={offeredTabs}
+				active={activeTab}
+				onSelect={selectTab}
+				hash={locationHash}
+				panels={{
+					roles: (
+						<>
+							<MeetingAnnouncements text={meeting.reminders} />
+							{/* #1442: everyone who is not running the meeting sees the count and
+							    nothing behind it. It is computed from `answeredRungs` and the
+							    slots, both public, and names nobody. #1444 adds the guest count
+							    and the guests-only case, in the one line. */}
+							{!showPanel &&
+							phase === "upcoming" &&
+							!cancelled &&
+							(comingCount > 0 || guestRsvpCount > 0)
+								? publicCountsEl
+								: null}
+							{coverView.landing ? (
+								<CoverLandingCard
+									landing={coverView.landing}
+									roleLabel={coverView.roleLabel}
+									whenLine={coverView.whenLine}
+									description={coverView.description}
+									busy={coverTakeBusy}
+									onTake={takeCoveredRole}
+									onDecline={dismissCoverCard}
+								/>
+							) : null}
 
-			{/* Spec D4: the banner/header/toolbar/announcements block above runs FULL
-			    WIDTH above the two-column row on every viewport — it is a SIBLING of
-			    this row, not nested inside the agenda column, so it can never be
-			    pushed below the panel on desktop. Below `lg` the panel (order-1)
-			    renders directly beneath the toolbar and ABOVE the agenda/roles list
-			    (order-2); at `lg` and up the agenda takes the left column
-			    (order-1) and the panel becomes a sticky right rail (order-2). Whole-
-			    branch review I5: the panel used to be a sibling AFTER the whole left
-			    column, so on mobile it landed below the agenda, action items,
-			    Minutes and the ballot console instead of directly under the toolbar. */}
-			<div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:gap-6">
-				<div className="order-2 min-w-0 flex-1 space-y-5 lg:order-1">
-					{coverView.landing ? (
-						<CoverLandingCard
-							landing={coverView.landing}
-							roleLabel={coverView.roleLabel}
-							whenLine={coverView.whenLine}
-							description={coverView.description}
-							busy={coverTakeBusy}
-							onTake={takeCoveredRole}
-							onDecline={dismissCoverCard}
-						/>
-					) : null}
+							{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
-					{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
+							{readiness ? (
+								<MeetingReadinessPanel
+									readiness={readiness}
+									clubId={clubId}
+									meetingId={urlKey}
+									timezone={timezone}
+									firstTime={firstTimeContext}
+								/>
+							) : null}
 
-					{readiness ? (
-						<MeetingReadinessPanel
-							readiness={readiness}
-							clubId={clubId}
-							meetingId={urlKey}
-							timezone={timezone}
-							firstTime={firstTimeContext}
-						/>
-					) : null}
-
-					{/* Keeps a shared `#agenda` link working on any day (the strip now
+							{/* Keeps a shared `#agenda` link working on any day (the strip now
 					    links to the digital agenda route). Always rendered. */}
-					<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
-						<MeetingAgenda
-							slotExtra={coverChipUnderRow}
-							slots={slots}
-							speechIntroductions={speechIntroductions}
-							viewer={viewer}
-							actions={actions}
-							roster={roster}
-							roleRecency={roleRecency}
-							roleByMemberId={roleByMemberId}
-							unavailableMemberIds={unavailableMemberIds}
-							markedAbsentMemberIds={markedAbsentMemberIds(
-								unavailableMemberIds,
-								answeredRungs,
-							)}
-							pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
-							clubGuests={effectiveCanManage ? clubGuests : undefined}
-							shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
-							meetingDate={effectiveCanManage ? nudgeDate : ""}
-							// Gated like `shareUrl` beside it: <MeetingAgenda> renders for
-							// plain members too, and the draft affordances this feeds are
-							// manager-only.
-							personalNudgeBase={effectiveCanManage ? nudgePersonalBase : null}
-							meeting={meeting}
-							onOwnLateRelease={onOwnLateRelease}
-							meetingOver={over}
-							requireIdentity={requireIdentity}
-							contactedMemberIds={contactedMemberIds}
-							onContacted={onContacted}
-							onUncontacted={onUncontacted}
-						/>
-					</section>
-
-					<OpenActionItems
-						items={openActionItems.items}
-						total={openActionItems.total}
-					/>
-
-					{minutes.visible && minutes.data ? (
-						// Anchor target for the toolbar's completed-phase primary (#541 D2).
-						// The wrapper exists because <MeetingMinutes> renders a <Card> and
-						// takes no id/className. `scroll-mt-28` (112px) clears the sticky header
-						// at its TALLEST: 69px normally, but 105px while impersonating, because
-						// `app-shell` stacks the 36px banner (h-9) above it and moves the header
-						// to `top-9`. Measured in a browser, not derived — `scroll-mt-24` (96px)
-						// was 9px short and tucked the card's top edge under the header.
-						// NOT co-gated with the primary: the toolbar's CTA is gated on
-						// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
-						// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
-						// so this branch alone left a completed-phase admin with a Minutes
-						// primary and no `id` to scroll to on a transient load failure. The
-						// degrade branch below keeps the anchor real in that case.
-						<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
-							<MeetingMinutes
-								meetingId={meeting.id}
-								minutes={minutes.data}
-								program={minutes.program}
-								meetingPast={over}
-								// Same fact as `canComplete`, deliberately the one computation:
-								// recording the record and closing it sit on the same club-local
-								// day axis, so "you can take roll" and "you can complete this"
-								// turn on together. Passing `over` here would hide the recorder
-								// for the whole of meeting day, which is when roll is taken.
-								meetingDayReached={canComplete}
-								// Read-only on a cancelled meeting (#1057): there are no
-								// minutes for a meeting that did not happen, and a stray
-								// edit would land in the record of one.
-								canEdit={effectiveCanManage && minutes.canEdit && !cancelled}
-								clubGuests={clubGuests}
-								unavailableMemberIds={unavailableMemberIds}
-								offline={offlineMinutes}
-								email={
-									minutesEmail
-										? {
-												clubId: meeting.clubId,
-												clubName,
-												meetingDate: meeting.scheduledAt,
-												timezone,
-												recipients: minutesEmail.recipients,
-												skipped: minutesEmail.skipped,
-											}
-										: null
-								}
-							/>
-						</section>
-					) : effectiveCanManage ? (
-						/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) — say so
-				   instead of silently deleting the card, and keep the toolbar's Minutes
-				   primary pointing at something real (spec review of aa106b3).
-
-				   Gated on `effectiveCanManage`, NOT on `showsMinutesPrimary`. Those
-				   differ everywhere except the completed phase, and the difference is
-				   the case that matters most: `getMinutes` returns `visible: true` for
-				   an admin on ANY status (`canEdit || status === "completed"`), so an
-				   officer on MEETING NIGHT normally has the full card — attendance,
-				   awards, Table Topics capture. Keyed on showsMinutesPrimary, a
-				   transient throw made all of that vanish with no message at the single
-				   highest-stakes moment for it, and the page still looked intact because
-				   the Ballot Counter console is gated separately (red-team review).
-
-				   `effectiveCanManage` is a strict SUPERSET of the CTA's gate, so the
-				   primary can never point at a section that is not here — and it is the
-				   preview-aware flag, so the two still flip together in preview mode. */
-						<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
-							<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-semibold text-muted-foreground">
-								<ClipboardList className="size-4 shrink-0" aria-hidden />
-								Minutes couldn't load — refresh to try again.
-							</div>
-						</section>
-					) : null}
-
-					{/* Never on a cancelled meeting (#1057): `castVote` refuses every
-					    ballot on it, and a console for a vote nobody can cast invites
-					    the Vote Counter to open one. */}
-					{(isVoteCounter || effectiveCanManage) && !cancelled ? (
-						<section className="space-y-4 rounded-xl border border-border bg-card p-4">
-							<div>
-								<h2 className="font-display font-semibold text-lg">
-									Ballot Counter console
-								</h2>
-								<p className="text-muted-foreground text-sm">
-									{digitalVoting
-										? "Only visible to you. Add Table Topics speakers so they're eligible for Best Table Topics, then open a category, watch the count, and confirm the winner once it closes."
-										: "Only visible to you. Add Table Topics speakers so they're recorded in the minutes."}
-								</p>
-							</div>
-							{/* #770 — signed-in club admins only, matching the server fn.
-							    `canManage`, not `effectiveCanManage`: the server keys off the
-							    SESSION, so an admin previewing as a member still has it. */}
-							{canManage ? (
-								<DigitalVotingSwitch
-									digitalVoting={digitalVoting}
-									clubDigitalVotingEnabled={clubDigitalVotingEnabled}
-									busy={digitalVotingBusy}
-									onSetDisabled={handleSetDigitalVotingDisabled}
+							<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
+								<MeetingAgenda
+									slotExtra={coverChipUnderRow}
+									slots={slots}
+									speechIntroductions={speechIntroductions}
+									viewer={viewer}
+									actions={actions}
+									roster={roster}
+									roleRecency={roleRecency}
+									roleByMemberId={roleByMemberId}
+									unavailableMemberIds={unavailableMemberIds}
+									markedAbsentMemberIds={markedAbsentMemberIds(
+										unavailableMemberIds,
+										answeredRungs,
+									)}
+									pairedRoleIds={effectiveCanManage ? pairedIds : undefined}
+									clubGuests={effectiveCanManage ? clubGuests : undefined}
+									shareUrl={effectiveCanManage ? nudgeShareUrl : ""}
+									meetingDate={effectiveCanManage ? nudgeDate : ""}
+									// Gated like `shareUrl` beside it: <MeetingAgenda> renders for
+									// plain members too, and the draft affordances this feeds are
+									// manager-only.
+									personalNudgeBase={
+										effectiveCanManage ? nudgePersonalBase : null
+									}
+									meeting={meeting}
+									onOwnLateRelease={onOwnLateRelease}
+									meetingOver={over}
+									requireIdentity={requireIdentity}
+									contactedMemberIds={contactedMemberIds}
+									onContacted={onContacted}
+									onUncontacted={onUncontacted}
 								/>
-							) : null}
-							<TableTopicsCapture
-								speakers={consoleSpeakers}
-								canEdit={true}
-								busy={voteConsoleBusy}
-								roster={voteCounterRoster}
-								unavailableMemberIds={unavailableMemberIds}
-								clubGuests={clubGuests}
-								onAdd={handleAddTableTopicsSpeaker}
-								onRemove={handleRemoveTableTopicsSpeaker}
-								onMove={handleMoveTableTopicsSpeaker}
-							/>
-							{/* #770. Table Topics capture above stays either way — the
-							    minutes and the guest pipeline read those speakers, and a
-							    paper-ballot club still needs them. Only the digital vote
-							    panel goes. */}
-							{digitalVoting ? (
-								<VoteCounterPanel
-									meetingId={meeting.id}
-									selfMemberId={myId}
-									// #752. NOT `myId`, which is the localStorage name-pick and
-									// is non-null for exactly the anonymous caller the ruling
-									// gate refuses. `managerActorId` is `session?.id ?? null` —
-									// the session's own membership id in this club — which is
-									// the value the server-side seam resolves, so the console's
-									// prediction and the gate's answer agree by construction.
-									sessionMemberId={managerActorId}
-									// The admin arm, predicted on its own. `canManage`, not
-									// `effectiveCanManage` (the server keys off the SESSION, and
-									// a previewing admin still carries one), and NOT folded into
-									// the line above: an impersonating superadmin has full admin
-									// parity server-side and no `effectiveMemberId`, so gating
-									// on `managerActorId` alone would hide the ruling controls
-									// from the one principal the gate allows outright — see
-									// `declineFreesRoles` for the same bug caught once already.
-									canManageClub={canManage}
-									// #1472: a Toastmaster who is neither admin nor Vote Counter
-									// may read the tally and record the winner, never rule.
-									rulingExcluded={isTmod && !isSlotVoteCounter && !canManage}
-									onSetWinner={handleSetVoteWinner}
-									onClearWinner={handleClearVoteWinner}
-								/>
-							) : null}
-						</section>
-					) : null}
+							</section>
 
-					<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
-						<DialogContent>
-							<DialogHeader>
-								<DialogTitle>Add a role</DialogTitle>
-							</DialogHeader>
-							<form
-								onSubmit={(e) => {
-									e.preventDefault();
-									const roleId = String(
-										new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
-									);
-									if (roleId) void doAddRole(roleId);
-								}}
-								className="space-y-4"
-							>
-								<div className="space-y-2">
-									<Label htmlFor="roleDefinitionId">Role</Label>
-									<select
-										id="roleDefinitionId"
-										name="roleDefinitionId"
-										required
-										className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-									>
-										{addableRoles.map((r) => (
-											<option key={r.id} value={r.id}>
-												{r.name}
-											</option>
-										))}
-									</select>
-									<p className="text-xs text-muted-foreground">
-										Picking a role already on this meeting adds another instance
-										(e.g. “Timer 2”).
-									</p>
-								</div>
-								<DialogFooter>
-									<DialogClose asChild>
-										<Button type="button" variant="outline">
-											Cancel
-										</Button>
-									</DialogClose>
-									<Button type="submit" disabled={addRoleBusy}>
-										{addRoleBusy ? (
-											<Loader2 className="size-4 animate-spin" />
-										) : (
-											"Add role"
-										)}
-									</Button>
-								</DialogFooter>
-							</form>
-						</DialogContent>
-					</Dialog>
-				</div>
-				{/* #1442: everyone who is not running the meeting sees the count and
-				    nothing behind it. It is computed from `answeredRungs` and the
-				    slots, both public, and names nobody. #1444 adds the guest count
-				    and the guests-only case, in the one line. */}
-				{!showPanel &&
-				phase === "upcoming" &&
-				!cancelled &&
-				(comingCount > 0 || guestRsvpCount > 0)
-					? publicCountsEl
-					: null}
-				{showPanel && !tmodPanelUnavailable ? (
-					<aside
-						// `sticky` pins this column, so its own height stops being the
-						// page's problem and starts being a wall: rows are ~81px each
-						// (they nearly doubled in this diff), so a 40-member club is a
-						// ~3,240px rail. Pinned at `top-24` with no cap, only the first
-						// ~10 rows are ever in view on a ~950px viewport and the rest are
-						// unreachable — the page scrolls, the pinned rail does not —
-						// unless the agenda column happens to be taller. Capping the
-						// height and giving the rail its OWN scroller is what makes the
-						// bottom rows reachable. The cap is the viewport less the pin
-						// offset and 1rem of breathing room at the bottom edge.
-						//
-						// Both read `--shell-pinned-top`, which the app shell sets
-						// (`shell-sticky-offset.ts`): 6rem under the header, plus the 2.25rem
-						// impersonation banner when one is showing. A fixed `top-24` pinned
-						// the rail under the header alone, so while impersonating the
-						// header covered its top ~9px. The 6rem fallback is that old value,
-						// for any host that sets nothing.
-						//
-						// The cap lives here and the SCROLLER does not. This `<aside>` is
-						// the positioner — sticky, width, order, and the height ceiling
-						// that the pinning makes necessary — and it is a flex column so
-						// the panel's card can fill it. The card then puts the scroller on
-						// its own body, which is what keeps the title, the counts line and
-						// the sync status visible while the rows move; the scroller used to
-						// be this element, and a reader 25 rows into a 40-member roster had
-						// lost the summary they were reading the rail for.
-						//
-						// Both halves or neither: `lg:max-h-…` with nothing scrolling
-						// inside it CLIPS the bottom rows outright, which is strictly worse
-						// than the unreachable-but-present rail this replaced.
-						//
-						// And note the axis the scroller costs, wherever it sits:
-						// `overflow-y: auto` with an `overflow-x` of `visible` computes
-						// that `visible` to `auto` (CSS Overflow 3 §3), so the scrolling
-						// element clips on BOTH axes. Nothing in the rail overhangs today —
-						// the row wraps (`break-words`, `line-clamp-2`), the widest control
-						// is the measured `w-36` track, and the row menu is a portalled
-						// `DropdownMenuContent` — but a future popover that renders INLINE
-						// would be cut off. Moving the scroller inward tightened that box
-						// from the column to the card's body, so it is a smaller trap than
-						// it was, not a new one.
-						className="order-1 lg:order-2 lg:sticky lg:top-[var(--shell-pinned-top,6rem)] lg:flex lg:max-h-[calc(100vh_-_var(--shell-pinned-top,6rem)_-_1rem)] lg:w-[340px] lg:shrink-0 lg:flex-col xl:w-96"
-					>
+							<OpenActionItems
+								items={openActionItems.items}
+								total={openActionItems.total}
+							/>
+						</>
+					),
+					attendance: (
 						<MeetingAttendancePanel
 							// Remounts per meeting: the panel's chip filter is plain state, so a new meeting id resets it to All.
 							key={meeting.id}
@@ -1809,9 +1598,215 @@ function MeetingView() {
 								},
 							}}
 						/>
-					</aside>
-				) : null}
-			</div>
+					),
+					ballots: (
+						<>
+							{/* Never on a cancelled meeting (#1057): `castVote` refuses every
+					    ballot on it, and a console for a vote nobody can cast invites
+					    the Vote Counter to open one. */}
+							{ballotsShown ? (
+								<section className="space-y-4 rounded-xl border border-border bg-card p-4">
+									<div>
+										<h2 className="font-display font-semibold text-lg">
+											Ballot Counter console
+										</h2>
+										<p className="text-muted-foreground text-sm">
+											{digitalVoting
+												? "Only visible to you. Add Table Topics speakers so they're eligible for Best Table Topics, then open a category, watch the count, and confirm the winner once it closes."
+												: "Only visible to you. Add Table Topics speakers so they're recorded in the minutes."}
+										</p>
+									</div>
+									{/* #770 — signed-in club admins only, matching the server fn.
+							    `canManage`, not `effectiveCanManage`: the server keys off the
+							    SESSION, so an admin previewing as a member still has it. */}
+									{canManage ? (
+										<DigitalVotingSwitch
+											digitalVoting={digitalVoting}
+											clubDigitalVotingEnabled={clubDigitalVotingEnabled}
+											busy={digitalVotingBusy}
+											onSetDisabled={handleSetDigitalVotingDisabled}
+										/>
+									) : null}
+									<TableTopicsCapture
+										speakers={consoleSpeakers}
+										canEdit={true}
+										busy={voteConsoleBusy}
+										roster={voteCounterRoster}
+										unavailableMemberIds={unavailableMemberIds}
+										clubGuests={clubGuests}
+										onAdd={handleAddTableTopicsSpeaker}
+										onRemove={handleRemoveTableTopicsSpeaker}
+										onMove={handleMoveTableTopicsSpeaker}
+									/>
+									{/* #770. Table Topics capture above stays either way — the
+							    minutes and the guest pipeline read those speakers, and a
+							    paper-ballot club still needs them. Only the digital vote
+							    panel goes. */}
+									{digitalVoting ? (
+										<VoteCounterPanel
+											meetingId={meeting.id}
+											selfMemberId={myId}
+											// #752. NOT `myId`, which is the localStorage name-pick and
+											// is non-null for exactly the anonymous caller the ruling
+											// gate refuses. `managerActorId` is `session?.id ?? null` —
+											// the session's own membership id in this club — which is
+											// the value the server-side seam resolves, so the console's
+											// prediction and the gate's answer agree by construction.
+											sessionMemberId={managerActorId}
+											// The admin arm, predicted on its own. `canManage`, not
+											// `effectiveCanManage` (the server keys off the SESSION, and
+											// a previewing admin still carries one), and NOT folded into
+											// the line above: an impersonating superadmin has full admin
+											// parity server-side and no `effectiveMemberId`, so gating
+											// on `managerActorId` alone would hide the ruling controls
+											// from the one principal the gate allows outright — see
+											// `declineFreesRoles` for the same bug caught once already.
+											canManageClub={canManage}
+											// #1472: a Toastmaster who is neither admin nor Vote Counter
+											// may read the tally and record the winner, never rule.
+											rulingExcluded={
+												isTmod && !isSlotVoteCounter && !canManage
+											}
+											onSetWinner={handleSetVoteWinner}
+											onClearWinner={handleClearVoteWinner}
+										/>
+									) : null}
+								</section>
+							) : null}
+						</>
+					),
+					minutes: (
+						<>
+							{minutesShown && minutes.data ? (
+								// Anchor target for the toolbar's completed-phase primary (#541 D2).
+								// The wrapper exists because <MeetingMinutes> renders a <Card> and
+								// takes no id/className. `scroll-mt-28` (112px) clears the sticky header
+								// at its TALLEST: 69px normally, but 105px while impersonating, because
+								// `app-shell` stacks the 36px banner (h-9) above it and moves the header
+								// to `top-9`. Measured in a browser, not derived — `scroll-mt-24` (96px)
+								// was 9px short and tucked the card's top edge under the header.
+								// NOT co-gated with the primary: the toolbar's CTA is gated on
+								// `showsMinutesPrimary`, but the loader degrades ANY getMinutes
+								// failure to EMPTY_MINUTES (visible=false) regardless of canManage —
+								// so this branch alone left a completed-phase admin with a Minutes
+								// primary and no `id` to scroll to on a transient load failure. The
+								// degrade branch below keeps the anchor real in that case.
+								<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
+									<MeetingMinutes
+										meetingId={meeting.id}
+										minutes={minutes.data}
+										program={minutes.program}
+										meetingPast={over}
+										// Same fact as `canComplete`, deliberately the one computation:
+										// recording the record and closing it sit on the same club-local
+										// day axis, so "you can take roll" and "you can complete this"
+										// turn on together. Passing `over` here would hide the recorder
+										// for the whole of meeting day, which is when roll is taken.
+										meetingDayReached={canComplete}
+										// Read-only on a cancelled meeting (#1057): there are no
+										// minutes for a meeting that did not happen, and a stray
+										// edit would land in the record of one.
+										canEdit={
+											effectiveCanManage && minutes.canEdit && !cancelled
+										}
+										clubGuests={clubGuests}
+										unavailableMemberIds={unavailableMemberIds}
+										offline={offlineMinutes}
+										email={
+											minutesEmail
+												? {
+														clubId: meeting.clubId,
+														clubName,
+														meetingDate: meeting.scheduledAt,
+														timezone,
+														recipients: minutesEmail.recipients,
+														skipped: minutesEmail.skipped,
+													}
+												: null
+										}
+									/>
+								</section>
+							) : effectiveCanManage ? (
+								/* getMinutes degraded (loader `.catch(() => EMPTY_MINUTES)`) — say so
+				   instead of silently deleting the card, and keep the toolbar's Minutes
+				   primary pointing at something real (spec review of aa106b3).
+
+				   Gated on `effectiveCanManage`, NOT on `showsMinutesPrimary`. Those
+				   differ everywhere except the completed phase, and the difference is
+				   the case that matters most: `getMinutes` returns `visible: true` for
+				   an admin on ANY status (`canEdit || status === "completed"`), so an
+				   officer on MEETING NIGHT normally has the full card — attendance,
+				   awards, Table Topics capture. Keyed on showsMinutesPrimary, a
+				   transient throw made all of that vanish with no message at the single
+				   highest-stakes moment for it, and the page still looked intact because
+				   the Ballot Counter console is gated separately (red-team review).
+
+				   `effectiveCanManage` is a strict SUPERSET of the CTA's gate, so the
+				   primary can never point at a section that is not here — and it is the
+				   preview-aware flag, so the two still flip together in preview mode. */
+								<section id={MINUTES_ANCHOR_ID} className="scroll-mt-28">
+									<div className="flex items-center gap-2 rounded-xl border border-border bg-muted/60 px-4 py-3 text-sm font-semibold text-muted-foreground">
+										<ClipboardList className="size-4 shrink-0" aria-hidden />
+										Minutes couldn't load — refresh to try again.
+									</div>
+								</section>
+							) : null}
+						</>
+					),
+				}}
+			/>
+			<Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Add a role</DialogTitle>
+					</DialogHeader>
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							const roleId = String(
+								new FormData(e.currentTarget).get("roleDefinitionId") ?? "",
+							);
+							if (roleId) void doAddRole(roleId);
+						}}
+						className="space-y-4"
+					>
+						<div className="space-y-2">
+							<Label htmlFor="roleDefinitionId">Role</Label>
+							<select
+								id="roleDefinitionId"
+								name="roleDefinitionId"
+								required
+								className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							>
+								{addableRoles.map((r) => (
+									<option key={r.id} value={r.id}>
+										{r.name}
+									</option>
+								))}
+							</select>
+							<p className="text-xs text-muted-foreground">
+								Picking a role already on this meeting adds another instance
+								(e.g. “Timer 2”).
+							</p>
+						</div>
+						<DialogFooter>
+							<DialogClose asChild>
+								<Button type="button" variant="outline">
+									Cancel
+								</Button>
+							</DialogClose>
+							<Button type="submit" disabled={addRoleBusy}>
+								{addRoleBusy ? (
+									<Loader2 className="size-4 animate-spin" />
+								) : (
+									"Add role"
+								)}
+							</Button>
+						</DialogFooter>
+					</form>
+				</DialogContent>
+			</Dialog>
+
 			{/* #663. Outside the two columns because it is portalled anyway, and
 			    because it serves BOTH of them — the rail's chips and the personal
 			    strip both reach it through `writeRung`. Confirming calls

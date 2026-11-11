@@ -346,34 +346,19 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(getByText("1 coming · 2 still to answer")).toBeTruthy();
 	});
 
-	it("collapses to the counts line below lg, and expands on tap", () => {
-		// Spec D4: in plan mode on mobile the panel renders collapsed, so a
-		// 15-person roster does not push the agenda off screen. The rows are
-		// absent from the DOM when collapsed rather than merely hidden — a
-		// `hidden` class is invisible to this assertion and to a screen reader.
-		//
-		// jsdom's default `window.innerWidth` (1024) IS the `lg` breakpoint, so
-		// without setting it below that, this environment reads as desktop —
-		// which is also why every other test in this file (none of which touch
-		// `innerWidth`) can assert row content with no expand click: the panel is
-		// correctly always-expanded at that width. This is the one test that is
-		// actually about the mobile case, so it is the one that has to say so.
+	it("shows the rows at phone width in plan mode with no Show/Hide control", () => {
+		// protects=a phone viewer sees the roster on every load, with nothing to
+		// open; fails_when=the old below-lg collapse (rows absent until a tap)
+		// returns; no_claim=says nothing about the page around the panel.
 		const originalWidth = window.innerWidth;
-		window.innerWidth = 500;
+		window.innerWidth = 375;
 		try {
-			const { getByRole, queryByText, getByText } = renderPanel();
-			expect(getByText("3 still to answer")).toBeTruthy();
-			expect(queryByText("Ayesha Khan")).toBeNull();
-			fireEvent.click(getByRole("button", { name: /show|expand/i }));
+			const { getByText, queryByRole } = renderPanel();
 			expect(getByText("Ayesha Khan")).toBeTruthy();
+			expect(queryByRole("button", { name: /show|hide/i })).toBeNull();
 		} finally {
 			window.innerWidth = originalWidth;
 		}
-	});
-
-	it("renders the mobile Show/Hide toggle, unlike roll mode", () => {
-		const { getByRole } = renderPanel();
-		expect(getByRole("button", { name: /show|hide/i })).toBeTruthy();
 	});
 
 	it("never renders the Guests group in plan mode", () => {
@@ -904,7 +889,7 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 		expect(onContacted).toHaveBeenCalledTimes(2);
 	});
 
-	it("keys the status track to the LIST's width and trims the rail card's padding to 16px", () => {
+	it("keys the status track to the LIST's width", () => {
 		// HONEST LIMIT as below: jsdom lays nothing out, so this pins the classes
 		// and `roll-row-geometry.test.ts` measures what they do at the real rail
 		// widths. The `@md:` track classes only mean something under an ancestor
@@ -917,12 +902,6 @@ describe("MeetingAttendancePanel (plan mode)", () => {
 			list?.contains(getByRole("button", { name: /Ayesha Khan status/i })),
 			"the track must sit INSIDE the container",
 		).toBe(true);
-		// The rail's card gives the row 16px a side at `lg`, header and body
-		// together so the title and the rows share one left edge.
-		const header = container.querySelector('[data-slot="card-header"]');
-		const body = container.querySelector('[data-slot="card-content"]');
-		expect(header?.classList.contains("lg:px-4")).toBe(true);
-		expect(body?.classList.contains("lg:px-4")).toBe(true);
 	});
 
 	it("gives the action line two hard edges and a legible chevron", () => {
@@ -1749,16 +1728,6 @@ describe("roll mode", () => {
 		} finally {
 			window.innerWidth = originalWidth;
 		}
-	});
-
-	it("omits the mobile Show/Hide toggle entirely, unlike plan mode", () => {
-		// A deliberate deviation from plan mode (which shows/hides the toggle
-		// with CSS at `lg` rather than removing it): roll mode has nothing for
-		// the toggle to do, since it is always expanded (see the test above).
-		// Nothing else here asserts this, so a later reader could "restore" the
-		// toggle as dead code without any test noticing.
-		const { queryByRole } = render(<MeetingAttendancePanel {...rollProps} />);
-		expect(queryByRole("button", { name: /show|hide/i })).toBeNull();
 	});
 
 	it("renders the Guests group when guests are supplied", () => {
