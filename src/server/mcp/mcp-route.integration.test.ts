@@ -213,6 +213,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"record_guest_book",
 			"record_table_topics",
 			"reopen_meeting",
+			"request_cover",
 			"reschedule_meeting",
 			"restore_meeting",
 			"set_attendance",
@@ -638,6 +639,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("claim_open_role", {
 				meetingId: seed.meetingId,
 				role: "Toastmaster",
+			}),
+			// #1569. Preview only: the caller's own role, never a guest row.
+			toolsCall("request_cover", {
+				meetingId: seed.meetingId,
+				role: "Toastmaster",
+				action: "release",
+				kind: "dropped",
 			}),
 			// #1571. Preview only: the caller's own speaker slot, never a guest row.
 			toolsCall("set_my_speech_details", {

@@ -356,6 +356,18 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		).resolves.toMatchObject({
 			blocking: [expect.objectContaining({ code: "NO_SPEAKER_SLOT" })],
 		});
+		// #1569: request_cover is a member tool; the seeded member holds no
+		// "Toastmaster", so the preview blocks rather than writes.
+		await expect(
+			call("request_cover", token, {
+				meetingId: s.meetingId,
+				role: "Toastmaster",
+				action: "release",
+				kind: "dropped",
+			}),
+		).resolves.toMatchObject({
+			blocking: [expect.objectContaining({ code: "NO_SUCH_ROLE" })],
+		});
 	});
 
 	/**
