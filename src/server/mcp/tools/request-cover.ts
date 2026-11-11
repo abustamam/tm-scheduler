@@ -12,10 +12,10 @@
  * The tool sends nothing to anyone: the member tells people themselves (humans
  * send every message). It imports no mail module.
  */
-import { and, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { slotCoverRequests } from "#/db/schema";
+import { coverRequestKindEnum, slotCoverRequests } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
 import { isMemberNotComing } from "#/server/attendance-plan-logic";
 import { lockClubForWrite } from "#/server/club-write-lock";
@@ -46,6 +46,8 @@ import type { McpToolDefinition } from "../tool";
 
 const TOOL = "request_cover";
 
+const actionSchema = z.enum(["release", "undo", "ask"]);
+
 const inputSchema = {
 	meetingId: z.string().uuid().describe("From get_my_schedule."),
 	role: z
@@ -54,13 +56,11 @@ const inputSchema = {
 		.min(1)
 		.max(80)
 		.describe('The role name or label, e.g. "Timer" or "Speaker 2".'),
-	action: z
-		.enum(["release", "undo", "ask"])
-		.describe(
-			'"release": hand off a role you hold and ask for cover. "undo": take back a role you released, while nobody has taken it. "ask": change a role you dropped into "finding cover".',
-		),
+	action: actionSchema.describe(
+		'"release": hand off a role you hold and ask for cover. "undo": take back a role you released, while nobody has taken it. "ask": change a role you dropped into "finding cover".',
+	),
 	kind: z
-		.enum(["finding_cover", "dropped"])
+		.enum(coverRequestKindEnum.enumValues)
 		.optional()
 		.describe(
 			'Required for "release" only. "finding_cover": the member is looking for someone. "dropped": the role is simply given up.',
@@ -73,8 +73,24 @@ const inputSchema = {
 		),
 };
 
-type Action = "release" | "undo" | "ask";
-type Kind = "finding_cover" | "dropped";
+type Action = z.infer<typeof actionSchema>;
+type Kind = (typeof coverRequestKindEnum.enumValues)[number];
+
+/** The cover cores throw plain Errors; only these sentences are the app's own refusals. */
+const CORE_REFUSALS = new Set<string>([
+	ONLY_HOLDER_MESSAGE,
+	ALREADY_TAKEN_MESSAGE,
+	ONLY_RELEASER_MESSAGE,
+	NOT_COMING_UNDO_MESSAGE,
+]);
+
+const NO_REQUEST_MESSAGE = "You have no cover request on that role.";
+
+const PLAN_KIND: Record<Action, (kind: Kind | undefined) => Kind | null> = {
+	release: (kind) => kind ?? null,
+	ask: () => "finding_cover",
+	undo: () => null,
+};
 
 interface Computed {
 	plan: {
@@ -88,6 +104,29 @@ interface Computed {
 	slotId: string | null;
 }
 
+function requestState(
+	r:
+		| {
+				id: string;
+				kind: Kind;
+				releasedBy: string | null;
+				priorStatus: string;
+				priorClaimedAt: Date | null;
+				priorSpeechId: string | null;
+		  }
+		| undefined,
+) {
+	if (!r) return null;
+	return {
+		id: r.id,
+		kind: r.kind,
+		releasedBy: r.releasedBy,
+		priorStatus: r.priorStatus,
+		priorClaimedAt: r.priorClaimedAt?.toISOString() ?? null,
+		priorSpeechId: r.priorSpeechId,
+	};
+}
+
 async function compute(
 	conn: DbOrTx,
 	args: { meetingId: string; role: string; action: Action; kind?: Kind },
@@ -95,7 +134,7 @@ async function compute(
 ): Promise<Computed> {
 	const facts = await loadMeetingFacts(conn, args.meetingId);
 	const slots = await loadLabelledSlots(conn, args.meetingId);
-	const wanted = args.role.trim().toLowerCase();
+	const wanted = args.role.toLowerCase();
 	const matching: LabelledSlot[] = slots.filter(
 		(s) =>
 			s.label.toLowerCase() === wanted || s.roleName.toLowerCase() === wanted,
@@ -105,20 +144,16 @@ async function compute(
 			? []
 			: await conn
 					.select({
+						id: slotCoverRequests.id,
 						slotId: slotCoverRequests.slotId,
 						releasedBy: slotCoverRequests.releasedByMemberId,
 						kind: slotCoverRequests.kind,
+						priorStatus: slotCoverRequests.priorStatus,
+						priorClaimedAt: slotCoverRequests.priorClaimedAt,
+						priorSpeechId: slotCoverRequests.priorSpeechId,
 					})
 					.from(slotCoverRequests)
-					.where(
-						and(
-							inArray(
-								slotCoverRequests.slotId,
-								matching.map((s) => s.slotId),
-							),
-							openCoverRequestOf(matching.map((s) => s.slotId)),
-						),
-					);
+					.where(openCoverRequestOf(matching.map((s) => s.slotId)));
 	const requestOf = new Map(requests.map((r) => [r.slotId, r] as const));
 
 	const blocking = meetingStateBlocking(facts);
@@ -138,8 +173,7 @@ async function compute(
 		candidates = matching.filter(
 			(s) => requestOf.get(s.slotId)?.releasedBy === who.memberId,
 		);
-		refusal =
-			args.action === "undo" ? ALREADY_TAKEN_MESSAGE : ONLY_RELEASER_MESSAGE;
+		refusal = ONLY_RELEASER_MESSAGE;
 	}
 	const chosen = candidates.length === 1 ? (candidates[0] ?? null) : null;
 	if (matching.length === 0) {
@@ -148,7 +182,31 @@ async function compute(
 			message: `There is no "${args.role}" at that meeting.`,
 		});
 	} else if (candidates.length === 0) {
-		blocking.push({ code: "NOT_YOURS", message: refusal });
+		if (args.action === "undo" && requests.length === 0) {
+			// No open request on any match: either the caller's request was closed
+			// because someone took the slot, or they never released it.
+			const closed = await conn
+				.select({ id: slotCoverRequests.id })
+				.from(slotCoverRequests)
+				.where(
+					and(
+						eq(slotCoverRequests.releasedByMemberId, who.memberId),
+						isNotNull(slotCoverRequests.coveredAt),
+						inArray(
+							slotCoverRequests.slotId,
+							matching.map((s) => s.slotId),
+						),
+					),
+				)
+				.limit(1);
+			blocking.push(
+				closed.length > 0
+					? { code: "ALREADY_TAKEN", message: ALREADY_TAKEN_MESSAGE }
+					: { code: "NO_COVER_REQUEST", message: NO_REQUEST_MESSAGE },
+			);
+		} else {
+			blocking.push({ code: "NOT_YOURS", message: refusal });
+		}
 	} else if (candidates.length > 1) {
 		blocking.push({
 			code: "AMBIGUOUS_ROLE",
@@ -177,12 +235,7 @@ async function compute(
 		meeting: meetingPlanHeader(facts),
 		action: args.action,
 		slotLabel: chosen?.label ?? null,
-		kind:
-			args.action === "release"
-				? (args.kind ?? null)
-				: args.action === "ask"
-					? ("finding_cover" as const)
-					: null,
+		kind: PLAN_KIND[args.action](args.kind),
 	};
 	return {
 		plan,
@@ -192,7 +245,6 @@ async function compute(
 			userId: who.userId,
 			plan: {
 				...plan,
-				status: args.action,
 				state: {
 					slotId: chosen?.slotId ?? null,
 					matching: matching
@@ -200,8 +252,7 @@ async function compute(
 							slotId: s.slotId,
 							status: s.status,
 							holderMemberId: s.holderMemberId,
-							requestKind: requestOf.get(s.slotId)?.kind ?? null,
-							requestBy: requestOf.get(s.slotId)?.releasedBy ?? null,
+							request: requestState(requestOf.get(s.slotId)),
 						}))
 						.sort((a, b) => a.slotId.localeCompare(b.slotId)),
 				},
@@ -215,6 +266,9 @@ async function compute(
 export const requestCoverTool: McpToolDefinition = {
 	name: TOOL,
 	audience: "member",
+	// Writes the caller's own role and request. Destructive (the slot is emptied
+	// or a request is deleted) and not idempotent: a repeat after an apply is
+	// refused or changes a different state.
 	annotations: {
 		readOnlyHint: false,
 		destructiveHint: true,
@@ -269,23 +323,21 @@ export const requestCoverTool: McpToolDefinition = {
 			}
 			const core = { slotId: c.slotId, actorMemberId: who.memberId };
 			try {
-				if (args.action === "release") {
-					await releaseOwnSlotForCoverCore(tx, {
-						...core,
-						kind: args.kind as Kind,
-					});
+				if (args.action === "release" && c.plan.kind) {
+					await releaseOwnSlotForCoverCore(tx, { ...core, kind: c.plan.kind });
+				} else if (args.action === "release") {
+					// Unreachable: KIND_REQUIRED blocks a release without a kind.
+					throw new McpError("BLOCKED", "A release needs a kind.");
 				} else if (args.action === "undo") {
 					await undoReleaseForCoverCore(tx, core);
 				} else {
 					await askForCoverCore(tx, core);
 				}
 			} catch (e) {
-				if (e instanceof McpError) throw e;
-				throw new McpError(
-					"BLOCKED",
-					e instanceof Error ? e.message : "Could not change that role.",
-					{ blocking: [] },
-				);
+				if (e instanceof Error && CORE_REFUSALS.has(e.message)) {
+					throw new McpError("BLOCKED", e.message, { blocking: [] });
+				}
+				throw e;
 			}
 			return { done: args.action, role: c.plan.slotLabel };
 		});
