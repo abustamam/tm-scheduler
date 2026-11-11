@@ -200,6 +200,9 @@ export const setMyAttendanceTool: McpToolDefinition = {
 						meetingId: facts.meetingId,
 						clubId: who.clubId,
 						proof: "connector",
+						// Re-read under the member's attendance lock: an answer the member
+						// gave in the browser after the hash check is PLAN_STALE, not deleted.
+						expectedPlanStatus: c.plan.currentAnswer ?? null,
 					});
 					return { cleared, released: [], dutyText: null, draftMessage: null };
 				}

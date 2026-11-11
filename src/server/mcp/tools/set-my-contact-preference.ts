@@ -122,7 +122,12 @@ export const setMyContactPreferenceTool: McpToolDefinition = {
 			plan,
 		});
 		if (!args.planHash) {
-			return { applied: false, plan, planHash: hash, blocking: plan.refusal };
+			return {
+				applied: false,
+				plan,
+				planHash: hash,
+				blocking: plan.refusal ? [plan.refusal] : [],
+			};
 		}
 		if (hash !== args.planHash) {
 			throw new McpError("PLAN_STALE", MY_CONTACT_PLAN_STALE_MESSAGE, {

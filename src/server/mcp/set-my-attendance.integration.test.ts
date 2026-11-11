@@ -81,6 +81,7 @@ const { declinePlannedAttendance } = await import(
 );
 const { SELF_ONLY_MESSAGE } = await import("#/server/attendance-actor-logic");
 const { confirmSlotCore } = await import("#/server/slots-logic");
+const { lockMemberAttendance } = await import("#/server/attendance-plan-logic");
 
 const seeded: SeededClub[] = [];
 afterEach(async () => {
@@ -791,5 +792,86 @@ describe.skipIf(!hasTestDb)("set_my_attendance (#1283)", () => {
 			"PLAN_STALE",
 		);
 		expect(await planOf(s)).toBe("not_coming");
+	});
+
+	// Card (#1570): protects=the connector clear path has no assertClubNotArchived
+	// of its own, so a takedown must still refuse it (authorizeTokenForMeeting);
+	// fails_when=an archived club's member can delete their plan row through the
+	// connector; no_claim=the refusal's wording.
+	it("clear on an archived club is refused and the plan row is untouched", async () => {
+		const s = await club();
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "coming",
+		});
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "clear");
+		await testDb
+			.update(clubs)
+			.set({ archivedAt: new Date() })
+			.where(eq(clubs.id, s.clubId));
+		const err = await call(token, {
+			meetingId: s.meetingId,
+			status: "clear",
+			planHash: p.planHash,
+		}).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		expect(err).toBeInstanceOf(Error);
+		expect((err as { code?: string }).code).toBe("ARCHIVED");
+		expect(await planOf(s)).toBe("coming");
+	});
+
+	// Card (#1570): protects=a `coming` the member gives after the hash check but
+	// before the DELETE is PLAN_STALE, never deleted unseen;
+	// fails_when=the tool stops passing the previewed answer to the core, or the
+	// core stops re-reading under the member's attendance lock;
+	// no_claim=none beyond protects.
+	it("clear: an answer given after the hash check is PLAN_STALE and survives", async () => {
+		const s = await club();
+		await testDb.insert(meetingAttendancePlan).values({
+			memberId: s.memberId,
+			meetingId: s.meetingId,
+			status: "not_coming",
+		});
+		const token = await tokenFor(s.memberUserId);
+		const p = await preview(token, s.meetingId, "clear");
+		let release = () => {};
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		let locked = () => {};
+		const gotLock = new Promise<void>((r) => {
+			locked = r;
+		});
+		// The member answers `coming` in the browser: holds the attendance lock.
+		const browser = testDb.transaction(async (tx) => {
+			await lockMemberAttendance(tx, s.meetingId, s.memberId);
+			locked();
+			await held;
+			await tx
+				.update(meetingAttendancePlan)
+				.set({ status: "coming" })
+				.where(eq(meetingAttendancePlan.memberId, s.memberId));
+		});
+		await gotLock;
+		// The hash still matches (nothing committed), so the apply reaches the lock.
+		const apply = call(token, {
+			meetingId: s.meetingId,
+			status: "clear",
+			planHash: p.planHash,
+		}).then(
+			() => null,
+			(e: unknown) => e,
+		);
+		await new Promise((r) => setTimeout(r, 300));
+		release();
+		await browser;
+		const err = await apply;
+		expect(err).toBeInstanceOf(McpError);
+		expect((err as InstanceType<typeof McpError>).code).toBe("PLAN_STALE");
+		expect(await planOf(s)).toBe("coming");
 	});
 });

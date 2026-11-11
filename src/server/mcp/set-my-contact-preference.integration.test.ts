@@ -81,6 +81,7 @@ type Preview = {
 		refusal: { code: string; message: string } | null;
 	};
 	planHash: string;
+	blocking: { code: string; message: string }[];
 };
 
 const call = (token: string, input: Record<string, unknown>) =>
@@ -117,6 +118,7 @@ describe.skipIf(!hasTestDb)("set_my_contact_preference (#1570)", () => {
 		const token = await tokenFor(s.memberUserId);
 		const p = (await call(token, { preferredContact: "sms" })) as Preview;
 		expect(p.plan).toMatchObject({ before: null, after: "sms", refusal: null });
+		expect(p.blocking).toEqual([]);
 		expect(await person(s.personId)).toMatchObject({ pref: null });
 
 		const out = await call(token, {
@@ -168,6 +170,7 @@ describe.skipIf(!hasTestDb)("set_my_contact_preference (#1570)", () => {
 			code: "method_unavailable",
 			message: CONTACT_METHOD_UNAVAILABLE_MESSAGE,
 		});
+		expect(p.blocking).toEqual([p.plan.refusal]);
 		await expectMcpError(
 			call(token, { preferredContact: "sms", planHash: p.planHash }),
 			"BLOCKED",
@@ -208,6 +211,7 @@ describe.skipIf(!hasTestDb)("set_my_contact_preference (#1570)", () => {
 			code: "no_linked_person",
 			message: NO_LINKED_PERSON_MESSAGE,
 		});
+		expect(p.blocking).toEqual([p.plan.refusal]);
 		await expectMcpError(
 			call(token, { preferredContact: "email", planHash: p.planHash }),
 			"BLOCKED",
@@ -224,12 +228,17 @@ describe.skipIf(!hasTestDb)("set_my_contact_preference (#1570)", () => {
 		const p = (await call(token, { preferredContact: "email" })) as Preview;
 		await testDb
 			.update(people)
-			.set({ preferredContact: "email", contactPreferenceBy: "member" })
+			.set({
+				phone: "+15550002222",
+				preferredContact: "sms",
+				contactPreferenceBy: "member",
+			})
 			.where(eq(people.id, s.personId));
-		// Drift: the stored preference now already equals the target.
+		// Drift to a DIFFERENT value than the target, so a write would be visible.
 		await expectMcpError(
 			call(token, { preferredContact: "email", planHash: p.planHash }),
 			"PLAN_STALE",
 		);
+		expect((await person(s.personId))?.pref).toBe("sms");
 	});
 });

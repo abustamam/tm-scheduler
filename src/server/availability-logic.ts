@@ -28,9 +28,11 @@ import {
 	SELF_ONLY_MESSAGE,
 } from "./attendance-actor-logic";
 import {
+	type AttendancePlanStatus,
 	CLEARABLE_DECLINE,
 	clearFloor,
 	clearPlanStatus,
+	getPlanStatus,
 	lockMemberAttendance,
 	SELF_SERVICE_RUNGS,
 	setPlanStatus,
@@ -730,6 +732,12 @@ export async function clearPlannedAttendanceCore(
 		 *  `resolveActor` to read. Omitted: the session path, unchanged. The floor
 		 *  stays `clearFloor`'s `self` arm, so only `coming` / `not_coming` clear. */
 		proof?: "connector";
+		/** `"connector"` only: the answer the caller previewed (`null` = none). The
+		 *  member's attendance lock is taken and the row re-read under it; a
+		 *  different answer throws {@link HeldSlotsChangedError} (`PLAN_STALE` in
+		 *  the tool) before the DELETE, so a `coming` the member gave in the
+		 *  browser after the hash check is never deleted unseen. */
+		expectedPlanStatus?: AttendancePlanStatus | null;
 	},
 ): Promise<{ ok: true; cleared: boolean }> {
 	const resolved =
@@ -741,23 +749,30 @@ export async function clearPlannedAttendanceCore(
 					memberId: args.memberId,
 					claimedActorMemberId: args.claimedActorMemberId,
 				});
-	if (args.proof === "connector") {
-		// Same gate as `releaseSlotsAndMarkUnavailable`: the write needs a proven
-		// session OR a connector acting on its own row, nothing else.
-		if (
-			!isConnectorSelf(resolved.proof, resolved.actorMemberId, args.memberId)
-		) {
-			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-		}
-	} else {
-		assertSessionProof(resolved);
-	}
+	// A connector's gate IS `connectorActor` above (it throws `SELF_ONLY_MESSAGE`
+	// for anything but the token's own row), so only the session path has a proof
+	// left to check. `attendance-plan-authz.guard.test.ts` reads this line.
+	if (args.proof !== "connector") assertSessionProof(resolved);
 	const { actorMemberId, via } = resolved;
-	return clearPlanStatus(database, {
-		memberId: args.memberId,
-		meetingId: args.meetingId,
-		clubId: args.clubId,
-		actorMemberId,
-		onlyFrom: clearFloor({ via, actorMemberId, memberId: args.memberId }),
+	const clear = (conn: DbOrTx) =>
+		clearPlanStatus(conn, {
+			memberId: args.memberId,
+			meetingId: args.meetingId,
+			clubId: args.clubId,
+			actorMemberId,
+			onlyFrom: clearFloor({ via, actorMemberId, memberId: args.memberId }),
+		});
+	if (args.expectedPlanStatus === undefined) return clear(database);
+	const expected = args.expectedPlanStatus;
+	return (database as Database).transaction(async (tx) => {
+		// The same lock `not_coming` takes (`releaseSlotsAndMarkUnavailable`), then
+		// the re-read: the lock alone only orders us after a concurrent writer.
+		await lockMemberAttendance(tx, args.meetingId, args.memberId);
+		const now = await getPlanStatus(tx, {
+			memberId: args.memberId,
+			meetingId: args.meetingId,
+		});
+		if (now !== expected) throw new HeldSlotsChangedError();
+		return clear(tx);
 	});
 }
