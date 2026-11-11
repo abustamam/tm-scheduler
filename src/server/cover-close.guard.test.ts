@@ -90,6 +90,11 @@ const KNOWN: Record<
 		closes: 0,
 		why: "re-points held slots from one membership to the keeper",
 	},
+	"guest-merge-logic.ts": {
+		statements: 1,
+		closes: 0,
+		why: "guest merge re-points slots the absorbed guest already held to the keeper (#1609)",
+	},
 	"guest-pipeline-logic.ts": {
 		statements: 4,
 		closes: 1,

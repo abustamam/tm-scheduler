@@ -226,6 +226,11 @@ export function formatActivity(entry: ActivityEntry): FormattedActivity {
 		case "club_data_exported":
 			summary = "downloaded the club's data export";
 			break;
+		// A club admin folded one guest record into another (#1609). `detail`
+		// carries two ids and nothing else, so there is no name to show.
+		case "guest_merge":
+			summary = "merged two guest records";
+			break;
 		// A club's history imported from another tool (#1046 / #1054): one row
 		// per applied bundle, and `detail` carries counts, never the records.
 		case "history_imported":

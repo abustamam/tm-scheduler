@@ -163,6 +163,8 @@ export const PARITY_ROWS: ParityRow[] = [
 	}),
 	row("upload-members", "previewMemberUpload", "admin", { gap: true }),
 	row("upload-members", "commitMemberUpload", "admin", { gap: true }),
+	row("guest-merge", "previewMergeGuests", "admin", { gap: true }),
+	row("guest-merge", "mergeGuests", "admin", { gap: true }),
 	row("sync-tokens", "generateSyncToken", "admin", {
 		notOnConnector: {
 			category: "credential management",

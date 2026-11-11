@@ -299,6 +299,11 @@ export const activityActionEnum = pgEnum("activity_action", [
 	// per imported record. `targetType: "club"`; `detail = { importId, source,
 	// counts }`, never the bundle's contents.
 	"history_imported",
+	// A club admin folded one guest record of the club into another (#1609).
+	// ONE row per merge: `targetType: "club"`, `detail = { keptGuestId,
+	// absorbedGuestId }`, never a name, email or phone (the feed is readable by
+	// every member).
+	"guest_merge",
 ]);
 
 // Impersonation session mode (ADR-0020 / #185, #246). `read_only` = "View as this

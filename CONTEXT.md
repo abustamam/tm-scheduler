@@ -104,6 +104,18 @@ the nouns in `src/db/schema.ts`.
   guest-held slots render the name with a subtle "· Guest" marker and count as filled. Admin-only
   to assign (not on the public/TMOD view). A guest also carries a pipeline `stage` and, once
   promoted, a `converted_membership_id` — see **Guest pipeline**. See ADR-0013 / #151.
+- **Guest merge** (#1609) — a club admin folds one guest record of the SAME club into another
+  (`applyMergeGuests`, `src/server/guest-merge-logic.ts`; the dialog's "Merge with another guest…").
+  Not a **Person** merge: `mergePeople` is the superadmin's, cross-club, and leaves both guest rows
+  in the club. A guest merge deletes the absorbed guest row, so every row naming it (attendance,
+  roles, speeches, awards, Table Topics, votes and ballots, disqualifications, invites, RSVPs,
+  `import_refs`) is re-pointed to the kept record first, and on a same-meeting duplicate the
+  keeper's row wins. The kept record keeps its name, kind and stage; a blank goes-by, home club,
+  introducer or book email is taken from the other. Two guests on different Persons merge only when
+  the absorbed Person is guest-only and held by that one row (it is deleted, and fills the keeper
+  Person's blank email and phone through `guestContactWritable`); otherwise it refuses and a
+  site admin merges the people first. A joined or converted record is refused. Irreversible; one
+  `guest_merge` activity row with the two ids and nothing else.
 - **Guest kind** — what sort of non-member a guest row is (`guests.kind`, `guest_kind` enum,
   #1046). Two kinds. `visitor` (the default, and every guest that existed before the column did) is
   someone checking the club out — the prospect the **Guest pipeline** exists for; it is labelled

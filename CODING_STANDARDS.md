@@ -297,6 +297,7 @@ There is no per-club copy; `members.email` was dropped by migration 0109.
 | the superadmin first-admin repair, `mergePeople` | their named waivers |
 | Separate (`applySeparateGuest`, #1127, #1175) | a plain INSERT of a fresh Person with no email or phone |
 | an officer of two clubs linking a guest across them (`applyLinkGuestAcrossClubs`, #1175, ADR-0031) | writes NO `people` column: it re-points one guest row at the other's Person and deletes the Person it left, which must be pristine (`pristineGuestPerson(guestId)`) with an email and phone that are blank or equal to the keeper's, so nothing is lost; both Persons guest-only (`identityIgnoredGuestPerson()`); refused when the keeper Person already has a card or an active seat in the absorbed guest's club (`personIsHereAlready`: one card per Person per club) |
+| the guest-to-guest merge (`applyMergeGuests`, #1609) | fills the KEEPER guest's Person's blank (null or empty) email from the absorbed guest-only Person it then deletes, under `guestContactWritable(clubId)` in the UPDATE's own WHERE; a keeper Person that is a member's or signed in is left as it is (the Person owns its data). The absorbed Person goes through `deleteGuestPersonIfUnreferenced`, and a refusal there rolls the merge back |
 | a plain INSERT of a brand-new Person (`createGuestRecord` carries the guest's contact onto the Person it mints) | always — a fresh row is nobody's yet |
 | **not `people.email`:** `guests.book_email`, the club's unconfirmed note (#1157, ADR-0029 amendment) | written by `resolveOrCreateBookGuest` (create, for the guest book and the guest RSVP) and `fillBlankGuestContact` (fill-only, under `guestContactFillable(clubId)` in the UPDATE's own WHERE), cleared to NULL by convert's confirmed write and by `applyUpdateGuest` saving a non-null address, restored from a link's record by an unlink. No writer of `people` reads it; the convert's identity never contains it (an officer's `confirmedEmail` is the only way it becomes a Person fact). `guest-book-email.guard.test.ts` counts every `bookEmail` key |
 
@@ -422,8 +423,8 @@ is not an inline object literal is refused outright, comments are stripped, the
 table is resolved through its local binding, upserts and raw SQL count; each
 club-side writer must carry `isNull(people.userId)` AND `soleHoldingClub(`; convert's
 adopt of a pristine guest Person carries `pristineGuestPerson(` instead; the guest-side
-writers carry `guestContactWritable(` and `guestContactFillable(`, and each waiver is
-held to its own function's body),
+writers (`applyUpdateGuest`, `applyMergeGuests`) carry `guestContactWritable(` and
+`guestContactFillable(`, and each waiver is held to its own function's body),
 `guest-contact-columns.guard.test.ts` (no reference to the dropped guest columns),
 `guest-contact-on-person.integration.test.ts` and `guest-contact-migration.integration.test.ts`
 (the predicates and their refusal, the writers, the identity paths, convert's

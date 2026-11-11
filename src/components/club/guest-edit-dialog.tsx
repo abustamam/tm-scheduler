@@ -1,5 +1,5 @@
 import { useRouter } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import {
@@ -32,6 +32,16 @@ import {
 	getGuestProfile,
 	updateGuestProfile,
 } from "#/server/guests";
+
+/**
+ * Loaded when the officer opens it: most edits never merge, and the dialog's
+ * server fns stay out of this one's module graph (#1609).
+ */
+const GuestMergeDialog = lazy(() =>
+	import("#/components/club/guest-merge-dialog").then((m) => ({
+		default: m.GuestMergeDialog,
+	})),
+);
 
 /**
  * The toast when the name and contact saved but the profile write was refused;
@@ -190,6 +200,7 @@ export function GuestEditDialog({
 	const [kind, setKind] = useState<GuestKind>("visitor");
 	const [homeClub, setHomeClub] = useState("");
 	const [introducerId, setIntroducerId] = useState("");
+	const [mergeOpen, setMergeOpen] = useState(false);
 
 	// Fresh on every open, so a second edit starts from what the first saved.
 	useEffect(() => {
@@ -540,6 +551,18 @@ export function GuestEditDialog({
 						</p>
 					)}
 					<DialogFooter>
+						{/* A guest already on the roster is merged on the roster; the server
+						    refuses a joined or converted record either way (#1609). */}
+						{joined ? null : (
+							<Button
+								type="button"
+								variant="outline"
+								disabled={busy}
+								onClick={() => setMergeOpen(true)}
+							>
+								Merge with another guest…
+							</Button>
+						)}
 						<DialogClose asChild>
 							<Button type="button" variant="outline" disabled={busy}>
 								Cancel
@@ -551,6 +574,22 @@ export function GuestEditDialog({
 					</DialogFooter>
 				</form>
 			</DialogContent>
+			{mergeOpen ? (
+				<Suspense fallback={null}>
+					<GuestMergeDialog
+						guestId={guest.id}
+						guestName={guest.name}
+						clubId={clubId}
+						open={mergeOpen}
+						onOpenChange={setMergeOpen}
+						onMerged={async () => {
+							// The record this dialog edits may be the one that was absorbed.
+							await onSaved?.();
+							onOpenChange(false);
+						}}
+					/>
+				</Suspense>
+			) : null}
 		</Dialog>
 	);
 }
