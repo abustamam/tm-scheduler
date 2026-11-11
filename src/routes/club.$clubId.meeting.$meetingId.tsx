@@ -26,6 +26,7 @@ import { MeetingMetaDialog } from "#/components/agenda/meeting-meta-dialog";
 import { MeetingTemplateDialog } from "#/components/agenda/meeting-template-dialog";
 import { MeetingWordOfTheDayDialog } from "#/components/agenda/meeting-word-of-the-day-dialog";
 import { AbsentReleaseDialog } from "#/components/club/absent-release-dialog";
+import { AwardsSection } from "#/components/club/awards-section";
 import { CoverChip } from "#/components/club/cover-chip";
 import { CoverLandingCard } from "#/components/club/cover-landing-card";
 import { CoverSheet } from "#/components/club/cover-sheet";
@@ -49,6 +50,7 @@ import {
 } from "#/components/club/meeting-toolbar";
 import { MeetingYourJobs } from "#/components/club/meeting-your-jobs";
 import { OpenActionItems } from "#/components/club/open-action-items";
+import { SyncStatus } from "#/components/club/sync-status";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { useMeetingCover } from "#/components/club/use-meeting-cover";
 import { useMeetingLifecycle } from "#/components/club/use-meeting-lifecycle";
@@ -993,6 +995,15 @@ function MeetingView() {
 		ballots: ballotsShown,
 		minutes: minutesShown || effectiveCanManage,
 	});
+	// The Ballots tab's Awards list and sync strip (#1583): the same gate the
+	// Minutes card's `canEdit` uses, plus the minutes data actually present.
+	const awardsEditable = Boolean(
+		effectiveCanManage && minutes.canEdit && !cancelled && minutes.data,
+	);
+	// The console's winner buttons write directly, not through the queue, so they
+	// pause while the queue holds unsent ops or is draining (#1583).
+	const winnerWritesPaused =
+		offlineMinutes.queue.length > 0 || offlineMinutes.draining;
 	const activeTab = meetingTabFrom(search, offeredTabs);
 	const selectTab = (tab: MeetingTab) => {
 		void navigate({
@@ -1669,7 +1680,27 @@ function MeetingView() {
 											}
 											onSetWinner={handleSetVoteWinner}
 											onClearWinner={handleClearVoteWinner}
+											winnerWritesPaused={winnerWritesPaused}
 										/>
+									) : null}
+									{awardsEditable && minutes.data ? (
+										<>
+											<SyncStatus
+												online={online}
+												queueCount={offlineMinutes.queue.length}
+												draining={offlineMinutes.draining}
+												syncError={offlineMinutes.syncError}
+												justSynced={offlineMinutes.justSynced}
+												onRetry={() => void offlineMinutes.retryDrain()}
+											/>
+											<AwardsSection
+												meetingId={meeting.id}
+												minutes={minutes.data}
+												canEdit={true}
+												offline={offlineMinutes}
+												clubGuests={clubGuests}
+											/>
+										</>
 									) : null}
 								</section>
 							) : null}
@@ -1712,6 +1743,9 @@ function MeetingView() {
 										clubGuests={clubGuests}
 										unavailableMemberIds={unavailableMemberIds}
 										offline={offlineMinutes}
+										onChangeInBallots={
+											ballotsShown ? () => selectTab("ballots") : undefined
+										}
 										email={
 											minutesEmail
 												? {

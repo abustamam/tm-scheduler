@@ -133,7 +133,7 @@ const SURFACES: { file: string; needles: string[] }[] = [
 		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
-		file: "src/components/club/meeting-minutes.tsx",
+		file: "src/components/club/awards-section.tsx",
 		needles: [`best_table_topics: "${PLURAL}"`],
 	},
 	{
