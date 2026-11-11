@@ -96,6 +96,7 @@ function renderPanel(
 		sessionMemberId?: string | null;
 		canManageClub?: boolean;
 		rulingExcluded?: boolean;
+		winnerWritesPaused?: boolean;
 	} = {},
 ) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -112,6 +113,7 @@ function renderPanel(
 				// admin case and the session arm would go untested.
 				canManageClub={over.canManageClub ?? false}
 				rulingExcluded={over.rulingExcluded}
+				winnerWritesPaused={over.winnerWritesPaused}
 				onSetWinner={vi.fn()}
 				onClearWinner={vi.fn()}
 			/>
@@ -991,6 +993,91 @@ describe("VoteCounterPanel current winner (#1580)", () => {
 		const speaker = card("Best Speaker");
 		expect(await speaker.findByText("Ben")).toBeTruthy();
 		expect(speaker.getByRole("button", { name: "Set winner" })).toBeTruthy();
+	});
+});
+
+// #1583. The winner buttons write directly, not through the offline minutes
+// queue, so while that queue holds unsent ops they would be overwritten on drain.
+describe("VoteCounterPanel winner writes paused (#1583)", () => {
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	function closedWithWinner() {
+		getVoteTally.mockResolvedValue(
+			tally(
+				{
+					best_speaker: category({
+						results: [member("m-1", "Ana", 4), member("m-2", "Ben", 2)],
+					}),
+				},
+				{ best_speaker: { kind: "member", id: "m-1", name: "Ana" } },
+			),
+		);
+	}
+
+	// protects=no winner write races the queue's drain; fails_when=Set winner or
+	// Clear winner stays enabled, or the syncing line is missing while paused;
+	// no_claim=that the route computes the flag (the wiring guard pins that)
+	it("disables Set winner and Clear winner and says why when paused", async () => {
+		closedWithWinner();
+		renderPanel({ winnerWritesPaused: true });
+		const speaker = card("Best Speaker");
+		const clear = await speaker.findByRole("button", { name: "Clear winner" });
+		expect((clear as HTMLButtonElement).disabled).toBe(true);
+		const set = speaker.getByRole("button", { name: "Set winner" });
+		expect((set as HTMLButtonElement).disabled).toBe(true);
+		expect(speaker.getByText("Saved changes are still syncing.")).toBeTruthy();
+	});
+
+	// protects=the buttons work when the queue is empty; fails_when=they are
+	// disabled or the line shows without the flag; no_claim=a click's effect
+	it("leaves them enabled, with no line, when not paused", async () => {
+		closedWithWinner();
+		renderPanel({ winnerWritesPaused: false });
+		const speaker = card("Best Speaker");
+		const clear = await speaker.findByRole("button", { name: "Clear winner" });
+		expect((clear as HTMLButtonElement).disabled).toBe(false);
+		expect(
+			(speaker.getByRole("button", { name: "Set winner" }) as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+		expect(speaker.queryByText("Saved changes are still syncing.")).toBeNull();
+	});
+
+	// protects=voting can still be opened or closed and a candidate ruled out
+	// while paused (criterion 8); fails_when=the pause reaches those controls;
+	// no_claim=that a ruling succeeds
+	it("keeps Open voting and Disqualify enabled while paused", async () => {
+		closedWithWinner();
+		renderPanel({ winnerWritesPaused: true, canManageClub: true });
+		const speaker = card("Best Speaker");
+		await speaker.findByText("Saved changes are still syncing.");
+		const open = speaker.getByRole("button", { name: /Open voting/ });
+		expect((open as HTMLButtonElement).disabled).toBe(false);
+		const dq = speaker.getAllByRole("button", { name: /Disqualify/ });
+		expect(dq.length).toBeGreaterThan(0);
+		for (const b of dq) expect((b as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	// protects=Close voting stays usable while paused (criterion 8); fails_when=
+	// the pause reaches the close control of an OPEN category; no_claim=that the
+	// close succeeds
+	it("keeps Close voting enabled on an open category while paused", async () => {
+		getVoteTally.mockResolvedValue(
+			tally({
+				best_speaker: category({
+					isOpen: true,
+					results: [member("m-1", "Ana", 4)],
+				}),
+			}),
+		);
+		renderPanel({ winnerWritesPaused: true, canManageClub: true });
+		const speaker = card("Best Speaker");
+		await speaker.findByText("Saved changes are still syncing.");
+		const close = speaker.getByRole("button", { name: /Close voting/ });
+		expect((close as HTMLButtonElement).disabled).toBe(false);
 	});
 });
 

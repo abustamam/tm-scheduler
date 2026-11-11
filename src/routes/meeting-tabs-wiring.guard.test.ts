@@ -103,3 +103,60 @@ describe("the meeting route wires the tab shell (#1582)", () => {
 		expect(at("<MeetingMinutes")).toBeGreaterThan(minutes);
 	});
 });
+
+describe("the meeting route wires the Ballots awards list (#1583)", () => {
+	// protects=the console pauses while the ONE route-owned offline queue has
+	// unsent ops or is draining; fails_when=the flag is fed from another source,
+	// drops the draining arm or is not passed to the panel; no_claim=that the
+	// panel disables its buttons (vote-counter-panel.test.tsx drives that)
+	it("feeds winnerWritesPaused from the offline queue's pending-or-draining state", () => {
+		expect(source).toContain(
+			"const winnerWritesPaused = offlineMinutes.queue.length > 0 || offlineMinutes.draining;",
+		);
+		expect(source).toContain("winnerWritesPaused={winnerWritesPaused}");
+	});
+
+	// protects=the editable list and sync strip render in the Ballots panel only
+	// for a viewer whose minutes are editable and loaded; fails_when=the gate is
+	// dropped or loosened, the list leaves the Ballots panel, or it writes through
+	// a second queue; no_claim=what the list shows
+	it("renders the Ballots Awards list behind minutes canEdit, on the shared queue", () => {
+		expect(source).toContain(
+			"const awardsEditable = Boolean( effectiveCanManage && minutes.canEdit && !cancelled && minutes.data, );",
+		);
+		const ballots = source.indexOf("ballots: (");
+		const minutesPanel = source.indexOf("minutes: (", ballots);
+		const gate = source.indexOf("{awardsEditable && minutes.data ? (", ballots);
+		expect(gate).toBeGreaterThan(ballots);
+		expect(gate).toBeLessThan(minutesPanel);
+		const block = source.slice(gate, minutesPanel);
+		expect(block).toContain("<SyncStatus");
+		expect(block).toContain("<AwardsSection");
+		expect(block).toContain("offline={offlineMinutes}");
+		expect(block).toContain("canEdit offline={offlineMinutes}");
+	});
+
+	// protects=the Minutes tab's awards list stays read-only, so winners are only
+	// decided in Ballots (AC 1); fails_when=the literal becomes true or a prop
+	// such as canEdit; no_claim=what the component renders read-only
+	// (awards-section.test.tsx drives that)
+	it("renders the Minutes awards list read-only", () => {
+		const minutesSource = flat(
+			readSource("src/components/club/meeting-minutes.tsx"),
+		);
+		expect(minutesSource).toContain(
+			"<AwardsSection meetingId={meetingId} minutes={minutes} canEdit={false} offline={offline}",
+		);
+	});
+
+	// protects=the "Change in Ballots" link is offered only when the Ballots tab
+	// is, and switches to it (AC 2); fails_when=the gate uses another flag, the
+	// tab id changes, or the handler is passed ungated; no_claim=how the link
+	// renders (awards-section.test.tsx drives that)
+	it("gates the Minutes link on ballotsShown and selects the ballots tab", () => {
+		expect(source).toContain(
+			'onChangeInBallots={ ballotsShown ? () => selectTab("ballots") : undefined }',
+		);
+		expect(source).toContain("ballots: ballotsShown,");
+	});
+});

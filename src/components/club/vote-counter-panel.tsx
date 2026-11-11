@@ -135,6 +135,7 @@ export function VoteCounterPanel({
 	rulingExcluded = false,
 	onSetWinner,
 	onClearWinner,
+	winnerWritesPaused = false,
 }: {
 	meetingId: string;
 	selfMemberId: string | null;
@@ -186,6 +187,14 @@ export function VoteCounterPanel({
 	) => void;
 	/** Calls the EXISTING clearAward path — see the doc comment above. */
 	onClearWinner: (category: AwardCategory) => void;
+	/**
+	 * The route's offline minutes queue has unsent ops or is draining (#1583).
+	 * The winner buttons write directly, not through that queue, so a winner set
+	 * here while an older queued one is still unsent would be overwritten when the
+	 * queue drains. While true, Set winner and Clear winner are disabled; nothing
+	 * else in the panel is.
+	 */
+	winnerWritesPaused?: boolean;
 }) {
 	/**
 	 * Whether this viewer may reach the two ruling controls at all (#752).
@@ -478,12 +487,19 @@ export function VoteCounterPanel({
 										size="sm"
 										variant="ghost"
 										className="shrink-0 text-muted-foreground"
+										disabled={winnerWritesPaused}
 										onClick={() => onClearWinner(category)}
 									>
 										Clear winner
 									</Button>
 								) : null}
 							</div>
+						) : null}
+
+						{winnerWritesPaused && tally.data ? (
+							<p className="mt-2 text-xs text-muted-foreground">
+								Saved changes are still syncing.
+							</p>
 						) : null}
 
 						<p className="mt-2 text-sm text-muted-foreground">
@@ -562,6 +578,7 @@ export function VoteCounterPanel({
 											<Button
 												size="sm"
 												variant="outline"
+												disabled={winnerWritesPaused}
 												onClick={() =>
 													onSetWinner(
 														category,

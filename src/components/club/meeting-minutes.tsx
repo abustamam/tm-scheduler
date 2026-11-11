@@ -1,11 +1,9 @@
 import { Download } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { AwardsSection } from "#/components/club/awards-section";
 import { SyncStatus } from "#/components/club/sync-status";
-import {
-	AssigneePicker,
-	TableTopicsCapture,
-} from "#/components/club/table-topics-capture";
+import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { SendMinutesDialog } from "#/components/minutes/send-minutes-dialog";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -32,29 +30,20 @@ import { TIMING_VERDICT_LABEL, timingVerdict } from "#/lib/timing-verdict";
 import type { MinutesActionItems } from "#/server/action-items-logic";
 import {
 	addTableTopics,
-	clearMinutesAward,
 	type MinutesResult,
 	moveTableTopics,
 	removeTableTopics,
-	setMinutesAward,
 } from "#/server/minutes";
 import { recordTiming } from "#/server/timings";
 
 type MinutesData = NonNullable<MinutesResult["data"]>;
 type MinutesTiming = NonNullable<MinutesData["timings"]>[number];
-type AwardCategory = MinutesData["awards"][number]["category"];
 /**
  * Derived from the payload rather than re-declared as a hand-written union. The
  * old recorder kept its own copy of `"present" | "absent" | "excused"`, which
  * could drift from what `loadMinutes` actually returns; this cannot.
  */
 type AttendanceStatus = NonNullable<MinutesData["members"][number]["status"]>;
-
-const AWARD_LABELS: Record<AwardCategory, string> = {
-	best_speaker: "Best Speaker",
-	best_evaluator: "Best Evaluator",
-	best_table_topics: "Best Table Topics",
-};
 
 const STATUS_LABELS: Record<AttendanceStatus, string> = {
 	present: "Present",
@@ -104,6 +93,12 @@ type MeetingMinutesProps = {
 	 * loader behind it; the route always passes it.
 	 */
 	unavailableMemberIds?: readonly string[];
+	/**
+	 * Switches the meeting page to its Ballots tab (#1583). Given only to a viewer
+	 * who is offered that tab; it shows the "Change in Ballots" link under the
+	 * read-only Awards list.
+	 */
+	onChangeInBallots?: () => void;
 	/** Used only by the `offline`-less fallback below. */
 	onMutated?: () => void | Promise<void>;
 	/**
@@ -159,6 +154,7 @@ function MeetingMinutesView({
 	offline,
 	email,
 	unavailableMemberIds = [],
+	onChangeInBallots,
 }: MeetingMinutesProps & { offline: ReturnType<typeof useOfflineMinutes> }) {
 	// #176 slice 3-5: the offline write queue, reconnect drain and `mutate`/
 	// `opMeta` all live in the shared hook now (`#/hooks/use-offline-minutes`) —
@@ -372,47 +368,14 @@ function MeetingMinutesView({
 					}}
 				/>
 
+				{/* Read-only here (#1583): winners are set in the Ballots tab. */}
 				<AwardsSection
-					minutes={displayMinutes}
-					canEdit={canEdit}
-					busy={busy}
-					roster={displayMinutes.members}
+					meetingId={meetingId}
+					minutes={minutes}
+					canEdit={false}
+					offline={offline}
 					clubGuests={clubGuests}
-					onSet={(category, payload) =>
-						mutate(
-							() =>
-								setMinutesAward({ data: { meetingId, category, ...payload } }),
-							() => {
-								const isGuest = !payload.memberId;
-								const name = payload.memberId
-									? memberName(payload.memberId)
-									: payload.guestId
-										? guestName(payload.guestId)
-										: (payload.newGuest?.name ?? "Guest");
-								return {
-									type: "setAward",
-									...opMeta(),
-									category,
-									name,
-									isGuest,
-									memberId: payload.memberId,
-									guestId: payload.guestId,
-									newGuest: payload.newGuest,
-									// Inline new guest: mint its client PK so a drain replay is
-									// idempotent (no orphan guest). #176 slice 5.
-									newGuestId: payload.newGuest
-										? crypto.randomUUID()
-										: undefined,
-								};
-							},
-						)
-					}
-					onClear={(category) =>
-						mutate(
-							() => clearMinutesAward({ data: { meetingId, category } }),
-							() => ({ type: "clearAward", ...opMeta(), category }),
-						)
-					}
+					onChangeInBallots={onChangeInBallots}
 				/>
 
 				<TimingSection
@@ -518,118 +481,6 @@ function AttendanceRecord({ minutes }: { minutes: MinutesData }) {
 					) : null}
 				</div>
 			</div>
-		</section>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Awards
-// ---------------------------------------------------------------------------
-
-function AwardsSection({
-	minutes,
-	canEdit,
-	busy,
-	roster,
-	clubGuests,
-	onSet,
-	onClear,
-}: {
-	minutes: MinutesData;
-	canEdit: boolean;
-	busy: boolean;
-	roster: { memberId: string; name: string }[];
-	clubGuests: { id: string; name: string; stage?: string }[];
-	onSet: (
-		category: AwardCategory,
-		payload: {
-			memberId?: string;
-			guestId?: string;
-			newGuest?: { name: string };
-		},
-	) => void;
-	onClear: (category: AwardCategory) => void;
-}) {
-	// Scope each award's picker to the people who took that role this meeting
-	// (#170): Best Speaker → speaker-slot holders, Best Evaluator → evaluator-slot
-	// holders, Best Table Topics → the recorded Table Topics speakers. Falls back
-	// to the full roster when nobody was recorded so an award can always be set.
-	function eligibleFor(category: AwardCategory): {
-		roster: { memberId: string; name: string }[];
-		clubGuests: { id: string; name: string; stage?: string }[];
-	} {
-		const elig = minutes.awardEligible[category];
-		const memberIds = new Set(elig.memberIds);
-		const scopedRoster = roster.filter((m) => memberIds.has(m.memberId));
-
-		if (category === "best_table_topics") {
-			const guestIds = new Set(elig.guestIds);
-			const scopedGuests = clubGuests.filter((g) => guestIds.has(g.id));
-			// No Table Topics participants recorded → fall back to everyone.
-			if (scopedRoster.length === 0 && scopedGuests.length === 0) {
-				return { roster, clubGuests };
-			}
-			return { roster: scopedRoster, clubGuests: scopedGuests };
-		}
-
-		// Speaker / Evaluator: filter members, keep all club guests (guest role
-		// data may be incomplete). Fall back to the full roster only if empty.
-		return {
-			roster: scopedRoster.length > 0 ? scopedRoster : roster,
-			clubGuests,
-		};
-	}
-
-	return (
-		<section className="space-y-3">
-			<h3 className="font-semibold text-sm">Awards</h3>
-			<ul className="space-y-2">
-				{minutes.awards.map((a) => (
-					<li
-						key={a.category}
-						className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-					>
-						<span className="text-sm">
-							<span className="font-semibold">{AWARD_LABELS[a.category]}</span>
-							{": "}
-							{a.name ? (
-								<>
-									{a.name}
-									{a.isGuest ? (
-										<Badge variant="outline" className="ml-2">
-											Guest
-										</Badge>
-									) : null}
-								</>
-							) : (
-								<span className="text-muted-foreground">Not set</span>
-							)}
-						</span>
-						{canEdit ? (
-							<div className="flex items-center gap-1">
-								<AssigneePicker
-									label={a.name ? "Change" : "Set"}
-									roster={eligibleFor(a.category).roster}
-									clubGuests={eligibleFor(a.category).clubGuests}
-									busy={busy}
-									onPick={(payload) => onSet(a.category, payload)}
-								/>
-								{a.name ? (
-									<Button
-										type="button"
-										size="sm"
-										variant="ghost"
-										disabled={busy}
-										onClick={() => onClear(a.category)}
-									>
-										Clear
-									</Button>
-								) : null}
-							</div>
-						) : null}
-					</li>
-				))}
-			</ul>
 		</section>
 	);
 }
