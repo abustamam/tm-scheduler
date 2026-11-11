@@ -5,41 +5,56 @@
  * server (the same code the merge runs); this only groups and words them.
  */
 
-/** The shape `previewMergeGuests` returns; restated so `lib/` imports nothing server-side. */
-export interface MergePreviewCounts {
-	moved: Record<string, number>;
-	droppedAsDuplicate: Record<string, number>;
-	absorbedPersonDeleted: boolean;
-	refusal: string | null;
-}
+import type {
+	GuestMergeTable,
+	MergeGuestsPreview,
+} from "#/server/guest-merge-logic";
+
+/** The server's preview shape. `import type` is erased, so `lib/` still ships nothing server-side. */
+export type MergePreviewCounts = MergeGuestsPreview;
+
+/**
+ * Which line each merged table is worded under (`null`: nothing a person
+ * recognises, e.g. import bookkeeping). A `Record` over the merge's own table
+ * list, so a table added to `GUEST_MERGE_TABLES` without wording fails typecheck.
+ */
+const TABLE_LINE: Record<GuestMergeTable, string | null> = {
+	meeting_attendance: "attendance",
+	role_slots: "roles",
+	slot_cover_requests: "roles",
+	speeches: "speeches",
+	meeting_awards: "awards",
+	table_topics_speakers: "topics",
+	meeting_votes: "votes",
+	meeting_ballot_guests: "votes",
+	meeting_candidate_disqualifications: "votes",
+	guest_invites: "invites",
+	meeting_guest_rsvps: "rsvps",
+	import_refs: null,
+};
 
 /** One line per thing the admin recognises, summing the tables behind it. */
-const LINES: Array<{ label: [string, string]; tables: string[] }> = [
-	{
-		label: ["attendance record", "attendance records"],
-		tables: ["meeting_attendance"],
-	},
-	{ label: ["role", "roles"], tables: ["role_slots", "slot_cover_requests"] },
-	{ label: ["speech", "speeches"], tables: ["speeches"] },
-	{ label: ["award", "awards"], tables: ["meeting_awards"] },
-	{
-		label: ["Table Topics turn", "Table Topics turns"],
-		tables: ["table_topics_speakers"],
-	},
-	{
-		label: ["vote or ballot", "votes and ballots"],
-		tables: [
-			"meeting_votes",
-			"meeting_ballot_guests",
-			"meeting_candidate_disqualifications",
-		],
-	},
-	{ label: ["invite", "invites"], tables: ["guest_invites"] },
-	{ label: ["RSVP", "RSVPs"], tables: ["meeting_guest_rsvps"] },
+const LINES: Array<{ id: string; label: [string, string] }> = [
+	{ id: "attendance", label: ["attendance record", "attendance records"] },
+	{ id: "roles", label: ["role", "roles"] },
+	{ id: "speeches", label: ["speech", "speeches"] },
+	{ id: "awards", label: ["award", "awards"] },
+	{ id: "topics", label: ["Table Topics turn", "Table Topics turns"] },
+	{ id: "votes", label: ["vote or ballot", "votes and ballots"] },
+	{ id: "invites", label: ["invite", "invites"] },
+	{ id: "rsvps", label: ["RSVP", "RSVPs"] },
 ];
 
-const sum = (counts: Record<string, number>, tables: string[]): number =>
-	tables.reduce((n, t) => n + (counts[t] ?? 0), 0);
+/** The tables worded under one line. */
+export const tablesForLine = (id: string): GuestMergeTable[] =>
+	(Object.keys(TABLE_LINE) as GuestMergeTable[]).filter(
+		(t) => TABLE_LINE[t] === id,
+	);
+
+const sum = (
+	counts: Record<string, number>,
+	tables: GuestMergeTable[],
+): number => tables.reduce((n, t) => n + (counts[t] ?? 0), 0);
 
 export interface MergePreviewSummary {
 	/** "3 attendance records", only for the kinds that move at least one. */
@@ -53,7 +68,7 @@ export function summarizeMergePreview(
 ): MergePreviewSummary {
 	const moved: string[] = [];
 	for (const line of LINES) {
-		const n = sum(preview.moved, line.tables);
+		const n = sum(preview.moved, tablesForLine(line.id));
 		if (n > 0) moved.push(`${n} ${n === 1 ? line.label[0] : line.label[1]}`);
 	}
 	const duplicatesDropped = Object.values(preview.droppedAsDuplicate).reduce(

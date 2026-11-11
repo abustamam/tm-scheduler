@@ -208,7 +208,8 @@ export function GuestMergeDialog({
 							</label>
 							<p className="text-xs text-muted-foreground">
 								The kept record keeps its own name, kind and stage. Blank
-								goes-by, home club and introducer are filled from the other.
+								goes-by, home club, introducer and guest-book email are filled
+								from the other.
 							</p>
 						</fieldset>
 					) : null}

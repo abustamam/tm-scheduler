@@ -6,7 +6,7 @@
  * Every test states its card: protects=…; fails_when=…; no_claim=….
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
@@ -45,7 +45,9 @@ const {
 	previewMergeGuests,
 	GUEST_MERGE_CONVERTED_MESSAGE,
 	GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE,
+	GUEST_MERGE_PERSON_LINKED_MESSAGE,
 	GUEST_MERGE_SAME_MESSAGE,
+	listMergeGuestCandidates,
 } = await import("#/server/guest-merge-logic");
 const { NO_PERMISSION_MESSAGE } = await import("#/server/guards");
 
@@ -130,23 +132,34 @@ describe.skipIf(!hasTestDb)("guest merge (#1609)", () => {
 				.from(guests)
 				.where(inArray(guests.id, guestIds))
 		).map((r) => r.id);
-		const count = async (q: PromiseLike<unknown[]>) => (await q).length;
+		// Row IDENTITY, not counts: a merge that swaps which row survives, or
+		// re-points one, must change the snapshot.
+		const ids = async (q: PromiseLike<Array<{ k: string }>>) =>
+			(await q).map((r) => r.k).sort();
 		return {
-			guests: await count(
-				testDb.select().from(guests).where(inArray(guests.id, guestIds)),
-			),
-			people: await count(
-				testDb.select().from(people).where(inArray(people.id, personIds)),
-			),
-			attendance: await count(
+			guests: await ids(
 				testDb
-					.select()
+					.select({ k: guests.id })
+					.from(guests)
+					.where(inArray(guests.id, guestIds)),
+			),
+			people: await ids(
+				testDb
+					.select({ k: people.id })
+					.from(people)
+					.where(inArray(people.id, personIds)),
+			),
+			attendance: await ids(
+				testDb
+					.select({
+						k: sql<string>`${meetingAttendance.id} || ':' || ${meetingAttendance.guestId}`,
+					})
 					.from(meetingAttendance)
 					.where(inArray(meetingAttendance.guestId, guestIds)),
 			),
-			activity: await count(
+			activity: await ids(
 				testDb
-					.select()
+					.select({ k: activityLog.id })
 					.from(activityLog)
 					.where(
 						and(
@@ -710,7 +723,7 @@ describe.skipIf(!hasTestDb)("guest merge (#1609)", () => {
 
 	it("refuses, rolling back every re-point, when the absorbed Person owns a speech (person-linked history)", async () => {
 		// protects=the late arm: a Person the early check cannot see (a speech owned by the Person) makes the Person delete refuse, and the whole merge rolls back, attendance re-point included;
-		// fails_when=the delete's false return is ignored (the guest row would be gone and the Person left behind) or the apply does not throw;
+		// fails_when=the delete's false return is ignored (the guest row would be gone and the Person left behind) or the apply does not throw, or the refusal blames 'different people' when the Person is the same human with a speech on it (the message must name the speech/enrolment);
 		// no_claim=the early membership/user/other-guest checks
 		const A = await mkGuest("Keeper Kay");
 		const B = await mkGuest("Absorbed Abe");
@@ -724,7 +737,7 @@ describe.skipIf(!hasTestDb)("guest merge (#1609)", () => {
 		const before = await snapshot([A.id, B.id]);
 
 		await expect(applyMergeGuests(input(A.id, B.id))).rejects.toThrow(
-			GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE,
+			GUEST_MERGE_PERSON_LINKED_MESSAGE,
 		);
 		expect(await snapshot([A.id, B.id])).toEqual(before);
 		expect(
@@ -903,5 +916,198 @@ describe.skipIf(!hasTestDb)("guest merge (#1609)", () => {
 			.from(roleSlots)
 			.where(eq(roleSlots.id, seed.slotId));
 		expect(slot).toEqual({ g: A.id, s: "claimed" });
+	});
+
+	it("keeps the KEEPER's own row on every same-key collision (the survivor is the keeper's, not the absorbed one)", async () => {
+		// protects=on a unique collision in invites, RSVPs, attendance and ballot-guests the row that survives is the keeper's (by id or a distinguishing column), and the absorbed one is gone;
+		// fails_when=the drop and the re-point swap sides (the absorbed row wins) while the counts stay the same;
+		// no_claim=ballots and disqualifications (their own test pins the winner by id / reason)
+		const A = await mkGuest("Keeper Kay");
+		const B = await mkGuest("Absorbed Abe");
+		const m = await mkMeeting(2);
+		const [aInv] = await testDb
+			.insert(guestInvites)
+			.values({ clubId: seed.clubId, guestId: A.id, meetingId: m })
+			.returning({ id: guestInvites.id });
+		await testDb
+			.insert(guestInvites)
+			.values({ clubId: seed.clubId, guestId: B.id, meetingId: m });
+		const [aRsvp] = await testDb
+			.insert(meetingGuestRsvps)
+			.values({
+				clubId: seed.clubId,
+				meetingId: m,
+				guestId: A.id,
+				clientKey: randomUUID(),
+			})
+			.returning({ id: meetingGuestRsvps.id });
+		await testDb.insert(meetingGuestRsvps).values({
+			clubId: seed.clubId,
+			meetingId: m,
+			guestId: B.id,
+			clientKey: randomUUID(),
+		});
+		const [aAtt] = await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId: m, guestId: A.id, status: "present" })
+			.returning({ id: meetingAttendance.id });
+		await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId: m, guestId: B.id, status: "absent" });
+		const keeperStamp = new Date("2020-01-01T00:00:00Z");
+		await testDb.insert(meetingBallotGuests).values([
+			{ meetingId: m, guestId: A.id, createdAt: keeperStamp },
+			{
+				meetingId: m,
+				guestId: B.id,
+				createdAt: new Date("2024-01-01T00:00:00Z"),
+			},
+		]);
+
+		await applyMergeGuests(input(A.id, B.id));
+
+		const inv = await testDb
+			.select({ id: guestInvites.id, g: guestInvites.guestId })
+			.from(guestInvites)
+			.where(eq(guestInvites.meetingId, m));
+		expect(inv).toEqual([{ id: aInv?.id, g: A.id }]);
+		const rsvp = await testDb
+			.select({ id: meetingGuestRsvps.id, g: meetingGuestRsvps.guestId })
+			.from(meetingGuestRsvps)
+			.where(eq(meetingGuestRsvps.meetingId, m));
+		expect(rsvp).toEqual([{ id: aRsvp?.id, g: A.id }]);
+		const att = await testDb
+			.select({
+				id: meetingAttendance.id,
+				g: meetingAttendance.guestId,
+				s: meetingAttendance.status,
+			})
+			.from(meetingAttendance)
+			.where(eq(meetingAttendance.meetingId, m));
+		expect(att).toEqual([{ id: aAtt?.id, g: A.id, s: "present" }]);
+		const bg = await testDb
+			.select({
+				g: meetingBallotGuests.guestId,
+				at: meetingBallotGuests.createdAt,
+			})
+			.from(meetingBallotGuests)
+			.where(eq(meetingBallotGuests.meetingId, m));
+		expect(bg).toEqual([{ g: A.id, at: keeperStamp }]);
+	});
+
+	it("counts a vote once when the absorbed guest is both its voter and its candidate", async () => {
+		// protects=the preview's moved.meeting_votes counts DISTINCT vote rows, so the dialog does not overstate;
+		// fails_when=the voter and candidate re-points are summed (a self-vote counts 2);
+		// no_claim=tallying a self-vote
+		const A = await mkGuest("Keeper Kay");
+		const B = await mkGuest("Absorbed Abe");
+		const s = await mkSession(await mkMeeting(1), "best_speaker");
+		const [v] = await testDb
+			.insert(meetingVotes)
+			.values({ sessionId: s, voterGuestId: B.id, candidateGuestId: B.id })
+			.returning({ id: meetingVotes.id });
+
+		const preview = await previewMergeGuests(input(A.id, B.id));
+		expect(preview.moved.meeting_votes).toBe(1);
+		const applied = await applyMergeGuests(input(A.id, B.id));
+		expect(applied.moved.meeting_votes).toBe(1);
+		const [row] = await testDb
+			.select({
+				voter: meetingVotes.voterGuestId,
+				cand: meetingVotes.candidateGuestId,
+			})
+			.from(meetingVotes)
+			.where(eq(meetingVotes.id, v?.id as string));
+		expect(row).toEqual({ voter: A.id, cand: A.id });
+	});
+
+	it("treats an empty-string email on the keeper Person as blank, like phone", async () => {
+		// protects=a keeper Person whose email is "" (not null) still receives the absorbed address, matching the phone fill;
+		// fails_when=the email UPDATE tests only isNull (an empty string blocks the fill);
+		// no_claim=a non-blank email, which is never overwritten (own test)
+		const tag = randomUUID().slice(0, 8);
+		const A = await mkGuest("Keeper Kay");
+		const B = await mkGuest("Absorbed Abe", {
+			email: `abe-${tag}@example.test`,
+		});
+		await testDb
+			.update(people)
+			.set({ email: "" })
+			.where(eq(people.id, A.personId));
+
+		await applyMergeGuests(input(A.id, B.id));
+
+		const [p] = await testDb
+			.select({ email: people.email })
+			.from(people)
+			.where(eq(people.id, A.personId));
+		expect(p?.email).toBe(`abe-${tag}@example.test`);
+	});
+
+	it("lists only this club's other guests that a merge would accept (no joined, no converted, not itself, not another club)", async () => {
+		// protects=the picker never offers a record the merge refuses, itself, or another club's guest;
+		// fails_when=the stage or converted_membership_id filter is dropped, or the club scope is;
+		// no_claim=ordering or the 500 cap
+		other = await seedClub();
+		const A = await mkGuest("Keeper Kay");
+		const ok = await mkGuest("Ok Olive");
+		const joined = await mkGuest("Joined Di");
+		await testDb
+			.update(guests)
+			.set({ stage: "joined" })
+			.where(eq(guests.id, joined.id));
+		const conv = await mkGuest("Converted Cy");
+		await testDb
+			.update(guests)
+			.set({ convertedMembershipId: seed.memberId })
+			.where(eq(guests.id, conv.id));
+		await mkGuest("Elsewhere Eve", {}, other.clubId);
+
+		const rows = await listMergeGuestCandidates({
+			clubId: seed.clubId,
+			guestId: A.id,
+		});
+		expect(rows.map((r) => r.id)).toEqual([ok.id]);
+	});
+
+	it("previews a cross-person refusal as data and writes nothing (rows keep their identity)", async () => {
+		// protects=a refusal that is only found after the re-points ran (the absorbed Person has a membership) is reported by the preview with nothing left written;
+		// fails_when=the preview commits the re-points before refusing, or throws instead of returning the refusal;
+		// no_claim=the apply's throw (the refusal tests above)
+		const A = await mkGuest("Keeper Kay");
+		const B = await mkGuest("Absorbed Abe", { personId: seed.personId });
+		const m1 = await mkMeeting(1);
+		await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId: m1, guestId: B.id, status: "present" });
+		const before = await snapshot([A.id, B.id]);
+
+		const preview = await previewMergeGuests(input(A.id, B.id));
+
+		expect(preview.refusal).toBe(GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE);
+		expect(preview.absorbedPersonDeleted).toBe(false);
+		expect(await snapshot([A.id, B.id])).toEqual(before);
+	});
+
+	it("previews a LATE refusal (after the re-points ran) with the person-linked message and leaves every row as it was", async () => {
+		// protects=the preview's rollback undoes writes made before the late refusal (attendance re-point, guest delete), and the message names the speech;
+		// fails_when=the preview commits, or reports the 'different people' message for a person-linked speech;
+		// no_claim=the apply path (the rollback test above)
+		const A = await mkGuest("Keeper Kay");
+		const B = await mkGuest("Absorbed Abe");
+		await testDb
+			.insert(speeches)
+			.values({ personId: B.personId, title: "Person-owned" });
+		const m1 = await mkMeeting(1);
+		await testDb
+			.insert(meetingAttendance)
+			.values({ meetingId: m1, guestId: B.id, status: "present" });
+		const before = await snapshot([A.id, B.id]);
+
+		const preview = await previewMergeGuests(input(A.id, B.id));
+
+		expect(preview.refusal).toBe(GUEST_MERGE_PERSON_LINKED_MESSAGE);
+		expect(await snapshot([A.id, B.id])).toEqual(before);
+		await testDb.delete(speeches).where(eq(speeches.personId, B.personId));
 	});
 });

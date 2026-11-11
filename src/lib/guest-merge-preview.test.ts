@@ -29,3 +29,40 @@ describe("summarizeMergePreview (#1609)", () => {
 		expect(out.duplicatesDropped).toBe(2);
 	});
 });
+
+describe("summarizeMergePreview table coverage (#1609)", () => {
+	it("counts every table the merge moves under some line, except import bookkeeping", () => {
+		// protects=a table in the merge's table list cannot be silently left out of the confirm wording;
+		// fails_when=a table maps to no line (its rows move but the admin is never told);
+		// no_claim=the type-level guarantee (TABLE_LINE is a Record over GuestMergeTable, so a new table fails typecheck)
+		const tables = [
+			"meeting_attendance",
+			"role_slots",
+			"slot_cover_requests",
+			"speeches",
+			"meeting_awards",
+			"table_topics_speakers",
+			"meeting_votes",
+			"meeting_ballot_guests",
+			"meeting_candidate_disqualifications",
+			"guest_invites",
+			"meeting_guest_rsvps",
+		];
+		const out = summarizeMergePreview({
+			moved: Object.fromEntries(tables.map((t) => [t, 1])),
+			droppedAsDuplicate: {},
+			absorbedPersonDeleted: false,
+			refusal: null,
+		});
+		const total = out.moved.reduce((n, l) => n + Number.parseInt(l, 10), 0);
+		expect(total).toBe(tables.length);
+		expect(
+			summarizeMergePreview({
+				moved: { import_refs: 4 },
+				droppedAsDuplicate: {},
+				absorbedPersonDeleted: false,
+				refusal: null,
+			}).moved,
+		).toEqual([]);
+	});
+});

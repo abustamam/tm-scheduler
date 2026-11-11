@@ -23,7 +23,13 @@ const {
 	invalidate,
 	toastSuccess,
 	toastError,
+	listMergeGuestCandidates,
+	previewMergeGuests,
+	mergeGuests,
 } = vi.hoisted(() => ({
+	listMergeGuestCandidates: vi.fn(),
+	previewMergeGuests: vi.fn(),
+	mergeGuests: vi.fn(),
 	updateGuest: vi.fn(),
 	getGuestProfile: vi.fn(),
 	updateGuestProfile: vi.fn(),
@@ -32,6 +38,11 @@ const {
 	toastError: vi.fn(),
 }));
 vi.mock("#/server/guest-pipeline", () => ({ updateGuest }));
+vi.mock("#/server/guest-merge", () => ({
+	listMergeGuestCandidates,
+	previewMergeGuests,
+	mergeGuests,
+}));
 vi.mock("#/server/guests", () => ({ getGuestProfile, updateGuestProfile }));
 vi.mock("sonner", () => ({
 	toast: { success: toastSuccess, error: toastError },
@@ -467,5 +478,79 @@ describe("GuestEditDialog — the guest book's unconfirmed address (#1157)", () 
 		await screen.findByLabelText("Kind");
 		expect(document.querySelector('[data-slot="guest-book-email"]')).toBeNull();
 		expect(emailField().value).toBe("vouched@example.com");
+	});
+});
+
+describe("GuestEditDialog — merge entry (#1609)", () => {
+	beforeEach(() => {
+		getGuestProfile.mockResolvedValue(PROFILE);
+		listMergeGuestCandidates.mockResolvedValue([
+			{ id: "g2", name: "Abe Absorbed", kind: "visitor", stage: "prospect" },
+		]);
+		const preview = {
+			moved: {},
+			droppedAsDuplicate: {},
+			absorbedPersonDeleted: false,
+			refusal: null,
+		};
+		previewMergeGuests.mockResolvedValue(preview);
+		mergeGuests.mockResolvedValue(preview);
+	});
+
+	const mergeButton = () =>
+		screen.queryByRole("button", { name: /merge with another guest/i });
+
+	it("shows the merge button for a guest who has not joined, hides it for a joined one", async () => {
+		// protects=the merge entry point is offered only where the server would not refuse the stage;
+		// fails_when=the button shows for a joined guest, or is missing for a prospect;
+		// no_claim=that the server refuses (guest-merge.integration.test.ts)
+		const { unmount } = render(
+			<GuestEditDialog
+				guest={GUEST}
+				clubId="c1"
+				open
+				onOpenChange={vi.fn()}
+				onSaved={vi.fn()}
+			/>,
+		);
+		expect(mergeButton()).not.toBeNull();
+		unmount();
+		render(
+			<GuestEditDialog
+				guest={{ ...GUEST, stage: "joined", convertedMembershipId: "m9" }}
+				clubId="c1"
+				open
+				onOpenChange={vi.fn()}
+				onSaved={vi.fn()}
+			/>,
+		);
+		expect(mergeButton()).toBeNull();
+	});
+
+	it("after a merge: awaits onSaved, then closes the edit dialog", async () => {
+		// protects=the record this dialog edits may be the absorbed one, so onSaved refreshes the caller and then the dialog closes;
+		// fails_when=onMerged is not wired, onSaved is not awaited before the close, or the dialog stays open on a deleted record;
+		// no_claim=the merge itself
+		const order: string[] = [];
+		const onSaved = vi.fn(async () => {
+			await Promise.resolve();
+			order.push("saved");
+		});
+		const onOpenChange = vi.fn((open: boolean) => {
+			if (!open) order.push("closed");
+		});
+		renderDialog(onOpenChange, onSaved);
+		fireEvent.click(
+			await screen.findByRole("button", { name: /merge with another guest/i }),
+		);
+		fireEvent.change(await screen.findByLabelText("Other record"), {
+			target: { value: "g2" },
+		});
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Merge into Nadia Farouk" }),
+		);
+		await waitFor(() => expect(order).toContain("closed"));
+		expect(mergeGuests).toHaveBeenCalledTimes(1);
+		expect(order.indexOf("saved")).toBeLessThan(order.indexOf("closed"));
 	});
 });

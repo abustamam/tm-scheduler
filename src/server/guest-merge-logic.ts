@@ -50,6 +50,8 @@ export const GUEST_MERGE_CONVERTED_MESSAGE =
 	"Undo or finish the conversion first.";
 export const GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE =
 	"These two guests are different people in the system. Ask a site admin to merge the people first.";
+export const GUEST_MERGE_PERSON_LINKED_MESSAGE =
+	"The guest to fold in has a speech or enrolment recorded against their person record, so it cannot be merged here. Ask a site admin.";
 
 /**
  * Every table whose rows name a guest, with the column(s) that do. The guard
@@ -327,7 +329,11 @@ export async function applyMergeGuests(
 			.set({ candidateGuestId: K })
 			.where(eq(meetingVotes.candidateGuestId, A))
 			.returning({ id: meetingVotes.id });
-		moved.meeting_votes = voterMoved.length + candidateMoved.length;
+		// A vote where the absorbed guest is both voter and candidate is one row.
+		moved.meeting_votes = new Set([
+			...voterMoved.map((v) => v.id),
+			...candidateMoved.map((v) => v.id),
+		]).size;
 
 		// meeting_ballot_guests PK (meeting, guest).
 		dropped.meeting_ballot_guests = (
@@ -463,7 +469,7 @@ export async function applyMergeGuests(
 			// Nothing may still name the absorbed Person. A Person that survives here
 			// is a merge that did not do what it says: the caller rolls it back.
 			if (!(await deleteGuestPersonIfUnreferenced(tx, absorb.personId))) {
-				return refused(GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE);
+				return refused(GUEST_MERGE_PERSON_LINKED_MESSAGE);
 			}
 			absorbedPersonDeleted = true;
 			// Fill the keeper Person's BLANKS from the absorbed contact, after the
@@ -479,7 +485,7 @@ export async function applyMergeGuests(
 						and(
 							eq(people.id, keep.personId),
 							guestContactWritable(clubId),
-							isNull(people.email),
+							or(isNull(people.email), eq(people.email, "")),
 						),
 					);
 			}
@@ -566,7 +572,15 @@ export async function listMergeGuestCandidates(input: {
 			stage: guests.stage,
 		})
 		.from(guests)
-		.where(and(eq(guests.clubId, input.clubId), ne(guests.id, input.guestId)))
+		.where(
+			and(
+				eq(guests.clubId, input.clubId),
+				ne(guests.id, input.guestId),
+				// A joined or converted guest is refused by the merge anyway.
+				ne(guests.stage, "joined"),
+				isNull(guests.convertedMembershipId),
+			),
+		)
 		.orderBy(guests.name, guests.id)
 		.limit(500);
 }

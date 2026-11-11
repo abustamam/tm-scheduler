@@ -148,4 +148,50 @@ describe("GuestMergeDialog (#1609)", () => {
 		expect((button as HTMLButtonElement).disabled).toBe(true);
 		expect(mergeGuests).not.toHaveBeenCalled();
 	});
+
+	it("shows an error when the candidate list cannot be loaded", async () => {
+		// protects=a failed picker load shows a message instead of a spinner that never ends;
+		// fails_when=the load .catch is removed or the message is not rendered;
+		// no_claim=the server's list
+		listMergeGuestCandidates.mockRejectedValue(new Error("boom"));
+		renderDialog();
+		await waitFor(() =>
+			expect(
+				document.querySelector("[data-slot=guest-merge-load-error]"),
+			).toBeTruthy(),
+		);
+		expect(screen.queryByLabelText("Other record")).toBeNull();
+	});
+
+	it("shows an error and offers no confirm when the preview throws", async () => {
+		// protects=a preview that throws is shown as a refusal and the confirm stays disabled;
+		// fails_when=the preview .catch is removed (unhandled rejection, confirm left enabled);
+		// no_claim=the server's refusals
+		previewMergeGuests.mockRejectedValue(new Error("preview boom"));
+		renderDialog();
+		await pickOther();
+		await screen.findByRole("alert");
+		const button = screen.getByRole("button", {
+			name: "Merge into Kay Keeper",
+		});
+		expect((button as HTMLButtonElement).disabled).toBe(true);
+		expect(mergeGuests).not.toHaveBeenCalled();
+	});
+
+	it("toasts an error and stays open when the merge throws", async () => {
+		// protects=a failed merge reports the error, does not call onMerged, and leaves the dialog open;
+		// fails_when=the merge .catch is removed or the dialog closes / onMerged fires on failure;
+		// no_claim=why the server failed
+		mergeGuests.mockRejectedValue(new Error("merge boom"));
+		const { onMerged, onOpenChange } = renderDialog();
+		await pickOther();
+		await screen.findByText("2 attendance records");
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Merge into Kay Keeper" }),
+		);
+		await waitFor(() => expect(toastError).toHaveBeenCalled());
+		expect(onMerged).not.toHaveBeenCalled();
+		expect(onOpenChange).not.toHaveBeenCalledWith(false);
+		expect(toastSuccess).not.toHaveBeenCalled();
+	});
 });
