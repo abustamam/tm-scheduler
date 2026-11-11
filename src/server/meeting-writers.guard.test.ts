@@ -229,6 +229,7 @@ const MEETING_WRITERS: Record<string, Entry> = {
 				refusedBy: [
 					"src/server/attendance-plan.ts#clearPlannedAttendance",
 					"src/server/availability.ts#clearAvailability",
+					"src/server/mcp/tools/set-my-attendance.ts#setMyAttendanceTool",
 				],
 				exemptCallers: {
 					"src/server/outreach.ts#clearContacted": OUTREACH_LOCKS,
