@@ -118,8 +118,9 @@ creates.
   trailing token, so anything appended after the number silently un-claims the branch and
   the next re-run hands the same issue to a second agent. A retry branch needs a different
   slug, not a suffix.
-- Then the repo's issue pipeline: `/investigate` → implement → `gh pr create` with `Closes #N`
-  in the body → **stop**. Review, merge and `/qa-only` happen from the main session, per wave.
+- Then the repo's issue pipeline: root-cause it (superpowers `systematic-debugging`) → implement
+  → `gh pr create` with `Closes #N` in the body → **stop**.
+  Review, merge and `/qa-only` happen from the main session, per wave.
 
 ## The brief
 
@@ -140,7 +141,7 @@ Files this issue cites:
 2. `cd` into that worktree, then `bun run worktree:setup "<what you are building>"`.
    Run it FROM THE WORKTREE: from the main checkout it exits 0 having done nothing, and
    the missing bootstrap does not surface until something silently returns empty.
-3. `/investigate` before you write anything.
+3. Find the root cause (superpowers `systematic-debugging`) before you write anything.
 4. Implement. Stay inside the cited files. A NEW file you create — a test beside the code
    you changed, most often — is yours and needs no citation. An EXISTING file that is not
    listed above is not yours: STOP and report the path instead of editing it.
