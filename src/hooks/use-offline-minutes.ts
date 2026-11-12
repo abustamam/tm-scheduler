@@ -74,7 +74,12 @@ const DRAIN_STALLED_MESSAGE = "No response from the network.";
  */
 export function useOfflineMinutes(input: {
 	meetingId: string;
-	onMutated: () => Promise<void>;
+	/**
+	 * Called after server state changed, with the meeting the write belongs to:
+	 * for a drain that is the meeting its ops were queued under, which is NOT
+	 * necessarily the one on screen when it finishes (#1600).
+	 */
+	onMutated: (meetingId: string) => Promise<void>;
 	/**
 	 * The live loader data, ONLINE. Optional and additive to the brief's stated
 	 * `{ meetingId, onMutated }` shape: without it, the "keep the offline
@@ -364,7 +369,11 @@ export function useOfflineMinutes(input: {
 				}
 				if (result.error) {
 					// The agenda must show the open slots even when a later op failed.
-					if (result.released.length > 0) await onMutatedRef.current();
+					// Any applied op, not just a releasing one (#1600): an award that
+					// landed before a later op failed changed the winner too.
+					if (result.drainedCount > 0 || result.released.length > 0) {
+						await onMutatedRef.current(meetingId);
+					}
 					// Stop-on-failure: the failed op + successors stay queued. The
 					// banner and the confirmation both DESCRIBE THIS MEETING'S QUEUE,
 					// so a drain that finishes after a hop keeps quiet rather than
@@ -383,7 +392,7 @@ export function useOfflineMinutes(input: {
 					// snapshot-save effect then refreshes the offline snapshot).
 					// UNCONDITIONAL: server state really did change, and the refetch is
 					// for the router, not for this meeting's banner.
-					await onMutatedRef.current();
+					await onMutatedRef.current(meetingId);
 					// Flash a brief "All changes synced" confirmation (auto-dismissed).
 					if (meetingIdRef.current === meetingId) setJustSynced(true);
 				}
@@ -487,7 +496,7 @@ export function useOfflineMinutes(input: {
 				}
 				return "queue";
 			}
-			await input.onMutated();
+			await input.onMutated(meetingId);
 			return "done";
 		} catch (err) {
 			toast.error(errMessage(err));

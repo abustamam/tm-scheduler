@@ -368,6 +368,68 @@ describe("useOfflineMinutes", () => {
 		expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
 	});
 
+	it("tells onMutated which meeting a full drain wrote to (#1600)", async () => {
+		// protects=the route invalidating the Ballot Counter's vote tally for the
+		//   drained meeting after a queued award change lands
+		// fails_when=a drain finishes without passing the meeting id, so the caller
+		//   cannot invalidate voteTallyKey(meetingId)
+		// no_claim=the query-cache invalidation itself (route-level wiring)
+		const onMutated = vi.fn(async (_meetingId: string) => {});
+		ONLINE = true;
+		QUEUED = [OP()];
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated }),
+		);
+		await waitFor(
+			() => expect(result.current.justSynced).toBe(true),
+			WAIT_OPTS,
+		);
+		expect(onMutated).toHaveBeenCalledWith("meet-1");
+	});
+
+	it("still calls onMutated when a drain stops on a failed op after an earlier op applied (#1600)", async () => {
+		// protects=a partial replay refreshing server-derived state (the winner)
+		//   for the ops that did land
+		// fails_when=the error branch only refreshes for a releasing op
+		const onMutated = vi.fn(async (_meetingId: string) => {});
+		ONLINE = true;
+		QUEUED = [OP(), OP2()];
+		setAttendanceSpy.mockResolvedValueOnce({} as never);
+		setAttendanceSpy.mockRejectedValueOnce(new Error("boom"));
+		const { result } = renderHook(() =>
+			useOfflineMinutes({ meetingId: "meet-1", onMutated }),
+		);
+		await waitFor(
+			() => expect(result.current.syncError).toBe("boom"),
+			WAIT_OPTS,
+		);
+		expect(removeOpSpy).toHaveBeenCalledWith("meet-1", "op-1");
+		expect(onMutated).toHaveBeenCalledTimes(1);
+		expect(onMutated).toHaveBeenCalledWith("meet-1");
+	});
+
+	it("passes the DRAINED meeting's id when the drain finishes after a hop (#1600)", async () => {
+		// protects=invalidating meet-1's tally, not the meeting now on screen
+		// fails_when=onMutated is handed the current meetingId instead of the
+		//   captured one
+		const onMutated = vi.fn(async (_meetingId: string) => {});
+		ONLINE = true;
+		QUEUED = [OP()];
+		const gate = openDispatchGate();
+		const { result, rerender } = renderHook(
+			({ id }: { id: string }) =>
+				useOfflineMinutes({ meetingId: id, onMutated }),
+			{ initialProps: { id: "meet-1" } },
+		);
+		await waitFor(() => expect(result.current.draining).toBe(true), WAIT_OPTS);
+		QUEUED = [];
+		rerender({ id: "meet-2" });
+		gate.resolve();
+		await waitFor(() => expect(onMutated).toHaveBeenCalled(), WAIT_OPTS);
+		expect(onMutated).toHaveBeenCalledWith("meet-1");
+		expect(onMutated).not.toHaveBeenCalledWith("meet-2");
+	});
+
 	it("toasts what a drained Absent release freed, naming the member, once per op (#1256)", async () => {
 		// protects=the receipt for a queued release: "Released Speaker 2 and Timer
 		//   from Jane." from the labels the server reported at replay time, and the
