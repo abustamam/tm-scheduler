@@ -1439,7 +1439,14 @@ describe("VP Membership — Visiting Toastmasters are outside the funnel (#1608)
 	it("partitions the board by kind", async () => {
 		await renderRoute(
 			[
-				guestRow({ id: VIC, name: "Vic Visiting", stage: "prospect" }),
+				guestRow({
+					id: VIC,
+					name: "Vic Visiting",
+					stage: "prospect",
+					visitCount: 2,
+					firstVisitAt: new Date("2026-08-14T20:00:00Z"),
+					lastVisitAt: new Date("2026-09-25T20:00:00Z"),
+				}),
 				guestRow({ id: WES, name: "Wes Lost", stage: "lost" }),
 				guestRow({ id: ORPHAN, name: "Olga NoProfile", stage: "prospect" }),
 				guestRow({ name: "Ada Guest", stage: "prospect" }),
@@ -1468,13 +1475,41 @@ describe("VP Membership — Visiting Toastmasters are outside the funnel (#1608)
 		expect(
 			within(section).getAllByRole("button", { name: /Joined…/ }),
 		).toHaveLength(2);
+		// The invite control (a "Invite" group with no next meeting) is absent on
+		// a Visiting Toastmaster row, present on the visitor rows in the same
+		// render (positive control).
+		expect(section.querySelector('[data-slot="guest-invite"]')).toBeNull();
+		expect(within(section).queryByRole("group", { name: "Invite" })).toBeNull();
+		expect(screen.getAllByRole("group", { name: "Invite" })).toHaveLength(2);
+		// Name, home club, visit count and last visit are shown.
+		// Two Visiting Toastmasters share the fixture's home club.
+		expect(within(section).getAllByText(/Laguna Speakers/)).toHaveLength(2);
 		expect(
-			within(section).queryByRole("button", { name: /invite/i }),
-		).toBeNull();
+			within(section).getByText(/2 visits · first Aug 14 · last Sep 25/),
+		).toBeTruthy();
 		// Prospects lane: only the two visitors, so the header reads 2, Lost 0.
 		const prospects = screen.getByRole("heading", { name: /^Prospects/ });
 		expect(prospects.textContent).toMatch(/2$/);
 		const lost = screen.getByRole("heading", { name: /^Lost/ });
 		expect(lost.textContent).toMatch(/0$/);
+	});
+
+	// protects=criterion 5: kind is not a stage, so switching a guest back to
+	// `visitor` restores the lane their stored stage names;
+	// fails_when=the board drops or rewrites a stored stage for a visitor;
+	// no_claim=the kind editor itself.
+	it("a visitor at a stored non-prospect stage renders in that lane", async () => {
+		await renderRoute(
+			[guestRow({ id: WES, name: "Wes Lost", stage: "lost" })],
+			NO_NEXT_MEETING,
+			false,
+			{ rows: [profile(WES, "visitor")], brought: [] },
+		);
+		expect(screen.queryByTestId("visiting-toastmasters")).toBeNull();
+		const lost = screen.getByRole("heading", { name: /^Lost/ });
+		expect(lost.textContent).toMatch(/1$/);
+		const prospects = screen.getByRole("heading", { name: /^Prospects/ });
+		expect(prospects.textContent).toMatch(/0$/);
+		expect(screen.getByText("Wes Lost")).toBeTruthy();
 	});
 });

@@ -784,6 +784,11 @@ function GuestRow({
 		? `first ${formatShortDate(guest.firstVisitAt, timezone)}`
 		: null;
 	const outsideFunnel = profile?.kind === "visiting_toastmaster";
+	// The Visiting Toastmasters section also shows the last visit (#1608).
+	const lastVisit =
+		outsideFunnel && guest.lastVisitAt
+			? `last ${formatShortDate(guest.lastVisitAt, timezone)}`
+			: null;
 	const invitable = isInvitableGuest({
 		stage: guest.stage,
 		kind: profile?.kind ?? "visitor",
@@ -907,6 +912,7 @@ function GuestRow({
 					<div className="text-xs text-muted-foreground">
 						{visits}
 						{firstVisit ? ` · ${firstVisit}` : ""}
+						{lastVisit ? ` · ${lastVisit}` : ""}
 					</div>
 					{broughtBy ? (
 						<div
