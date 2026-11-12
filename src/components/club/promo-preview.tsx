@@ -11,6 +11,7 @@
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { FlyerSquareThumb } from "#/components/agenda/flyer-square-export";
+import { findTokens } from "#/components/club/template-field-logic";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
@@ -79,6 +80,34 @@ function dropReason(
 	return `hidden: no ${promoVariable(key).label} set for this meeting`;
 }
 
+/** The editor's pill, with real horizontal padding: this is plain rendered text,
+ *  so there are no braces to act as padding and nothing to line up with a textarea. */
+export const PREVIEW_PILL_CLASS =
+	"rounded-full bg-primary/10 px-1.5 inset-ring inset-ring-primary/30 box-decoration-clone";
+
+/** Editor-form text with each known variable as a brace-free chip; an unknown
+ *  `{token}` stays exactly as typed. */
+function chipText(text: string): ReactNode[] {
+	const out: ReactNode[] = [];
+	let at = 0;
+	for (const t of findTokens(text)) {
+		if (!t.known) continue;
+		if (t.start > at) out.push(text.slice(at, t.start));
+		out.push(
+			<span
+				key={t.start}
+				className={PREVIEW_PILL_CLASS}
+				data-slot="preview-pill"
+			>
+				{t.inner}
+			</span>,
+		);
+		at = t.end;
+	}
+	if (at < text.length) out.push(text.slice(at));
+	return out;
+}
+
 function DroppedLine({
 	line,
 	channel,
@@ -93,7 +122,9 @@ function DroppedLine({
 	if (line.droppedBy === null) return null;
 	return (
 		<Tag data-dropped={line.droppedBy}>
-			<s className="text-muted-foreground">{toEditorText(line.source)}</s>{" "}
+			<s className="text-muted-foreground">
+				{chipText(toEditorText(line.source))}
+			</s>{" "}
 			<span className="text-xs text-muted-foreground">
 				{dropReason(line.droppedBy, channel, origin)}
 			</span>
