@@ -61,7 +61,7 @@ describe("PromoTemplateEditor", () => {
 		// The editor shows the friendly form of the stored `{club}, {date}`.
 		expect(
 			(screen.getByLabelText("Headline") as HTMLTextAreaElement).value,
-		).toBe("You're invited: {Club name}, {Date}");
+		).toBe("You're invited to Toastmasters: {Club name}, {Date}");
 		expect(
 			(screen.getByLabelText("Why join (one per line)") as HTMLTextAreaElement)
 				.value,
@@ -152,7 +152,9 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		await user.type(headline, " more");
 		await user.click(screen.getByLabelText("Why join in WhatsApp"));
 		await user.click(screen.getByRole("button", { name: "Discard changes" }));
-		expect(headline.value).toBe("You're invited: {Club name}, {Date}");
+		expect(headline.value).toBe(
+			"You're invited to Toastmasters: {Club name}, {Date}",
+		);
 		expect(
 			(screen.getByLabelText("Why join in WhatsApp") as HTMLInputElement)
 				.checked,
