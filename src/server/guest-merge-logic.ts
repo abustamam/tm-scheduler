@@ -121,6 +121,38 @@ async function readGuestForUpdate(tx: Tx, clubId: string, id: string) {
 	return row;
 }
 
+/**
+ * Take, BEFORE any guest row, the rows the merge will re-point that a writer
+ * locks first and the guest second (#1611): the absorbed guest's slots (the
+ * speech-detail save takes the meeting's slot-edit lock, then the slot, then
+ * key-shares the guest through the speech insert) and the votes naming it (an
+ * anonymous re-vote locks its own vote row, then key-shares the candidate).
+ * Holding a guest `FOR UPDATE` and then asking for those rows was the other end
+ * of a 40P01 cycle. Order: slots (id order), then votes (id order). The
+ * meeting's slot-edit lock is NOT taken: the slot row alone is what the writer
+ * holds when it asks for the guest, so a merge waiting on the slot is ordered
+ * behind it, and an extra lock would only add a way to form a cycle.
+ */
+async function lockRowsNamingAbsorbed(tx: Tx, absorbGuestId: string) {
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(eq(roleSlots.assignedGuestId, absorbGuestId))
+		.orderBy(roleSlots.id)
+		.for("update");
+	await tx
+		.select({ id: meetingVotes.id })
+		.from(meetingVotes)
+		.where(
+			or(
+				eq(meetingVotes.candidateGuestId, absorbGuestId),
+				eq(meetingVotes.voterGuestId, absorbGuestId),
+			),
+		)
+		.orderBy(meetingVotes.id)
+		.for("update");
+}
+
 class PreviewRollback extends Error {
 	constructor(readonly outcome: Outcome) {
 		super("preview rollback");
@@ -138,8 +170,11 @@ export async function applyMergeGuests(
 	input: MergeGuestsInput,
 	opts: { dryRun?: boolean } = {},
 ): Promise<MergeGuestsPreview> {
-	// Lock order (ADR-0031, as `applyDeleteGuest`): the club write lock, both
-	// Persons in id order, then both guest rows `FOR UPDATE` in id order. The row
+	// Lock order (ADR-0031): the club write lock, both Persons in id order, the
+	// absorbed guest's slots and votes (`lockRowsNamingAbsorbed`, #1611),
+	// then both guest rows `FOR UPDATE` in id order. Every writer that locks a
+	// slot or a vote row and then key-shares a guest therefore meets the merge
+	// at the same first row, never the guest. The row
 	// locks also matter beyond ordering: every foreign-key INSERT naming a guest
 	// (a public RSVP, a ballot join) key-shares its row, so a writer racing the
 	// merge waits instead of inserting a row that names the deleted guest.
@@ -180,6 +215,8 @@ export async function applyMergeGuests(
 				? noKeyUpdate(peekAbsorb.personId)
 				: forUpdate(peekAbsorb.personId)),
 		]);
+
+		await lockRowsNamingAbsorbed(tx, absorbGuestId);
 
 		const ordered = [keepGuestId, absorbGuestId].sort();
 		const rows = new Map<

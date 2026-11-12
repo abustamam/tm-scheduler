@@ -261,7 +261,13 @@ Every writer in this series that touches more than one of these takes them in th
    path references, sorted by id: SHARED for a writer (unlink, #1217), EXCLUSIVE for a path that
    deletes the membership (undo of a conversion, as a member removal does);
 3. then the `people` rows, sorted by id, each at the strength below;
-4. then the `guests` rows (the row lock a path takes on the guest it changes).
+4. then, for a path that DELETES a guest row after re-pointing what names it (the guest merge,
+   #1611), the rows it will re-point that a writer locks BEFORE it key-shares the guest: the
+   guest's slots `FOR UPDATE` (id order, not the meeting lock: the slot is what the writer holds
+   when it asks for the guest), then the votes naming it `FOR UPDATE` (id order). A speech-detail save takes meeting, slot, then the guest
+   (the speech insert's key share); an anonymous re-vote takes its vote row, then the candidate.
+   Locking the guest first and those rows after was a 40P01 cycle with each;
+5. then the `guests` rows (the row lock a path takes on the guest it changes).
 
 The merge lock comes before any row lock because a member removal holds it EXCLUSIVE and then the
 member's rows, and a writer that held the guest row (or the member's slots) and then asked for one
