@@ -2360,6 +2360,17 @@ export const UPCOMING_KEPT_HOLDER = {
 	what: "Kept GavelUp's holder",
 	reason: "The slot is already taken in GavelUp; nobody is moved.",
 } as const;
+/** #1588: a past meeting's slot that GavelUp already gave to someone else keeps its holder. */
+export const PAST_KEPT_HOLDER = {
+	what: "Kept GavelUp's holder",
+	reason: "The slot is held by someone else in GavelUp; nobody is moved.",
+} as const;
+/** #1588: a speech the slot already has, or whose holder is not the speaker, is not replaced. */
+export const KEPT_SPEECH = {
+	what: "Kept GavelUp's speech",
+	reason:
+		"The slot already has a speech, or is held by someone else in GavelUp; nothing is overwritten.",
+} as const;
 export const UPCOMING_INACTIVE_MEMBER = {
 	what: "Not placed: not an active member",
 	reason:

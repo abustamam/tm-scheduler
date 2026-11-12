@@ -107,11 +107,13 @@ import {
 	type ImportPlan,
 	type ImportReport,
 	isJsonbSafeText,
+	KEPT_SPEECH,
 	leftAloneReason,
 	MAX_UNAPPLIED_IMPORTS,
 	MEETING_LEFT_ALONE,
 	needsDecision,
 	type Omission,
+	PAST_KEPT_HOLDER,
 	type PersonResolution,
 	type PlanContext,
 	type PlanCounts,
@@ -1831,7 +1833,13 @@ async function attachSpeech(
 		"memberId" in owner
 			? slot.assignedMemberId === owner.memberId
 			: slot.assignedGuestId === owner.guestId;
-	if (!holds || slot.speechId) return;
+	if (!holds || slot.speechId) {
+		// Kept, not lost (#1588): say so unless an earlier run already tied it to a speech.
+		if (!io.refOf("speech", speech.sourceId)) {
+			io.omit("speech", speech.sourceId, KEPT_SPEECH);
+		}
+		return;
+	}
 	const ownerColumnsOf = (): { personId: string } | { guestId: string } => {
 		if ("memberId" in owner) {
 			const personId = io.personByMember.get(owner.memberId);
@@ -2166,6 +2174,9 @@ async function applyMeeting(
 				: slot.assignedMemberId === null && slot.assignedGuestId === null;
 			if (slotIsBundles) {
 				await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
+			} else if (owner && !refOf("role_slot", ps.sourceId)) {
+				// Kept, not lost (#1588): the slot's holder is GavelUp's.
+				omit("roleAssignment", ps.sourceId, PAST_KEPT_HOLDER);
 			}
 
 			if (ps.speech && owner) {
