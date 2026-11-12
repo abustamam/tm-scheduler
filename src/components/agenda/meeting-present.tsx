@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { PanelTop, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import {
 	type ReactNode,
@@ -15,6 +15,14 @@ import { NextMeetingBodyView } from "#/components/agenda/next-meeting-body";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
+import {
+	type CallControlsEdge,
+	callControlsInset,
+	callControlsLabel,
+	nextCallControlsEdge,
+	readCallControlsEdge,
+	writeCallControlsEdge,
+} from "#/lib/call-controls-band";
 import { fitScale } from "#/lib/slide-fit";
 import {
 	footerDate,
@@ -138,6 +146,28 @@ export function MeetingPresent({
 			? `${n} of ${p.presentCount} present have voted`
 			: `${n} ${n === 1 ? "vote" : "votes"} in`;
 	}
+	// The band for the call's controls (#1468). Read after mount, never in the
+	// initial state: the server renders "none", and a stored edge read during
+	// render would hydrate to a different tree.
+	const [band, setBand] = useState<CallControlsEdge>("none");
+	const [bandToast, setBandToast] = useState<string | null>(null);
+	const bandToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(() => {
+		setBand(readCallControlsEdge());
+		return () => {
+			if (bandToastTimer.current) clearTimeout(bandToastTimer.current);
+		};
+	}, []);
+	const cycleBand = useCallback(() => {
+		const edge = nextCallControlsEdge(band);
+		setBand(edge);
+		writeCallControlsEdge(edge);
+		setBandToast(callControlsLabel(edge));
+		if (bandToastTimer.current) clearTimeout(bandToastTimer.current);
+		bandToastTimer.current = setTimeout(() => setBandToast(null), 2000);
+	}, [band]);
+	const insets = callControlsInset(band);
+
 	const last = deck.length - 1;
 	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
 	const prev = useCallback(() => setI((n) => Math.max(n - 1, 0)), []);
@@ -204,7 +234,11 @@ export function MeetingPresent({
 				}
 				return;
 			}
-			if (k === "ArrowRight" || k === "PageDown" || k === " ") {
+			if (k === "z" || k === "Z") {
+				// Deck only: with the overview open the branch above has returned.
+				e.preventDefault();
+				cycleBand();
+			} else if (k === "ArrowRight" || k === "PageDown" || k === " ") {
 				e.preventDefault();
 				next();
 			} else if (k === "ArrowLeft" || k === "PageUp") {
@@ -222,7 +256,17 @@ export function MeetingPresent({
 		}
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [next, prev, onExit, overview, cursor, last, openOverview, jumpTo]);
+	}, [
+		next,
+		prev,
+		onExit,
+		overview,
+		cursor,
+		last,
+		openOverview,
+		jumpTo,
+		cycleBand,
+	]);
 
 	const slide = deck[i];
 	const title = deck.find((s) => s.kind === "title");
@@ -252,49 +296,73 @@ export function MeetingPresent({
 			: null;
 
 	return (
-		<div className="fixed inset-0 flex items-center justify-center bg-black">
-			<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
-				{offlineBadge}
-				<PptxDownloadButton deck={deck} clubName={clubName} />
-			</div>
-			<button
-				type="button"
-				aria-label="Previous slide"
-				className="absolute inset-y-0 left-0 z-10 w-1/4 cursor-w-resize opacity-0"
-				onClick={prev}
-			/>
-			<button
-				type="button"
-				aria-label="Next slide"
-				className="absolute inset-y-0 right-0 z-10 w-1/4 cursor-e-resize opacity-0"
-				onClick={next}
-			/>
-
-			{/* Letterboxed 16:9 frame so screen matches the .pptx exactly. */}
+		<div className="fixed inset-0 bg-black">
+			{/* The stage is the screen minus the call-controls band (#1468): the slide
+			    letterboxes inside it and the chrome sits on it, so neither lands under
+			    the call's own toolbar. Plain black, like the letterbox. */}
 			<div
-				className="relative"
+				data-testid="present-stage"
+				className="absolute flex items-center justify-center"
 				style={{
-					aspectRatio: "16 / 9",
-					width: "min(100vw, calc(100vh * 16 / 9))",
-					containerType: "inline-size",
+					top: insets.top,
+					right: insets.right,
+					bottom: insets.bottom,
+					left: insets.left,
+					containerType: "size",
 				}}
 			>
-				{layout.chrome === "splash" ? (
-					<Splash layout={layout} feedbackUrl={feedbackUrl} />
-				) : (
-					<ContentSlide
-						layout={layout}
-						clubName={clubName}
-						date={fdate}
-						vote={vote}
-						feedbackUrl={feedbackUrl}
-					/>
-				)}
-			</div>
+				<div className="absolute top-[2vmin] right-[2vmin] z-20 flex items-center gap-[1.2vmin]">
+					{offlineBadge}
+					<button
+						type="button"
+						onClick={cycleBand}
+						title={`${callControlsLabel(band)} (Z)`}
+						aria-label={callControlsLabel(band)}
+						className="cursor-pointer rounded-full bg-black/35 p-[0.6vmin] text-white"
+					>
+						<PanelTop className="size-[2.2vmin]" aria-hidden />
+					</button>
+					<PptxDownloadButton deck={deck} clubName={clubName} />
+				</div>
+				<button
+					type="button"
+					aria-label="Previous slide"
+					className="absolute inset-y-0 left-0 z-10 w-1/4 cursor-w-resize opacity-0"
+					onClick={prev}
+				/>
+				<button
+					type="button"
+					aria-label="Next slide"
+					className="absolute inset-y-0 right-0 z-10 w-1/4 cursor-e-resize opacity-0"
+					onClick={next}
+				/>
 
-			{/* Top-center: the one region empty on both splash and content slides.
+				{/* Letterboxed 16:9 frame so screen matches the .pptx exactly. */}
+				<div
+					className="relative"
+					style={{
+						aspectRatio: "16 / 9",
+						width: "min(100cqw, calc(100cqh * 16 / 9))",
+						containerType: "inline-size",
+					}}
+				>
+					{layout.chrome === "splash" ? (
+						<Splash layout={layout} feedbackUrl={feedbackUrl} />
+					) : (
+						<ContentSlide
+							layout={layout}
+							clubName={clubName}
+							date={fdate}
+							vote={vote}
+							feedbackUrl={feedbackUrl}
+						/>
+					)}
+				</div>
+
+				{/* Top-center: the one region empty on both splash and content slides.
 			    Bottom-center would sit on the footer's centered trademark
-			    disclaimer; top-right holds the PPTX button, top-left the content
+			    disclaimer; top-right holds the call-controls and
+			    PPTX buttons, top-left the content
 			    header. The dark pill keeps it legible over both the light content
 			    ground and the dark splash.
 
@@ -311,26 +379,31 @@ export function MeetingPresent({
 			    unlayered puts it back under the banner. It stays clickable: the
 			    invisible prev/next zones (z-10) are the left/right quarters and a
 			    centered pill this narrow never reaches them. */}
-			<button
-				type="button"
-				onClick={openOverview}
-				title="Jump to a slide (B)"
-				aria-label={`Slide ${i + 1} of ${deck.length} — jump to a slide`}
-				aria-haspopup="dialog"
-				className="absolute top-[2vmin] left-1/2 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white tabular-nums"
-			>
-				{i + 1} / {deck.length}
-			</button>
-
-			{overview ? (
-				<SlideOverview
-					labels={labels}
-					current={i}
-					cursor={cursor}
-					onPick={jumpTo}
-					onClose={() => setOverview(false)}
-				/>
-			) : null}
+				<button
+					type="button"
+					onClick={openOverview}
+					title="Jump to a slide (B)"
+					aria-label={`Slide ${i + 1} of ${deck.length} — jump to a slide`}
+					aria-haspopup="dialog"
+					className="absolute top-[2vmin] left-1/2 -translate-x-1/2 cursor-pointer rounded-full bg-black/35 px-[1.4vmin] py-[0.3vmin] text-[1.6vmin] text-white tabular-nums"
+				>
+					{i + 1} / {deck.length}
+				</button>
+				{bandToast ? (
+					<output className="absolute top-1/2 left-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-[1.4vmin] py-[0.4vmin] text-[1.6vmin] text-white">
+						{bandToast}
+					</output>
+				) : null}
+				{overview ? (
+					<SlideOverview
+						labels={labels}
+						current={i}
+						cursor={cursor}
+						onPick={jumpTo}
+						onClose={() => setOverview(false)}
+					/>
+				) : null}
+			</div>
 		</div>
 	);
 }

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -1096,5 +1098,188 @@ describe("the feedback invitation (#1282)", () => {
 		clickNext();
 		expect(screen.getByText("Thank You")).toBeTruthy();
 		expect(screen.getByTestId("feedback-qr").querySelector("svg")).toBeTruthy();
+	});
+});
+
+describe("the band for the call's controls (#1468)", () => {
+	afterEach(() => {
+		cleanup();
+		window.localStorage.clear();
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	const KEY = "gavelup:present-call-controls";
+	const stage = () => screen.getByTestId("present-stage");
+	const insets = () => ({
+		top: stage().style.top,
+		right: stage().style.right,
+		bottom: stage().style.bottom,
+		left: stage().style.left,
+	});
+	const label = (edge: string) => `Space for call controls: ${edge}`;
+
+	// protects=no stored value means today's full-window layout, frame sized from
+	// the stage; fails_when=the stage starts inset or the frame still reads 100vw;
+	// no_claim=jsdom has no layout, so the frame width is read from the source
+	// text, and the source is read RAW (an offender sweep: a comment mentioning
+	// 100vw must fail it too, so it must not go through readSource).
+	it("starts with no band and sizes the frame from the stage", () => {
+		renderPresent();
+		expect(insets()).toEqual({
+			top: "0px",
+			right: "0px",
+			bottom: "0px",
+			left: "0px",
+		});
+		const raw = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), "meeting-present.tsx"),
+			"utf8",
+		);
+		expect(raw).toContain("min(100cqw, calc(100cqh * 16 / 9))");
+		expect(raw).not.toContain("100vw");
+	});
+
+	// protects=Z and shift-Z walk none, top, right, bottom, left, none with the
+	// fixed pixel insets; fails_when=an edge is skipped, a size is wrong or
+	// shift-Z is ignored; no_claim=the slide clearing the band is not checked
+	// (no layout in jsdom; manual pass covers it).
+	it("Z cycles the edge through the fixed pixel insets, Z (shift) too", () => {
+		renderPresent();
+		const zero = { top: "0px", right: "0px", bottom: "0px", left: "0px" };
+		press("z");
+		expect(insets()).toEqual({ ...zero, top: "72px" });
+		press("Z");
+		expect(insets()).toEqual({ ...zero, right: "260px" });
+		press("z");
+		expect(insets()).toEqual({ ...zero, bottom: "72px" });
+		press("Z");
+		expect(insets()).toEqual({ ...zero, left: "260px" });
+		press("z");
+		expect(insets()).toEqual(zero);
+	});
+
+	// protects=Z is a deck key only: it prevents default there and does nothing
+	// while the overview is open; fails_when=Z moves the band under the overview
+	// or lets the browser see the key in the deck; no_claim=none beyond protects.
+	it("Z does nothing while the overview is open, and prevents default on the deck", () => {
+		renderPresent();
+		press("b");
+		expect(overview()).toBeTruthy();
+		press("z");
+		expect(insets().top).toBe("0px");
+		press("Escape");
+		expect(overview()).toBeNull();
+		const ev = new KeyboardEvent("keydown", { key: "z", cancelable: true });
+		act(() => {
+			window.dispatchEvent(ev);
+		});
+		expect(ev.defaultPrevented).toBe(true);
+		expect(insets().top).toBe("72px");
+	});
+
+	// protects=the button cycles like Z and names the current edge, off for none,
+	// with the key in its title; fails_when=the click does nothing or the
+	// name/title is stale or says "none"; no_claim=none beyond protects.
+	it("the button cycles the edge and names it", () => {
+		renderPresent();
+		const btn = screen.getByLabelText(label("off"));
+		expect(btn.getAttribute("title")).toBe(`${label("off")} (Z)`);
+		fireEvent.click(btn);
+		expect(insets().top).toBe("72px");
+		const after = screen.getByLabelText(label("top"));
+		expect(after.getAttribute("title")).toBe(`${label("top")} (Z)`);
+	});
+
+	// protects=every change is written under the spec's key, a stored edge
+	// applies after mount, a junk value reads as none; fails_when=another key is
+	// used, a stored edge is ignored or junk is applied; no_claim=jsdom's
+	// localStorage stands in for the browser's.
+	it("remembers the edge in this browser, restores it, ignores junk", () => {
+		renderPresent();
+		press("z");
+		expect(window.localStorage.getItem(KEY)).toBe("top");
+		cleanup();
+		window.localStorage.setItem(KEY, "left");
+		renderPresent();
+		expect(insets().left).toBe("260px");
+		cleanup();
+		window.localStorage.setItem(KEY, "diagonal");
+		renderPresent();
+		expect(insets().left).toBe("0px");
+		expect(insets().top).toBe("0px");
+	});
+
+	// protects=blocked storage neither throws nor logs and the band still moves;
+	// fails_when=a storage error escapes or reaches the console, or Z stops
+	// working; no_claim=a mocked Storage stands in for a private window.
+	it("works, silently, when storage throws", () => {
+		const err = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+			throw new Error("blocked");
+		});
+		vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new Error("blocked");
+		});
+		expect(() => renderPresent()).not.toThrow();
+		expect(() => press("z")).not.toThrow();
+		expect(insets().top).toBe("72px");
+		expect(err).not.toHaveBeenCalled();
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	// protects=the confirmation shows for exactly 2s, a second change restarts
+	// the 2s, and nothing shows on mount even when a stored value loads;
+	// fails_when=it lingers past or vanishes before 2000ms, is not restarted, or
+	// appears on mount; no_claim=fake timers stand in for the clock.
+	it("shows the label for exactly 2s, restarts on a change, not on mount", () => {
+		vi.useFakeTimers();
+		window.localStorage.setItem(KEY, "left");
+		renderPresent();
+		expect(screen.queryByRole("status")).toBeNull();
+		window.localStorage.clear();
+		press("z");
+		expect(screen.getByRole("status").textContent).toBe(label("off"));
+		act(() => {
+			vi.advanceTimersByTime(1500);
+		});
+		press("z");
+		expect(screen.getByRole("status").textContent).toBe(label("top"));
+		act(() => {
+			vi.advanceTimersByTime(1999);
+		});
+		expect(screen.getByRole("status").textContent).toBe(label("top"));
+		act(() => {
+			vi.advanceTimersByTime(1);
+		});
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	// protects=the confirmation label is centered in the stage; fails_when=it
+	// sits at an edge; no_claim=jsdom has no layout, so this reads the classes.
+	it("centers the label in the slide area", () => {
+		renderPresent();
+		press("z");
+		const cls = screen.getByRole("status").className;
+		expect(cls).toContain("top-1/2");
+		expect(cls).toContain("left-1/2");
+		expect(cls).not.toContain("bottom-");
+	});
+
+	// protects=chrome cluster, counter, prev/next zones and the overview are
+	// descendants of the inset stage; fails_when=any is a sibling, so it would
+	// sit in the band; no_claim=DOM nesting only, not painted position.
+	it("keeps the chrome, click zones and overview inside the stage", () => {
+		renderPresent();
+		const inStage = (el: HTMLElement) => stage().contains(el);
+		expect(inStage(screen.getByLabelText(label("off")))).toBe(true);
+		expect(inStage(screen.getByLabelText(/^Slide 1 of/))).toBe(true);
+		expect(inStage(screen.getByLabelText("Previous slide"))).toBe(true);
+		expect(inStage(screen.getByLabelText("Next slide"))).toBe(true);
+		press("b");
+		const dlg = overview();
+		expect(dlg).toBeTruthy();
+		expect(inStage(dlg as HTMLElement)).toBe(true);
 	});
 });
