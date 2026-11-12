@@ -227,7 +227,7 @@ export const PROMO_LIMITS = {
 	/** Roughly what reads as one message in a group chat. A soft limit: the
 	 *  sheet warns past it, it never truncates. 700, not 600, since the
 	 *  message ends on two links (RSVP and agenda) rather than one: the
-	 *  default with every optional line filled measures 662 in the tests. A
+	 *  default with every optional line filled measures 678 in the tests. A
 	 *  club with a long name and slug still goes past it, and gets the warning. */
 	whatsappSoft: 700,
 } as const;
@@ -258,7 +258,7 @@ export type PromoTemplate = z.infer<typeof promoTemplateSchema>;
 
 /** What a club gets until an admin edits it. */
 export const DEFAULT_PROMO_TEMPLATE: PromoTemplate = {
-	headline: "You're invited: {club}, {date}",
+	headline: "You're invited to Toastmasters: {club}, {date}",
 	intro: [
 		"{note}",
 		"When: {date}, {time}",

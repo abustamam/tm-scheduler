@@ -67,7 +67,7 @@ describe("MeetingFlyerLetter", () => {
 
 	it("prints the headline, when, where, theme, note and the why-join bullets", () => {
 		for (const text of [
-			"You&#x27;re invited: Downtown Speakers, Thursday, October 1",
+			"You&#x27;re invited to Toastmasters: Downtown Speakers, Thursday, October 1",
 			"Thursday, October 1 · 7:30 PM",
 			"Library, Room 4",
 			"Beginnings",

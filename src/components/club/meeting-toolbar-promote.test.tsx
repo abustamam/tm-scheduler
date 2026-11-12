@@ -85,7 +85,9 @@ describe("Promote on the meeting toolbar (#931)", () => {
 		const draft = (await screen.findByLabelText(
 			"WhatsApp message",
 		)) as HTMLTextAreaElement;
-		expect(draft.value).toMatch(/^\*You're invited: Downtown Speakers/);
+		expect(draft.value).toMatch(
+			/^\*You're invited to Toastmasters: Downtown Speakers/,
+		);
 		expect(draft.value).toContain("/club/downtown/meeting/2026-08-10");
 	});
 });

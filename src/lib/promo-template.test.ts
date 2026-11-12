@@ -290,7 +290,7 @@ describe("buildWhatsAppBlast", () => {
 
 	it("bolds the headline with WhatsApp's own markup", () => {
 		expect(msg.split("\n")[0]).toBe(
-			"*You're invited: Downtown Speakers, Thursday, October 1*",
+			"*You're invited to Toastmasters: Downtown Speakers, Thursday, October 1*",
 		);
 	});
 
@@ -320,7 +320,7 @@ describe("buildWhatsAppBlast", () => {
 	});
 
 	it("the default fills most of the soft limit, so the limit is not slack", () => {
-		// 662 characters with every optional line filled. Pins that the limit
+		// 678 characters with every optional line filled. Pins that the limit
 		// was raised for the second link, not loosened past what the default
 		// needs: a cut of the limit below the default fails the test above.
 		expect(msg.length).toBeGreaterThan(600);
@@ -335,7 +335,7 @@ describe("buildWhatsAppBlast", () => {
 			},
 		};
 		expect(buildWhatsAppBlast(t, values())).toBe(
-			`*You're invited: Downtown Speakers, Thursday, October 1*\n\n${FOOTER}`,
+			`*You're invited to Toastmasters: Downtown Speakers, Thursday, October 1*\n\n${FOOTER}`,
 		);
 	});
 });
@@ -345,7 +345,7 @@ describe("buildEmailBlast", () => {
 
 	it("uses the headline as a one-line subject", () => {
 		expect(email.subject).toBe(
-			"You're invited: Downtown Speakers, Thursday, October 1",
+			"You're invited to Toastmasters: Downtown Speakers, Thursday, October 1",
 		);
 	});
 

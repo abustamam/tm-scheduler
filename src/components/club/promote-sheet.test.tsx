@@ -76,7 +76,9 @@ describe("the WhatsApp draft", () => {
 		await user.click(screen.getByRole("button", { name: /^copy$/i }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		const copied = writeText.mock.calls[0]?.[0] as string;
-		expect(copied.startsWith("*You're invited: Downtown Speakers")).toBe(true);
+		expect(
+			copied.startsWith("*You're invited to Toastmasters: Downtown Speakers"),
+		).toBe(true);
 		expect(copied.endsWith(`RSVP: ${LINK}/rsvp\nAgenda: ${LINK}/agenda`)).toBe(
 			true,
 		);
@@ -144,7 +146,7 @@ describe("the email draft", () => {
 		await user.click(screen.getByRole("button", { name: /copy subject/i }));
 		await waitFor(() =>
 			expect(writeText).toHaveBeenCalledWith(
-				"You're invited: Downtown Speakers, Thursday, October 1",
+				"You're invited to Toastmasters: Downtown Speakers, Thursday, October 1",
 			),
 		);
 	});
@@ -189,7 +191,7 @@ describe("the email draft", () => {
 		await user.click(screen.getByRole("button", { name: /open in mail app/i }));
 		await waitFor(() =>
 			expect(writeText).toHaveBeenCalledWith(
-				`You're invited: Downtown Speakers, Thursday, October 1\n\n${"x".repeat(3000)}`,
+				`You're invited to Toastmasters: Downtown Speakers, Thursday, October 1\n\n${"x".repeat(3000)}`,
 			),
 		);
 	});
