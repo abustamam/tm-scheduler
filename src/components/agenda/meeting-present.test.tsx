@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+	act,
 	cleanup,
 	fireEvent,
 	render,
@@ -1096,5 +1097,85 @@ describe("the feedback invitation (#1282)", () => {
 		clickNext();
 		expect(screen.getByText("Thank You")).toBeTruthy();
 		expect(screen.getByTestId("feedback-qr").querySelector("svg")).toBeTruthy();
+	});
+});
+
+describe("the band for the call's controls (#1468)", () => {
+	afterEach(() => {
+		cleanup();
+		window.localStorage.clear();
+	});
+
+	const stage = () => screen.getByTestId("present-stage");
+
+	it("starts with no band: the stage fills the screen", () => {
+		renderPresent();
+		expect(stage().style.top).toBe("0px");
+		expect(stage().style.right).toBe("0px");
+		expect(stage().style.bottom).toBe("0px");
+		expect(stage().style.left).toBe("0px");
+	});
+
+	it("Z cycles the edge, shrinking the stage by a fixed pixel band", () => {
+		renderPresent();
+		press("z");
+		expect(stage().style.top).toBe("72px");
+		press("Z");
+		expect(stage().style.right).toBe("260px");
+		expect(stage().style.top).toBe("0px");
+		press("z");
+		expect(stage().style.bottom).toBe("72px");
+		press("z");
+		expect(stage().style.left).toBe("260px");
+		press("z");
+		expect(stage().style.left).toBe("0px");
+	});
+
+	it("names the edge briefly, in generic words", () => {
+		vi.useFakeTimers();
+		try {
+			renderPresent();
+			press("z");
+			expect(screen.getByText("Space for call controls: top")).toBeTruthy();
+			act(() => {
+				vi.advanceTimersByTime(2500);
+			});
+			expect(screen.queryByText("Space for call controls: top")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("the button beside the PPTX download cycles it too", () => {
+		renderPresent();
+		fireEvent.click(screen.getByLabelText("Space for call controls: none"));
+		expect(stage().style.top).toBe("72px");
+	});
+
+	it("remembers the edge in this browser and restores it on mount", () => {
+		renderPresent();
+		press("z");
+		expect(window.localStorage.getItem("gavelup:present-call-band")).toBe(
+			"top",
+		);
+		cleanup();
+		renderPresent();
+		expect(stage().style.top).toBe("72px");
+	});
+
+	it("keeps the slide counter and button inside the stage, outside the band", () => {
+		renderPresent();
+		press("z");
+		expect(within(stage()).getByText("1 / 4")).toBeTruthy();
+		expect(
+			within(stage()).getByLabelText("Space for call controls: top"),
+		).toBeTruthy();
+	});
+
+	it("the frame is sized from the stage, not the window", () => {
+		renderPresent();
+		const src = readSource("src/components/agenda/meeting-present.tsx");
+		expect(src).toContain("min(100cqw, calc(100cqh * 16 / 9))");
+		expect(src).not.toContain("100vw");
 	});
 });
