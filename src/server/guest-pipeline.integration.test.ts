@@ -1538,8 +1538,10 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 					.where(eq(roleSlots.id, seed.slotId));
 			});
 
-			// The delete reads the slot as still guest-held, then blocks on the
-			// writer's row lock; the writer commits into that gap.
+			// The delete blocks on the writer's row lock at its slot pre-lock
+			// (`lockRowsNamingGuest`, ADR-0031 step 4, #1611), which now comes
+			// before the guest row; the writer commits into that gap, and the
+			// re-checked predicate no longer matches the slot.
 			const pending = applyDeleteGuest({
 				clubId: seed.clubId,
 				guestId,
@@ -1547,7 +1549,7 @@ describe.skipIf(!hasTestDb)("guest pipeline (#208)", () => {
 			});
 			pending.catch(() => {});
 			try {
-				await waitForLockWait('update "role_slots"', writer.pid);
+				await waitForLockWait('from "role_slots"', writer.pid);
 			} finally {
 				await writer.commit();
 			}
