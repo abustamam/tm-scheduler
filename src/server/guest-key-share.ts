@@ -17,10 +17,18 @@
  *  - a writer that updates an EXISTING row locks that row `FOR UPDATE` first
  *    (`castVote` does), because the merge and the guest delete lock the rows
  *    naming the guest BEFORE the guest rows (`lockRowsNamingGuest`): the writer
- *    then meets them at the same first row, never at a guest.
+ *    then meets them at the same first row, never at a guest. That holds for
+ *    ballots the merge/delete pre-lock scan covers, i.e. those naming the
+ *    absorbed or deleted guest. The kept guest re-voting on a ballot that does
+ *    not name the absorbed guest holds that ballot and waits on the merge's
+ *    kept-guest lock; safe, because the merge never needs that ballot.
  *
- * `FOR KEY SHARE` is the lock the FK check would take anyway, so it blocks
- * nothing the insert would not. A null id is skipped.
+ * `FOR KEY SHARE` is the lock the FK check takes on a FIRST insert. A RE-vote
+ * (ON CONFLICT DO UPDATE) does not FK-check the unchanged `voter_guest_id`, so
+ * it now also waits on a guest another path holds `FOR UPDATE` (a guest-to-member
+ * conversion, say). That is an extra wait, not a cycle: those paths never go on
+ * to ask for the cast's meeting, club, session or ballot locks. A null id is
+ * skipped.
  */
 import { inArray } from "drizzle-orm";
 import type { db } from "#/db";

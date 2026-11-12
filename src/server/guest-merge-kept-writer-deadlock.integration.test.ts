@@ -431,9 +431,11 @@ describe.skipIf(!hasTestDb)(
 
 		// protects=the voter and candidate guests are key-shared in ONE statement
 		//   in id order, the order the merge takes its two guest rows
-		// fails_when=keyShareGuests does not order by id: with a blocker holding
-		//   the HIGHER guest, a writer that asks for it first holds it while the
-		//   merge takes the lower and waits for the higher (40P01 on release)
+		// fails_when=a writer locks the HIGHER guest id first: with a blocker
+		//   holding the higher guest, it holds it while the merge takes the lower
+		//   and waits for the higher (40P01 on release). It does NOT catch a bare
+		//   ORDER BY removal (an index scan may still return ascending ids) and
+		//   does not test the one-statement rule
 		// no_claim=says nothing about lock strength
 		it("the voter and candidate guests are key-shared in id order", async () => {
 			if (keep > absorb) [keep, absorb] = [absorb, keep];

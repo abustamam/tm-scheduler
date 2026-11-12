@@ -189,7 +189,9 @@ export async function applyMergeGuests(
 	// absorbed guest's slots and votes (`lockRowsNamingAbsorbed`, #1611),
 	// then both guest rows `FOR UPDATE` in id order. Every writer that locks a
 	// slot or a vote row and then key-shares a guest therefore meets the merge
-	// at the same first row, never the guest. `castVote` (a guest voter, #1623)
+	// at the same first row, never the guest (for the rows this merge pre-locks,
+	// i.e. those naming the absorbed guest; the merge's own first locks are the
+	// club advisory lock and the Persons, not a vote row). `castVote` (a guest voter, #1623)
 	// takes that same order: its existing ballot `FOR UPDATE`, then every guest
 	// the ballot names in id order (`keyShareGuests`), then the INSERT; a re-vote
 	// therefore waits on this merge (or `applyDeleteGuest`, which locks the same

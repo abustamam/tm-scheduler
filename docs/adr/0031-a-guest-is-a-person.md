@@ -277,8 +277,14 @@ Every writer in this series that touches more than one of these takes them in th
      absorbed guest's row collides with that entry while the writer waits on the merge's guest lock.
      `castVote` (a guest voter) first materialises the session (an anonymous ballot's uncommitted
      auto-session row must not queue it while it holds a guest), then locks the voter's EXISTING
-     ballot `FOR UPDATE`, so a re-vote meets the merge and the guest delete at the same first row
-     they lock (this step is what covers the delete), then key-shares the voter and the candidate
+     ballot `FOR UPDATE`, so a re-vote on a ballot naming the absorbed or deleted guest meets the merge
+     and the guest delete at the same first row their pre-lock scan takes (this step is what covers
+     the delete; the merge's own first locks are the club advisory lock and the Persons). A kept guest
+     re-voting on a ballot that does not name the absorbed guest holds that ballot and waits on the
+     merge's kept-guest lock, safe because the merge never needs that ballot. The key share is also
+     an extra wait on a re-vote (ON CONFLICT DO UPDATE does not FK-check the unchanged voter), for a
+     guest another path holds `FOR UPDATE`; those paths never ask for the cast's locks, so it is a
+     wait, not a cycle, then key-shares the voter and the candidate
      guest together (both may be merge parties) and inserts. `addGuestPresent` has no row to take
      first: the merge does not pre-lock attendance rows;
 5. then the `guests` rows (the row lock a path takes on the guest it changes).

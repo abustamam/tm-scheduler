@@ -1079,7 +1079,9 @@ export async function castVote(input: {
 		// #1623, the guest merge's lock order (ADR-0031): the voter's EXISTING
 		// ballot `FOR UPDATE`, then every guest this ballot names, then the INSERT.
 		// The merge and the guest delete lock the votes naming a guest before the
-		// guest rows, so a re-voting guest meets them at that same first row. The
+		// guest rows, so a re-voting guest whose ballot names the absorbed or deleted
+		// guest meets them at that same first row (a ballot that does not name it is
+		// never needed by the merge, so waiting on the kept guest is safe). The
 		// session is materialised BEFORE any guest lock: an anonymous ballot's
 		// uncommitted auto-session row would otherwise queue this behind it while
 		// holding the guest (a three-way cycle with the merge).
