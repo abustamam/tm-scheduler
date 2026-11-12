@@ -212,7 +212,7 @@ describe("toggles", () => {
 	it("mounts nine labelled checkboxes regardless of the active tab", () => {
 		renderPreview();
 		for (const ch of ["WhatsApp", "Email", "Flyer"]) {
-			for (const part of ["Intro", "Why join", "Call to action"]) {
+			for (const part of ["Intro", "Why join", "Closing line"]) {
 				expect(screen.getByLabelText(`${part} in ${ch}`)).toBeTruthy();
 			}
 		}

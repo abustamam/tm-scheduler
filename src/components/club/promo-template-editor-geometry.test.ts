@@ -73,9 +73,9 @@ describe.skipIf(!hasChrome)(
 					<div class="${g}">
 						<div class="space-y-4">
 							<div class="${a}" id="actions">
-								<button type="submit" class="min-w-48 flex-1 h-9">Save promo template</button>
+								<button type="submit" class="min-w-48 flex-1 h-9">Save template</button>
 								${btn("Discard changes")}
-								${btn("Reset to default (follows future updates)")}
+								${btn("Start over with GavelUp's template")}
 							</div>
 						</div>
 						<aside class="${aside}" id="aside">

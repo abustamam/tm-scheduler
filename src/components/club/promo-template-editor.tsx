@@ -34,6 +34,14 @@ const PromoteSheet = lazy(() =>
 	import("./promote-sheet").then((m) => ({ default: m.PromoteSheet })),
 );
 
+/** Schema key -> the label the user sees, for the save-failure toast. */
+const FIELD_LABEL: Record<string, string> = {
+	headline: "Headline",
+	intro: "Intro",
+	whyJoin: "Why join",
+	callToAction: "Closing line",
+};
+
 /** The bullets as the textarea holds them: one per line, blanks dropped. */
 export function bulletsFromText(text: string): string[] {
 	return text
@@ -157,8 +165,11 @@ export function PromoTemplateEditor({
 		e.preventDefault();
 		const parsed = promoTemplateSchema.safeParse(draft);
 		if (!parsed.success) {
+			const label = FIELD_LABEL[String(parsed.error.issues[0]?.path[0] ?? "")];
 			toast.error(
-				`Check the template: ${parsed.error.issues[0]?.path.join(".") || "a field"} is not valid.`,
+				label
+					? `Check "${label}": it is empty or too long.`
+					: "Check the template: a field is empty or too long.",
 			);
 			return;
 		}
@@ -168,7 +179,7 @@ export function PromoTemplateEditor({
 			// The schema trims; loading the normalised snapshot is what makes
 			// "Discard changes" absent right after Save.
 			load(parsed.data);
-			toast.success("Promo template saved.");
+			toast.success("Template saved.");
 			await onSaved();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -182,7 +193,7 @@ export function PromoTemplateEditor({
 		try {
 			await resetPromoTemplate({ data: clubId });
 			load(DEFAULT_PROMO_TEMPLATE);
-			toast.success("Promo template reset to the default.");
+			toast.success("Back to GavelUp's template.");
 			await onSaved();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -213,8 +224,9 @@ export function PromoTemplateEditor({
 			<p className="text-sm text-muted-foreground">
 				One template drafts a WhatsApp message, an email and a flyer for any
 				meeting. You copy or share them yourself; nothing is sent from GavelUp.
-				Type @ or {"{"} in any field to insert a variable, or use Insert
-				variable. A line whose variable is empty for a meeting is left out.
+				The highlighted words, like Date and Theme, fill in by themselves for
+				each meeting. Type @ to add one. A line with nothing to fill in, such as
+				Theme for a meeting without one, is left out.
 			</p>
 
 			{storedInvalid ? (
@@ -256,7 +268,8 @@ export function PromoTemplateEditor({
 					/>
 					<TemplateField
 						id="promo-why"
-						label="Why join (one per line)"
+						label="Why join"
+						hint="One reason per line."
 						rows={5}
 						value={fields.bullets}
 						onChange={setField("bullets")}
@@ -269,7 +282,7 @@ export function PromoTemplateEditor({
 					/>
 					<TemplateField
 						id="promo-cta"
-						label="Call to action"
+						label="Closing line"
 						multiline={false}
 						value={fields.cta}
 						onChange={setField("cta")}
@@ -283,7 +296,7 @@ export function PromoTemplateEditor({
 							{saving ? (
 								<Loader2 className="size-4 animate-spin" />
 							) : (
-								"Save promo template"
+								"Save template"
 							)}
 						</Button>
 						{changed ? (
@@ -302,9 +315,13 @@ export function PromoTemplateEditor({
 							onClick={onReset}
 							disabled={saving}
 						>
-							Reset to default (follows future updates)
+							Start over with GavelUp's template
 						</Button>
 					</div>
+					<p className="text-xs text-muted-foreground">
+						Starting over also picks up improvements GavelUp makes to its
+						template later.
+					</p>
 				</div>
 				<aside className="space-y-3 self-start lg:sticky lg:top-20">
 					{meetings.length > 1 && context ? (

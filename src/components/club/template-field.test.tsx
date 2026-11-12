@@ -14,7 +14,9 @@ import {
 	toStoredText,
 } from "#/lib/promo-template";
 import {
+	BRACE_CLASS,
 	FIELD_BUTTON_CLASS,
+	PILL_CLASS,
 	TemplateField,
 	UNKNOWN_CLASS,
 } from "./template-field";
@@ -135,7 +137,7 @@ describe("opening the menu", () => {
 	it("Escape after @ then Insert variable closes the menu", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		expect(listbox()).not.toBeNull();
 		await user.keyboard("{Escape}");
 		expect(listbox()).toBeNull();
@@ -213,7 +215,7 @@ describe("picking", () => {
 		await user.click(ta);
 		ta.setSelectionRange(2, 2);
 		await user.keyboard("{ArrowRight}{ArrowLeft}");
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		expect(listbox()).not.toBeNull();
 		expect(document.activeElement).toBe(ta);
 		await user.click(screen.getByRole("option", { name: /^Date/ }));
@@ -224,7 +226,7 @@ describe("picking", () => {
 	// no_claim=a replaced selection (the last-caret test covers a collapsed caret only).
 	it("Insert variable on a never-focused field appends", async () => {
 		const { user, ta } = setup({ initial: "Hello " });
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		await user.click(screen.getByRole("option", { name: /^Date/ }));
 		expect(ta.value).toBe("Hello {Date}");
 	});
@@ -260,11 +262,11 @@ describe("accessibility", () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
 		expect(document.querySelector("[aria-live=polite]")?.textContent).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 		await user.keyboard("{Enter}");
 		expect(document.querySelector("[aria-live=polite]")?.textContent).toBe(
-			"Inserted Date",
+			"Added Date",
 		);
 	});
 
@@ -306,7 +308,7 @@ describe("controls and announcements", () => {
 	// constant; fails_when=the class is dropped from the button; no_claim=real rendered height (QA pass).
 	it("Insert variable carries FIELD_BUTTON_CLASS", () => {
 		setup();
-		const button = screen.getByRole("button", { name: "Insert variable" });
+		const button = screen.getByRole("button", { name: "Add a detail" });
 		for (const c of FIELD_BUTTON_CLASS.split(" "))
 			expect(button.classList.contains(c)).toBe(true);
 		expect(FIELD_BUTTON_CLASS.split(" ")[0]).toBe("h-11");
@@ -321,14 +323,14 @@ describe("controls and announcements", () => {
 			document.querySelector("[aria-live=polite]")?.textContent;
 		await user.type(ta, "@");
 		expect(live()).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 		await user.keyboard("{Escape}");
 		expect(live()).toBe("");
 		await user.clear(ta);
 		await user.type(ta, "@");
 		expect(live()).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 	});
 
@@ -383,25 +385,67 @@ describe("pills and Enter", () => {
 });
 
 describe("counter, typos and defaults", () => {
-	// protects=the counter counts the STORED length ({Word of the Day} = 14 not 17);
-	// fails_when=it counts the friendly text; no_claim=the over-limit styling.
-	it("counts the stored form", () => {
-		setup({ initial: "{Word of the Day}" });
-		expect(screen.getByText("14 / 160")).toBeTruthy();
+	// protects=the counter counts the STORED length ({Word of the Day} = 14 not 17) and is silent under 80%;
+	// fails_when=it counts the friendly text or shows while comfortably under the limit;
+	// no_claim=the over-limit styling.
+	it("counts the stored form and is silent under 80%", () => {
+		setup({ initial: "{Word of the Day}", limit: 17 });
+		// stored 14 of 17 = 82%: shows, counting 3 left (not 0 left for the 17 friendly chars)
+		expect(screen.getByText("3 characters left")).toBeTruthy();
+		cleanup();
+		setup({ initial: "{Word of the Day}", limit: 160 });
+		expect(screen.queryByText(/characters/)).toBeNull();
 	});
 
-	// protects=bullets count lines and the longest line; fails_when=blank lines are counted;
-	// no_claim=the over-limit styling or the max-lines refusal at Save.
-	it("shows bullet count and longest line", () => {
+	// protects=the counter appears from 80% and says "too long" over the limit;
+	// fails_when=either message is missing or wrong; no_claim=the colour.
+	it("counts characters left from 80% and too long over the limit", () => {
+		setup({ initial: "x".repeat(128), limit: 160 });
+		expect(screen.getByText("32 characters left")).toBeTruthy();
+		cleanup();
+		setup({ initial: "x".repeat(127), limit: 160 });
+		expect(screen.queryByText(/characters/)).toBeNull();
+		cleanup();
+		setup({ initial: "x".repeat(165), limit: 160 });
+		expect(screen.getByText("5 characters too long")).toBeTruthy();
+	});
+
+	// protects=bullets are silent while fine, then name the line count or the long line;
+	// fails_when=blank lines are counted or a message is missing; no_claim=colour.
+	it("bullets: silent when fine, too many lines, an over-long line", () => {
+		const base = { label: "Headline", limit: undefined } as const;
+		setup({ ...base, bullets: { perLine: 10, max: 2 }, initial: "one\n\ntwo" });
+		expect(screen.queryByText(/Keep it to|too long/)).toBeNull();
+		cleanup();
+		setup({ ...base, bullets: { perLine: 10, max: 2 }, initial: "a\nb\nc" });
+		expect(screen.getByText("Keep it to 2 reasons (you have 3)")).toBeTruthy();
+		cleanup();
 		setup({
-			label: "Headline",
-			limit: undefined,
-			bullets: { perLine: 160, max: 8 },
-			initial: "one\n\ntwelve chars",
+			...base,
+			bullets: { perLine: 10, max: 5 },
+			initial: "ok\n\nfine\nabcdefghijkl",
 		});
-		expect(
-			screen.getByText("2 of 8 bullets, longest line 12 / 160"),
-		).toBeTruthy();
+		expect(screen.getByText("Line 3 is 2 characters too long")).toBeTruthy();
+	});
+
+	// protects=a known variable paints as a pill with invisible braces and a visible label; an unknown token keeps visible braces;
+	// fails_when=the pill loses PILL_CLASS, a brace is visible, or the typo has no flag; no_claim=painted pixels.
+	it("paints a known variable as a pill and an unknown one with braces", () => {
+		setup({ initial: "a {Date} b {foo}" });
+		const pill = document.querySelector("[data-slot=template-pill]");
+		expect(pill?.className).toBe(PILL_CLASS);
+		const braces = pill?.querySelectorAll(`.${BRACE_CLASS}`);
+		expect(braces?.length).toBe(2);
+		expect(braces?.[0].textContent).toBe("{");
+		expect(braces?.[1].textContent).toBe("}");
+		expect(pill?.textContent).toBe("{Date}");
+		const label = [...(pill?.childNodes ?? [])].find(
+			(n) => n.nodeType === Node.TEXT_NODE,
+		);
+		expect(label?.textContent).toBe("Date");
+		const unknown = document.querySelector(`.${UNKNOWN_CLASS.split(" ")[0]}`);
+		expect(unknown?.textContent).toBe("{foo}");
+		expect(unknown?.querySelector(`.${BRACE_CLASS}`)).toBeNull();
 	});
 
 	// protects=typo line, wavy underline and Fix; fails_when=Fix leaves the typo or the line stays;
@@ -410,7 +454,7 @@ describe("counter, typos and defaults", () => {
 		const { user, ta } = setup({ initial: "a {Word of Day} b {Word of Day}" });
 		expect(
 			screen.getByText(
-				"Not a variable: {Word of Day}. Did you mean Word of the Day?",
+				"GavelUp doesn't recognize {Word of Day}. Did you mean Word of the Day?",
 			),
 		).toBeTruthy();
 		const unknown = document.querySelector(
@@ -419,7 +463,7 @@ describe("counter, typos and defaults", () => {
 		expect(unknown?.className).toBe(UNKNOWN_CLASS);
 		await user.click(screen.getByRole("button", { name: "Fix" }));
 		expect(ta.value).toBe("a {Word of the Day} b {Word of the Day}");
-		expect(screen.queryByText(/Not a variable/)).toBeNull();
+		expect(screen.queryByText(/recognize/)).toBeNull();
 	});
 
 	// protects=no-suggestion typos say "exactly as typed" with no Fix; fails_when=a Fix is offered;
@@ -427,7 +471,9 @@ describe("counter, typos and defaults", () => {
 	it("{foo} has no Fix", () => {
 		setup({ initial: "{foo}" });
 		expect(
-			screen.getByText("Not a variable: {foo}. It will show exactly as typed."),
+			screen.getByText(
+				"GavelUp doesn't recognize {foo}, so it will show exactly as typed.",
+			),
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Fix" })).toBeNull();
 	});
@@ -437,11 +483,15 @@ describe("counter, typos and defaults", () => {
 	// no_claim=the absence of a server call (this component has none to call).
 	it("Use default appears after an edit and restores the default", async () => {
 		const { user, ta } = setup({ initial: "Default {Date}" });
-		expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Restore original" }),
+		).toBeNull();
 		await user.type(ta, "!");
-		await user.click(screen.getByRole("button", { name: "Use default" }));
+		await user.click(screen.getByRole("button", { name: "Restore original" }));
 		expect(ta.value).toBe("Default {Date}");
-		expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Restore original" }),
+		).toBeNull();
 	});
 });
 

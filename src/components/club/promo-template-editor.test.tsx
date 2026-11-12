@@ -63,8 +63,7 @@ describe("PromoTemplateEditor", () => {
 			(screen.getByLabelText("Headline") as HTMLTextAreaElement).value,
 		).toBe("You're invited to Toastmasters: {Club name}, {Date}");
 		expect(
-			(screen.getByLabelText("Why join (one per line)") as HTMLTextAreaElement)
-				.value,
+			(screen.getByLabelText("Why join") as HTMLTextAreaElement).value,
 		).toBe(DEFAULT_PROMO_TEMPLATE.whyJoin.join("\n"));
 	});
 
@@ -73,13 +72,11 @@ describe("PromoTemplateEditor", () => {
 		const headline = screen.getByLabelText("Headline");
 		await user.clear(headline);
 		await user.type(headline, "Come to {{Club name}");
-		const why = screen.getByLabelText("Why join (one per line)");
+		const why = screen.getByLabelText("Why join");
 		await user.clear(why);
 		await user.type(why, "Speak{enter}{enter}  Lead  ");
 		await user.click(screen.getByLabelText("Why join in WhatsApp"));
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { clubId: string; template: typeof DEFAULT_PROMO_TEMPLATE };
@@ -94,17 +91,15 @@ describe("PromoTemplateEditor", () => {
 
 	it("flags an unknown variable under its field while typing", async () => {
 		const { user } = renderEditor();
-		expect(screen.queryByText(/Not a variable/)).toBeNull();
-		await user.type(screen.getByLabelText("Call to action"), " {{rsvp}");
-		expect(screen.getByText(/Not a variable: \{rsvp\}/)).toBeTruthy();
+		expect(screen.queryByText(/recognize/)).toBeNull();
+		await user.type(screen.getByLabelText("Closing line"), " {{rsvp}");
+		expect(screen.getByText(/GavelUp doesn't recognize \{rsvp\}/)).toBeTruthy();
 	});
 
 	it("refuses a blank headline before the round trip", async () => {
 		const { user } = renderEditor();
 		await user.clear(screen.getByLabelText("Headline"));
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		expect(updatePromoTemplate).not.toHaveBeenCalled();
 	});
 
@@ -113,7 +108,9 @@ describe("PromoTemplateEditor", () => {
 		const headline = screen.getByLabelText("Headline");
 		await user.clear(headline);
 		await user.type(headline, "Something else");
-		await user.click(screen.getByRole("button", { name: /reset to default/i }));
+		await user.click(
+			screen.getByRole("button", { name: /start over with gavelup/i }),
+		);
 		await waitFor(() =>
 			expect(resetPromoTemplate).toHaveBeenCalledWith({ data: CLUB }),
 		);
@@ -182,9 +179,7 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		await user.keyboard("{Enter}");
 		expect((headline as HTMLTextAreaElement).value).toBe("  Hi {Date}");
 		expect(discard()).not.toBeNull();
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { template: typeof DEFAULT_PROMO_TEMPLATE };
@@ -209,7 +204,7 @@ describe("PromoTemplateEditor wiring (#1536)", () => {
 		await waitFor(() => expect(getPromoContext).toHaveBeenCalledTimes(1));
 		expect(getPromoContext).toHaveBeenCalledWith({ data: { clubId: CLUB } });
 		await user.click(
-			screen.getAllByRole("button", { name: "Insert variable" })[0],
+			screen.getAllByRole("button", { name: "Add a detail" })[0],
 		);
 		expect(
 			(await screen.findByRole("option", { name: /Club name/ })).textContent,
@@ -233,7 +228,7 @@ describe("editor wiring, round two (#1536)", () => {
 		const { user } = renderEditor();
 		await waitFor(() => expect(getPromoContext).toHaveBeenCalledTimes(1));
 		await user.click(
-			screen.getAllByRole("button", { name: "Insert variable" })[0],
+			screen.getAllByRole("button", { name: "Add a detail" })[0],
 		);
 		const options = await screen.findAllByRole("option");
 		for (const o of options) {
@@ -251,9 +246,7 @@ describe("editor wiring, round two (#1536)", () => {
 		const headline = screen.getByLabelText("Headline") as HTMLTextAreaElement;
 		await user.clear(headline);
 		await user.type(headline, "Saved headline");
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		await waitFor(() =>
 			expect(
@@ -269,7 +262,9 @@ describe("editor wiring, round two (#1536)", () => {
 	// no_claim=what the server stores (null) or the toast.
 	it("Reset to default calls resetPromoTemplate once", async () => {
 		const { user } = renderEditor();
-		await user.click(screen.getByRole("button", { name: /reset to default/i }));
+		await user.click(
+			screen.getByRole("button", { name: /start over with gavelup/i }),
+		);
 		await waitFor(() => expect(resetPromoTemplate).toHaveBeenCalledTimes(1));
 	});
 });
@@ -403,9 +398,7 @@ describe("live preview (#1537)", () => {
 			screen.queryByText("Couldn't load a meeting for the preview."),
 		).toBeNull();
 		expect(getPromoContext).toHaveBeenCalledTimes(2);
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { template: typeof DEFAULT_PROMO_TEMPLATE };
@@ -425,9 +418,7 @@ describe("live preview (#1537)", () => {
 		).toBeGreaterThan(0);
 		expect(screen.getAllByRole("checkbox", { hidden: true })).toHaveLength(9);
 		await user.click(screen.getByLabelText("Intro in WhatsApp"));
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		expect(
 			screen.getAllByText("Couldn't load a meeting for the preview.").length,
@@ -451,9 +442,7 @@ describe("live preview (#1537)", () => {
 		expect(within(whatsapp()).getByText("Where: Library")).toBeTruthy();
 		await user.click(screen.getByLabelText("Intro in WhatsApp"));
 		expect(within(whatsapp()).queryByText("Where: Library")).toBeNull();
-		await user.click(
-			screen.getByRole("button", { name: /save promo template/i }),
-		);
+		await user.click(screen.getByRole("button", { name: /save template/i }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { template: typeof DEFAULT_PROMO_TEMPLATE };

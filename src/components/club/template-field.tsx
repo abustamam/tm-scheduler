@@ -5,10 +5,13 @@
 // it into the stored form (`{wordOfTheDay}`) with `toStoredText`.
 //
 // Why a native textarea (decision 1 of #1532): undo, IME, the phone keyboard,
-// screen readers and jsdom all stay native. The pills are a transparent copy of
-// the text painted BEHIND the textarea; `field-sizing-content` makes the
-// textarea grow with its text, so the two never scroll against each other
-// (where it is unsupported the copy mirrors `scrollTop`).
+// screen readers and jsdom all stay native. The textarea's own text is
+// transparent and the visible copy is painted BEHIND it, with each known
+// variable as a pill whose braces are transparent (they keep their width and
+// become the pill's side padding). `field-sizing-content` makes the textarea
+// grow with its text, so the two never scroll against each other (where it is
+// unsupported the copy mirrors `scrollTop`). Under forced colours the textarea
+// text is shown and the copy hidden, so the field is never blank.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "#/components/ui/button";
@@ -35,10 +38,17 @@ import {
 } from "./template-field-logic";
 import { VariableMenu } from "./variable-menu";
 
-/** A known variable behind the text. Nothing here may change the text's width.
- *  `rounded-md`, not DESIGN.md's `full` chip radius: it sits inside running text
- *  behind a textarea, where a pill-shaped end would clip the neighbouring glyphs. */
-export const PILL_CLASS = "rounded-md bg-primary/10";
+/** A known variable, painted as a pill (DESIGN.md: chips are `full`). Colour,
+ *  background, ring and radius only: nothing here may change the text's metrics.
+ *  The rounded ends sit over the transparent braces, so they clip no glyph;
+ *  `box-decoration-clone` keeps a label that wraps looking like a pill. */
+export const PILL_CLASS =
+	"rounded-full bg-primary/10 inset-ring inset-ring-primary/30 box-decoration-clone";
+/** The pill's braces: invisible, but they keep their width as side padding. */
+export const BRACE_CLASS = "text-transparent";
+/** The textarea's own text is invisible; the caret and selection stay visible. */
+export const TEXTAREA_INK_CLASS =
+	"text-transparent caret-foreground selection:bg-primary/30 selection:text-transparent forced-colors:text-[CanvasText]";
 /** An unknown `{token}`: a typo flag, not a pill. */
 export const UNKNOWN_CLASS =
 	"underline decoration-wavy decoration-warning underline-offset-2";
@@ -85,10 +95,19 @@ function Backdrop({
 	let pos = 0;
 	for (const t of findTokens(value, variables)) {
 		if (t.start > pos) parts.push(value.slice(pos, t.start));
+		const raw = value.slice(t.start, t.end);
 		parts.push(
-			<span key={t.start} className={t.known ? PILL_CLASS : UNKNOWN_CLASS}>
-				{value.slice(t.start, t.end)}
-			</span>,
+			t.known ? (
+				<span key={t.start} className={PILL_CLASS} data-slot="template-pill">
+					<span className={BRACE_CLASS}>{raw.slice(0, 1)}</span>
+					{raw.slice(1, -1)}
+					<span className={BRACE_CLASS}>{raw.slice(-1)}</span>
+				</span>
+			) : (
+				<span key={t.start} className={UNKNOWN_CLASS}>
+					{raw}
+				</span>
+			),
 		);
 		pos = t.end;
 	}
@@ -98,7 +117,7 @@ function Backdrop({
 			ref={innerRef}
 			aria-hidden
 			data-slot="template-field-backdrop"
-			className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-2 text-base break-words whitespace-pre-wrap text-transparent md:text-sm"
+			className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-2 text-base break-words whitespace-pre-wrap text-foreground md:text-sm forced-colors:hidden"
 		>
 			{parts}
 			{"\u200b"}
@@ -195,7 +214,7 @@ export function TemplateField({
 
 	// The opening announcement is cleared on close, so reopening changes the
 	// live region's text again and is read out. A just-set "Inserted X" stays.
-	const openingText = `${variables.length} variables, use up and down then Enter`;
+	const openingText = `${variables.length} details, use up and down then Enter`;
 	useEffect(() => {
 		if (open) setAnnounce(openingText);
 		else setAnnounce((a) => (a === openingText ? "" : a));
@@ -262,7 +281,7 @@ export function TemplateField({
 		} else return;
 		setManualOpen(false);
 		applyEdit(ta, start, end, text);
-		setAnnounce(`Inserted ${label}`);
+		setAnnounce(`Added ${label}`);
 	}
 
 	function openManually() {
@@ -386,6 +405,26 @@ export function TemplateField({
 		? storedLines.length > bullets.max || longest > bullets.perLine
 		: limit !== undefined && stored.length > limit;
 
+	/** Nothing while the text is comfortably inside its limit. */
+	function counterMessage(): string | null {
+		if (bullets) {
+			if (storedLines.length > bullets.max)
+				return `Keep it to ${bullets.max} reasons (you have ${storedLines.length})`;
+			const idx = storedLines.findIndex((l) => l.length > bullets.perLine);
+			if (idx >= 0) {
+				const excess = storedLines[idx].length - bullets.perLine;
+				return `Line ${idx + 1} is ${excess} ${excess === 1 ? "character" : "characters"} too long`;
+			}
+			return null;
+		}
+		if (limit === undefined) return null;
+		const n = (c: number) => `${c} ${c === 1 ? "character" : "characters"}`;
+		if (stored.length > limit) return `${n(stored.length - limit)} too long`;
+		if (stored.length >= limit * 0.8) return `${n(limit - stored.length)} left`;
+		return null;
+	}
+	const counter = counterMessage();
+
 	const describedBy =
 		[hint ? hintId : null, typos.length > 0 ? typosId : null]
 			.filter(Boolean)
@@ -404,7 +443,7 @@ export function TemplateField({
 							className={FIELD_BUTTON_CLASS}
 							onClick={() => onChange(defaultValue)}
 						>
-							Use default
+							Restore original
 						</Button>
 					) : null}
 					<Button
@@ -416,7 +455,7 @@ export function TemplateField({
 						onMouseDown={(e) => e.preventDefault()}
 						onClick={openManually}
 					>
-						Insert variable
+						Add a detail
 					</Button>
 				</div>
 			</div>
@@ -452,6 +491,7 @@ export function TemplateField({
 						}
 						className={cn(
 							"relative border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
+							TEXTAREA_INK_CLASS,
 							!multiline && "min-h-0",
 						)}
 						onChange={(e) => {
@@ -498,16 +538,16 @@ export function TemplateField({
 				</p>
 			) : null}
 
-			<p
-				className={cn(
-					"text-xs",
-					over ? "text-warning-foreground" : "text-muted-foreground",
-				)}
-			>
-				{bullets
-					? `${storedLines.length} of ${bullets.max} bullets, longest line ${longest} / ${bullets.perLine}`
-					: `${stored.length} / ${limit}`}
-			</p>
+			{counter ? (
+				<p
+					className={cn(
+						"text-xs",
+						over ? "text-warning-foreground" : "text-muted-foreground",
+					)}
+				>
+					{counter}
+				</p>
+			) : null}
 
 			{typos.length > 0 ? (
 				<ul id={typosId} className="space-y-1 text-sm">
@@ -515,7 +555,7 @@ export function TemplateField({
 						<li key={name} className="flex flex-wrap items-center gap-2">
 							{suggestion ? (
 								<>
-									<span>{`Not a variable: {${name}}. Did you mean ${suggestion.label}?`}</span>
+									<span>{`GavelUp doesn't recognize {${name}}. Did you mean ${suggestion.label}?`}</span>
 									<Button
 										type="button"
 										variant="ghost"
@@ -528,7 +568,7 @@ export function TemplateField({
 								</>
 							) : (
 								<span>
-									Not a variable: {`{${name}}`}. It will show exactly as typed.
+									{`GavelUp doesn't recognize {${name}}, so it will show exactly as typed.`}
 								</span>
 							)}
 						</li>
