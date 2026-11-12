@@ -235,9 +235,9 @@ export function PromoTemplateEditor({
 					data-testid="promo-template-invalid"
 					className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-sm"
 				>
-					Your club's saved template couldn't be read, so the default is shown
-					below and is what drafts use for now. Saving replaces the stored one
-					with what you see here.
+					Your club's saved template couldn't be read, so GavelUp's template is
+					shown below and is what drafts use for now. Saving replaces the stored
+					one with what you see here.
 				</p>
 			) : null}
 

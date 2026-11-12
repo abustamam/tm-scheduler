@@ -124,7 +124,7 @@ export function GuestInviteTemplateEditor({
 			const [k, f] = path as [InviteKind?, GuestInviteField?];
 			toast.error(
 				k && f
-					? `${INVITE_KIND_LABELS[k]}: the ${FIELD_LABEL[f].toLowerCase()} is too long.`
+					? `${INVITE_KIND_LABELS[k]}: the ${FIELD_LABEL[f].toLowerCase()} is empty or too long.`
 					: "Check the templates: a field is empty or too long.",
 			);
 			return;
@@ -159,7 +159,7 @@ export function GuestInviteTemplateEditor({
 			// whatever is in the form, saved or not.
 			setFields((prev) => ({ ...prev, [k]: defaults[k] }));
 			setBaseline((prev) => ({ ...prev, [k]: defaults[k] }));
-			toast.success(`${INVITE_KIND_LABELS[k]} is back to GavelUp's template.`);
+			toast.success(`${INVITE_KIND_LABELS[k]} is back to GavelUp's wording.`);
 			await onSaved();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");

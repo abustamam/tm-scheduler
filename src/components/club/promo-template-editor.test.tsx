@@ -13,12 +13,14 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("#/server/promo", () => ({
 	updatePromoTemplate: vi.fn(async () => ({ ok: true })),
 	resetPromoTemplate: vi.fn(async () => ({ ok: true })),
 	getPromoContext: vi.fn(),
 }));
 
+import { toast } from "sonner";
 import {
 	DEFAULT_PROMO_TEMPLATE,
 	type FlyerMeeting,
@@ -258,9 +260,9 @@ describe("editor wiring, round two (#1536)", () => {
 		expect(headline.value).toBe("Saved headline");
 	});
 
-	// protects=Reset to default calls resetPromoTemplate exactly once; fails_when=it is called twice or never;
+	// protects=Start over calls resetPromoTemplate exactly once; fails_when=it is called twice or never;
 	// no_claim=what the server stores (null) or the toast.
-	it("Reset to default calls resetPromoTemplate once", async () => {
+	it("Start over calls resetPromoTemplate once", async () => {
 		const { user } = renderEditor();
 		await user.click(
 			screen.getByRole("button", { name: /start over with gavelup/i }),
@@ -282,11 +284,45 @@ describe("a stored template that no longer parses", () => {
 		expect(screen.getByTestId("promo-template-invalid").textContent).toMatch(
 			/couldn't be read/,
 		);
+		expect(screen.getByTestId("promo-template-invalid").textContent).toContain(
+			"so GavelUp's template is shown below and is what drafts use for now",
+		);
 	});
 
 	it("shows nothing when the template is fine (control)", () => {
 		renderEditor();
 		expect(screen.queryByTestId("promo-template-invalid")).toBeNull();
+	});
+});
+
+describe("plain wording on the editor", () => {
+	// protects=the Why join field says how its lines work, and the Start over note renders;
+	// fails_when=either sentence is dropped or reworded; no_claim=where they sit on the page.
+	it("shows the Why join hint and the Start over note", () => {
+		renderEditor();
+		expect(screen.getByText("One reason per line.")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Starting over also picks up improvements GavelUp makes to its template later.",
+			),
+		).toBeTruthy();
+	});
+
+	// protects=an over-long headline stops the save and names the field in the toast;
+	// fails_when=the toast is generic, names no field, or the save goes to the server;
+	// no_claim=the other fields' labels.
+	it("a save with an over-long headline toasts which field to check", async () => {
+		vi.mocked(toast.error).mockClear();
+		const { user } = renderEditor();
+		const headline = screen.getByLabelText("Headline");
+		await user.clear(headline);
+		await user.click(headline);
+		await user.paste("x".repeat(500));
+		await user.click(screen.getByRole("button", { name: /save template/i }));
+		expect(toast.error).toHaveBeenCalledWith(
+			'Check "Headline": it is empty or too long.',
+		);
+		expect(updatePromoTemplate).not.toHaveBeenCalled();
 	});
 });
 

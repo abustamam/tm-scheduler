@@ -146,7 +146,7 @@ export function VariableMenu({
 					// biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: the listbox the textarea's aria-activedescendant names (#1536)
 					role="listbox"
 					id={listboxId}
-					aria-label="Variables"
+					aria-label="Details"
 					className="max-h-72 overflow-y-auto"
 				>
 					{groupsOf(options).map((group) => {

@@ -213,7 +213,7 @@ export function TemplateField({
 	}, [suppression, caret, value]);
 
 	// The opening announcement is cleared on close, so reopening changes the
-	// live region's text again and is read out. A just-set "Inserted X" stays.
+	// live region's text again and is read out. A just-set "Added X" stays.
 	const openingText = `${variables.length} details, use up and down then Enter`;
 	useEffect(() => {
 		if (open) setAnnounce(openingText);
@@ -410,9 +410,11 @@ export function TemplateField({
 		if (bullets) {
 			if (storedLines.length > bullets.max)
 				return `Keep it to ${bullets.max} reasons (you have ${storedLines.length})`;
-			const idx = storedLines.findIndex((l) => l.length > bullets.perLine);
+			// The number the user sees in the textarea, so blank lines count.
+			const rawLines = stored.split(/\r?\n/).map((l) => l.trim());
+			const idx = rawLines.findIndex((l) => l.length > bullets.perLine);
 			if (idx >= 0) {
-				const excess = storedLines[idx].length - bullets.perLine;
+				const excess = rawLines[idx].length - bullets.perLine;
 				return `Line ${idx + 1} is ${excess} ${excess === 1 ? "character" : "characters"} too long`;
 			}
 			return null;

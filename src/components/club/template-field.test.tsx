@@ -131,10 +131,10 @@ describe("opening the menu", () => {
 		expect(listbox()).toBeNull();
 	});
 
-	// protects=Escape on a menu opened with Insert variable closes it even when an @ trigger sits
+	// protects=Escape on a menu opened with Add a detail closes it even when an @ trigger sits
 	// underneath; fails_when=the @ keeps the menu open after Escape;
-	// no_claim=Insert variable's pick position (the picking tests).
-	it("Escape after @ then Insert variable closes the menu", async () => {
+	// no_claim=Add a detail's pick position (the picking tests).
+	it("Escape after @ then Add a detail closes the menu", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
 		await user.click(screen.getByRole("button", { name: "Add a detail" }));
@@ -207,10 +207,10 @@ describe("picking", () => {
 		expect(document.activeElement).toBe(ta);
 	});
 
-	// protects=Insert variable opens the same listbox, focus in the textarea, pick at the last caret;
+	// protects=Add a detail opens the same listbox, focus in the textarea, pick at the last caret;
 	// fails_when=it inserts at the end or steals focus;
 	// no_claim=the phone keyboard staying up.
-	it("Insert variable inserts at the last caret position", async () => {
+	it("Add a detail inserts at the last caret position", async () => {
 		const { user, ta } = setup({ initial: "ab cd" });
 		await user.click(ta);
 		ta.setSelectionRange(2, 2);
@@ -224,7 +224,7 @@ describe("picking", () => {
 
 	// protects=a never-focused field gets the variable at its end; fails_when=it is lost or put at the start;
 	// no_claim=a replaced selection (the last-caret test covers a collapsed caret only).
-	it("Insert variable on a never-focused field appends", async () => {
+	it("Add a detail on a never-focused field appends", async () => {
 		const { user, ta } = setup({ initial: "Hello " });
 		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		await user.click(screen.getByRole("option", { name: /^Date/ }));
@@ -304,9 +304,9 @@ describe("accessibility", () => {
 });
 
 describe("controls and announcements", () => {
-	// protects=the Insert variable button carries the 44px-below-md class, read from the component's
+	// protects=the Add a detail button carries the 44px-below-md class, read from the component's
 	// constant; fails_when=the class is dropped from the button; no_claim=real rendered height (QA pass).
-	it("Insert variable carries FIELD_BUTTON_CLASS", () => {
+	it("Add a detail carries FIELD_BUTTON_CLASS", () => {
 		setup();
 		const button = screen.getByRole("button", { name: "Add a detail" });
 		for (const c of FIELD_BUTTON_CLASS.split(" "))
@@ -316,7 +316,7 @@ describe("controls and announcements", () => {
 
 	// protects=a reopened menu is announced again: the opening text is cleared on close;
 	// fails_when=open, Escape, reopen leaves the same live-region text and so says nothing;
-	// no_claim=that a screen reader speaks it, or that an "Inserted X" survives (the announce test).
+	// no_claim=that a screen reader speaks it, or that an "Added X" survives (the announce test).
 	it("empties the opening announcement while the menu is closed", async () => {
 		const { user, ta } = setup();
 		const live = () =>
@@ -425,7 +425,29 @@ describe("counter, typos and defaults", () => {
 			bullets: { perLine: 10, max: 5 },
 			initial: "ok\n\nfine\nabcdefghijkl",
 		});
-		expect(screen.getByText("Line 3 is 2 characters too long")).toBeTruthy();
+		// The number the user sees in the textarea: the blank line counts.
+		expect(screen.getByText("Line 4 is 2 characters too long")).toBeTruthy();
+	});
+
+	// protects=the look is literal: transparent textarea ink over a visible backdrop, round pills, hidden braces;
+	// fails_when=the textarea paints its own text, the backdrop is transparent, a pill is not round or a brace shows;
+	// no_claim=painted pixels or alignment.
+	it("paints the textarea transparent over a visible backdrop with round pills", () => {
+		const { ta } = setup({ initial: "a {Date}" });
+		expect(ta.classList.contains("text-transparent")).toBe(true);
+		expect(ta.classList.contains("caret-foreground")).toBe(true);
+		const backdrop = document.querySelector(
+			'[data-slot="template-field-backdrop"]',
+		);
+		expect(backdrop?.classList.contains("text-foreground")).toBe(true);
+		expect(backdrop?.classList.contains("text-transparent")).toBe(false);
+		const pill = document.querySelector('[data-slot="template-pill"]');
+		expect(pill?.classList.contains("rounded-full")).toBe(true);
+		const braces = pill?.querySelectorAll("span") ?? [];
+		expect(braces.length).toBe(2);
+		for (const brace of braces) {
+			expect(brace.classList.contains("text-transparent")).toBe(true);
+		}
 	});
 
 	// protects=a known variable paints as a pill with invisible braces and a visible label; an unknown token keeps visible braces;
@@ -478,10 +500,10 @@ describe("counter, typos and defaults", () => {
 		expect(screen.queryByRole("button", { name: "Fix" })).toBeNull();
 	});
 
-	// protects=Use default only when changed, restores the default;
+	// protects=Restore original only when changed, restores the default;
 	// fails_when=it shows on an unchanged field or does not restore;
 	// no_claim=the absence of a server call (this component has none to call).
-	it("Use default appears after an edit and restores the default", async () => {
+	it("Restore original appears after an edit and restores the default", async () => {
 		const { user, ta } = setup({ initial: "Default {Date}" });
 		expect(
 			screen.queryByRole("button", { name: "Restore original" }),
