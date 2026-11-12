@@ -1304,7 +1304,12 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		});
 		const { report } = await apply(stored.importId, resolutions);
 		const by = (k: string) => report.counts.find((c) => c.key === k);
-		expect(by("role_assignments")?.missing).toEqual(["644304:1"]);
+		// The kept holder is listed as not imported (#1588), not as missing.
+		expect(by("role_assignments")?.missing).toEqual([]);
+		expect(
+			report.notImported.find((r) => r.what === "Kept GavelUp's holder")
+				?.sourceIds,
+		).toEqual(["644304:1"]);
 		expect(by("awards")?.missing).toEqual(["644304:best_speaker"]);
 		expect(report.reconciled).toBe(false);
 		// And the others, held by who the bundle says, still reconcile.
@@ -1368,6 +1373,110 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		const by = (k: string) => report.counts.find((c) => c.key === k);
 		expect(by("awards")?.missing).toEqual([]);
 		expect(by("role_assignments")?.missing).toEqual([]);
+		expect(report.reconciled).toBe(true);
+	});
+
+	// -- Kept holders and speeches on past meetings (#1588) ---------------------
+
+	/** Applies once, then returns the first member speech's ref, its slot and its role_slot ref. */
+	async function applyAndFindSpeechSlot() {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		await apply(stored.importId, resolutions);
+		const speechRef = (await refsOfKind("speech"))[0];
+		const [slot] = await testDb
+			.select()
+			.from(roleSlots)
+			.where(eq(roleSlots.speechId, speechRef?.targetId as string));
+		const slotRef = (await refsOfKind("role_slot")).find(
+			(r) => r.targetId === slot?.id,
+		);
+		return { stored, resolutions, speechRef, slot, slotRef };
+	}
+	const forgetRef = (kind: string, sourceId: string) =>
+		testDb
+			.delete(importRefs)
+			.where(
+				and(
+					eq(importRefs.clubId, seed.clubId),
+					eq(importRefs.kind, kind as never),
+					eq(importRefs.sourceId, sourceId),
+				),
+			);
+
+	it("a speech the slot already has is kept and listed as such, once, and a re-run adds none", async () => {
+		const { stored, resolutions, speechRef, slot } =
+			await applyAndFindSpeechSlot();
+		// The import's own ref is gone: the slot's speech is GavelUp's now.
+		await forgetRef("speech", speechRef?.sourceId as string);
+		const before = await counts();
+		const { report } = await apply(stored.importId, resolutions);
+		expect((await counts()).speeches).toBe(before.speeches);
+		const [after] = await testDb
+			.select({ speechId: roleSlots.speechId })
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot?.id as string));
+		expect(after?.speechId).toBe(slot?.speechId);
+		const kept = report.notImported.filter(
+			(r) => r.what === "Kept GavelUp's speech",
+		);
+		expect(kept.flatMap((r) => r.sourceIds)).toEqual([speechRef?.sourceId]);
+		expect(report.reconciled).toBe(true);
+	});
+
+	it("a speech that is attached, or already has its ref, records no omission", async () => {
+		const stored = await upload();
+		const { resolutions } = await resolveAll(stored.importId);
+		const first = await apply(stored.importId, resolutions);
+		const second = await apply(stored.importId, resolutions);
+		for (const { report } of [first, second]) {
+			expect(report.notImported.map((r) => r.what)).not.toContain(
+				"Kept GavelUp's speech",
+			);
+			expect(report.notImported.map((r) => r.what)).not.toContain(
+				"Kept GavelUp's holder",
+			);
+			expect(report.reconciled).toBe(true);
+		}
+	});
+
+	it("a slot re-assigned after its import, ref intact, records no kept-holder omission", async () => {
+		const { stored, resolutions, slot } = await applyAndFindSpeechSlot();
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: seed.memberId, assignedGuestId: null })
+			.where(eq(roleSlots.id, slot?.id as string));
+		const { report } = await apply(stored.importId, resolutions);
+		expect(report.notImported.map((r) => r.what)).not.toContain(
+			"Kept GavelUp's holder",
+		);
+	});
+
+	it("a kept holder with a source speech lists both, each once", async () => {
+		const { stored, resolutions, speechRef, slot, slotRef } =
+			await applyAndFindSpeechSlot();
+		await forgetRef("speech", speechRef?.sourceId as string);
+		await forgetRef("role_slot", slotRef?.sourceId as string);
+		await testDb
+			.update(roleSlots)
+			.set({ assignedMemberId: seed.memberId, assignedGuestId: null })
+			.where(eq(roleSlots.id, slot?.id as string));
+		const { report } = await apply(stored.importId, resolutions);
+		const ids = (what: string) =>
+			report.notImported
+				.filter((r) => r.what === what)
+				.flatMap((r) => r.sourceIds);
+		expect(ids("Kept GavelUp's holder")).toEqual([slotRef?.sourceId]);
+		expect(ids("Kept GavelUp's speech")).toEqual([speechRef?.sourceId]);
+		const [after] = await testDb
+			.select({
+				member: roleSlots.assignedMemberId,
+				speechId: roleSlots.speechId,
+			})
+			.from(roleSlots)
+			.where(eq(roleSlots.id, slot?.id as string));
+		expect(after?.member).toBe(seed.memberId);
+		expect(after?.speechId).toBe(slot?.speechId);
 		expect(report.reconciled).toBe(true);
 	});
 
