@@ -136,6 +136,17 @@ const OP = () => ({
 	status: "present" as const,
 });
 
+/** A queued award change, the op #1600 is about. */
+const AWARD_OP = () => ({
+	type: "setAward" as const,
+	opId: "op-award",
+	queuedAt: 3,
+	category: "best_speaker" as const,
+	name: "Jane",
+	isGuest: false,
+	memberId: "m1",
+});
+
 /** A SECOND op with a distinct `opId`, so a test can tell whose queue is whose:
  *  `op-1` belongs to the meeting that was left, `op-2` to the one arrived at. */
 const OP2 = () => ({
@@ -376,7 +387,7 @@ describe("useOfflineMinutes", () => {
 		// no_claim=the query-cache invalidation itself (route-level wiring)
 		const onMutated = vi.fn(async (_meetingId: string) => {});
 		ONLINE = true;
-		QUEUED = [OP()];
+		QUEUED = [AWARD_OP()];
 		const { result } = renderHook(() =>
 			useOfflineMinutes({ meetingId: "meet-1", onMutated }),
 		);

@@ -13,6 +13,7 @@ import {
 } from "#/server/minutes";
 import type { AwardCategory } from "#/server/minutes-logic";
 import { getVoteTally } from "#/server/voting";
+import { refreshAfterMeetingWrite } from "./refresh-after-meeting-write";
 import { voteTallyKey } from "./vote-counter-panel";
 
 /**
@@ -170,8 +171,10 @@ export function useMeetingVotes(args: {
 	// The console's winner box reads the tally; do not make it wait for the
 	// next 5s poll (#1580).
 	async function refreshAfterWinnerWrite() {
-		await queryClient.invalidateQueries({ queryKey: voteTallyKey(meetingId) });
-		await router.invalidate();
+		await refreshAfterMeetingWrite(
+			{ invalidateRouter: () => router.invalidate(), queryClient },
+			meetingId,
+		);
 	}
 
 	async function handleSetVoteWinner(
