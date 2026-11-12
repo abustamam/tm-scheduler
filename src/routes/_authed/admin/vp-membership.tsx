@@ -58,7 +58,7 @@ import {
 	convertNoticeDescription,
 	isStrandedConvertedGuest,
 } from "#/lib/guest-convert";
-import { inviteKindFor, isInvitableStage } from "#/lib/guest-invite";
+import { inviteKindFor, isInvitableGuest } from "#/lib/guest-invite";
 import {
 	customTemplateFor,
 	type GuestInviteTemplates,
@@ -249,6 +249,15 @@ function VpMembership() {
 	} = Route.useLoaderData();
 	// Kind / home club / introducer per guest (#1050), keyed for the rows.
 	const profileById = new Map(profiles.rows.map((p) => [p.guestId, p]));
+	// Visiting Toastmasters are outside the follow-up funnel (#1608): the four
+	// lanes hold `visitor` guests only, and the rest are listed apart. A guest
+	// with no profile entry reads as a visitor.
+	const isVisiting = (g: { id: string }) =>
+		profileById.get(g.id)?.kind === "visiting_toastmaster";
+	const funnelGuests = guests.filter((g) => !isVisiting(g));
+	const visitingToastmasters = guests
+		.filter(isVisiting)
+		.sort((a, b) => a.name.localeCompare(b.name));
 	const router = useRouter();
 	const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -413,7 +422,7 @@ function VpMembership() {
 
 			<div id="guest-pipeline" className="scroll-mt-24 space-y-6">
 				{STAGES.map((stage) => {
-					const inStage = guests.filter((g) => g.stage === stage.id);
+					const inStage = funnelGuests.filter((g) => g.stage === stage.id);
 					return (
 						<Section
 							key={stage.id}
@@ -452,6 +461,45 @@ function VpMembership() {
 					);
 				})}
 			</div>
+
+			{visitingToastmasters.length > 0 ? (
+				<details
+					data-testid="visiting-toastmasters"
+					className="rounded-2xl border border-border bg-surface-raised"
+				>
+					<summary className="cursor-pointer px-5 py-3 text-sm font-bold">
+						Visiting Toastmasters ({visitingToastmasters.length})
+					</summary>
+					<p className="px-5 pb-2 text-xs text-muted-foreground">
+						Toastmasters from other clubs. They take roles and sign the guest
+						book, and are not followed up.
+					</p>
+					<div className="border-t border-border">
+						{visitingToastmasters.map((g) => (
+							<GuestRow
+								key={g.id}
+								guest={g}
+								profile={profileById.get(g.id) ?? null}
+								clubId={clubId}
+								busy={busyId === g.id}
+								onMove={move}
+								onConvert={convert}
+								otherAdminClubs={otherAdminClubs ?? NO_OTHER_CLUBS}
+								timezone={inviteContext.timezone}
+								invite={{
+									clubName,
+									readOnly,
+									nextMeeting: next,
+									shareUrl: inviteShareUrl,
+									templates: guestInviteTemplates ?? NO_INVITE_TEMPLATES,
+									joinLink: inviteContext.joinLink ?? null,
+									onRecord: recordInvite,
+								}}
+							/>
+						))}
+					</div>
+				</details>
+			) : null}
 
 			<BroughtBySection brought={profiles.brought} />
 
@@ -735,7 +783,16 @@ function GuestRow({
 	const firstVisit = guest.firstVisitAt
 		? `first ${formatShortDate(guest.firstVisitAt, timezone)}`
 		: null;
-	const invitable = isInvitableStage(guest.stage);
+	const outsideFunnel = profile?.kind === "visiting_toastmaster";
+	// The Visiting Toastmasters section also shows the last visit (#1608).
+	const lastVisit =
+		outsideFunnel && guest.lastVisitAt
+			? `last ${formatShortDate(guest.lastVisitAt, timezone)}`
+			: null;
+	const invitable = isInvitableGuest({
+		stage: guest.stage,
+		kind: profile?.kind ?? "visitor",
+	});
 	const invited = inviteHistory(guest, timezone, new Date());
 	// Phone and email used to be joined into one string, which can't carry a
 	// link. They are elements now, so the "·" between them is an element too —
@@ -855,6 +912,7 @@ function GuestRow({
 					<div className="text-xs text-muted-foreground">
 						{visits}
 						{firstVisit ? ` · ${firstVisit}` : ""}
+						{lastVisit ? ` · ${lastVisit}` : ""}
 					</div>
 					{broughtBy ? (
 						<div
@@ -896,6 +954,7 @@ function GuestRow({
 					onMove={onMove}
 					onConvert={onConvert}
 					otherAdminClubs={otherAdminClubs}
+					outsideFunnel={outsideFunnel}
 				/>
 			</div>
 		</div>
@@ -940,6 +999,7 @@ function GuestRowActions({
 	onMove,
 	onConvert,
 	otherAdminClubs,
+	outsideFunnel,
 }: {
 	guest: PipelineGuestRow;
 	clubId: string;
@@ -947,6 +1007,8 @@ function GuestRowActions({
 	onMove: (guestId: string, stage: ManualGuestStage) => void;
 	onConvert: ConvertGuest;
 	otherAdminClubs: OtherAdminClub[];
+	/** A Visiting Toastmaster (#1608): no lane to move between; Joined… only. */
+	outsideFunnel: boolean;
 }) {
 	const router = useRouter();
 	const [joinedOpen, setJoinedOpen] = useState(false);
@@ -1082,6 +1144,17 @@ function GuestRowActions({
 				<span className="rounded-full bg-success px-2.5 py-1 text-xs font-bold text-success-foreground">
 					Member
 				</span>
+			) : outsideFunnel ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={busy}
+					onClick={() => setJoinedOpen(true)}
+				>
+					<UserPlus className="size-4" aria-hidden />
+					Joined…
+				</Button>
 			) : (
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>

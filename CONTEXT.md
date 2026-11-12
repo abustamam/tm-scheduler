@@ -120,7 +120,11 @@ the nouns in `src/db/schema.ts`.
   #1046). Two kinds. `visitor` (the default, and every guest that existed before the column did) is
   someone checking the club out — the prospect the **Guest pipeline** exists for; it is labelled
   **"Guest"** everywhere (the stored value is historical). `visiting_toastmaster` is a Toastmaster
-  from ANOTHER club, attending or speaking: a guest here, but never a prospect. A **guest speaker**
+  from ANOTHER club, attending or speaking: a guest here, but never a prospect. They are outside the
+  follow-up funnel (#1608): no VP Membership lane, no invite, no stage move (the server refuses both
+  and leaves the stored `stage` alone); the board lists them in a collapsed "Visiting Toastmasters"
+  section. They still take roles and sign the guest book. A club's sponsor, mentors and nearby-club
+  helpers are recorded this way. A **guest speaker**
   is not a kind (#1208): it is a guest holding a **Speech**, and a Toastmaster from another club who
   speaks is a `visiting_toastmaster` (Easy-Speak's "Guest Speaker" section imports as one). `home_club` is free text naming their own club, and `introduced_by_member_id`
   the member who brought them (SET NULL when that member is deleted). A guest may OWN a
