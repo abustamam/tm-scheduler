@@ -13,8 +13,10 @@ import {
 	clubs,
 	meetings,
 	meetingTemplateBeats,
+	meetingTemplateRoles,
 	meetingTemplates,
 } from "#/db/schema";
+import { MAX_TEMPLATE_BEATS } from "#/lib/meeting-template-limits";
 import {
 	cleanup,
 	hasTestDb,
@@ -28,7 +30,33 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 /** Runs once after the tool's plan reads the snapshot, to land a race. */
 const hook = vi.hoisted(() => ({
 	afterSnapshot: null as null | (() => Promise<void>),
+	/** Runs once just before the seam, after the tool's own checks and hash comparison. */
+	beforeSeam: null as null | (() => Promise<void>),
+	/** Thrown once by the seam wrapper instead of calling the seam. */
+	seamThrows: null as null | Error,
 }));
+vi.mock("#/server/meeting-templates-logic", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("#/server/meeting-templates-logic")>();
+	return {
+		...actual,
+		saveMeetingAgendaAsClubTemplate: async (
+			...args: Parameters<typeof actual.saveMeetingAgendaAsClubTemplate>
+		) => {
+			const before = hook.beforeSeam;
+			if (before) {
+				hook.beforeSeam = null;
+				await before();
+			}
+			const thrown = hook.seamThrows;
+			if (thrown) {
+				hook.seamThrows = null;
+				throw thrown;
+			}
+			return actual.saveMeetingAgendaAsClubTemplate(...args);
+		},
+	};
+});
 vi.mock("#/server/meeting-agenda-edit-logic", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("#/server/meeting-agenda-edit-logic")>();
@@ -54,7 +82,15 @@ const { saveAgendaAsTemplateTool } = await import(
 const { editAgendaTool } = await import("#/server/mcp/tools/edit-agenda");
 const { getAgendaTool } = await import("#/server/mcp/tools/get-agenda");
 const { hashApiToken } = await import("#/server/api-tokens-logic");
-const { loadAgendaDraft } = await import("#/server/meeting-agenda-edit-logic");
+const { loadAgendaDraft, AGENDA_DEADLOCK_MESSAGE } = await import(
+	"#/server/meeting-agenda-edit-logic"
+);
+const { TemplateTooLargeError } = await import(
+	"#/server/meeting-templates-logic"
+);
+const { REPLACE_TARGET_NOT_LISTED_MESSAGE } = await import(
+	"#/server/mcp/tools/list-agenda-templates"
+);
 
 type Row = {
 	kind: string;
@@ -113,6 +149,23 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 			.orderBy(asc(meetingTemplateBeats.sortOrder));
 		return rows.map(({ id: _i, templateId: _t, ...rest }) => rest);
 	}
+	async function templateRoles(templateId: string) {
+		const rows = await testDb
+			.select()
+			.from(meetingTemplateRoles)
+			.where(eq(meetingTemplateRoles.templateId, templateId))
+			.orderBy(asc(meetingTemplateRoles.key));
+		return rows.map(({ id: _i, templateId: _t, ...rest }) => rest);
+	}
+	const shown = (r: Row) => ({
+		kind: r.kind,
+		label: r.label,
+		detail: r.detail,
+		minutes: r.minutes,
+		roleKey: r.roleKey,
+	});
+	const projected = (rows: Awaited<ReturnType<typeof templateRows>>): Row[] =>
+		rows.map(shown);
 	async function clubTemplates() {
 		return testDb
 			.select()
@@ -129,6 +182,8 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 
 	beforeEach(async () => {
 		hook.afterSnapshot = null;
+		hook.beforeSeam = null;
+		hook.seamThrows = null;
 		seed = await seedClub();
 		other = await seedClub();
 		token = await mint(seed.adminUserId);
@@ -169,6 +224,12 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		});
 		const rows = await templateRows(out.templateId);
 		expect(rows.map((r) => `${r.label}|${r.minutes}`)).toEqual(agendaBefore);
+		// Every stored column, not only what a person reads, and the roles too.
+		const copy = (await storedDefs()) ?? "";
+		expect(rows).toEqual(await templateRows(copy));
+		expect(await templateRoles(out.templateId)).toEqual(
+			await templateRoles(copy),
+		);
 		expect(await agendaRows()).toEqual(agendaBefore);
 	});
 
@@ -180,12 +241,14 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		const agendaBefore = await agendaRows();
 		const p = (await save(newTarget)) as Preview;
 		const out = (await save(newTarget, { planHash: p.planHash })) as Applied;
-		expect(
-			(await templateRows(out.templateId)).map(
-				(r) => `${r.label}|${r.minutes}`,
-			),
-		).toEqual(agendaBefore);
-		expect(await storedDefs()).not.toBeNull();
+		const rows = await templateRows(out.templateId);
+		expect(rows.map((r) => `${r.label}|${r.minutes}`)).toEqual(agendaBefore);
+		const copy = await storedDefs();
+		expect(copy).not.toBeNull();
+		expect(rows).toEqual(await templateRows(copy ?? ""));
+		expect(await templateRoles(out.templateId)).toEqual(
+			await templateRoles(copy ?? ""),
+		);
 		expect(await agendaRows()).toEqual(agendaBefore);
 	});
 
@@ -220,9 +283,7 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 			});
 		const target = { mode: "replace", templateId: first.templateId };
 		const p2 = (await save(target)) as Preview;
-		expect(p2.plan.target.currentRows?.map((r) => r.label)).toEqual(
-			oldRows.map((r) => r.label),
-		);
+		expect(p2.plan.target.currentRows).toEqual(projected(oldRows));
 		const out = (await save(target, { planHash: p2.planHash })) as Applied;
 		expect(out.templateId).toBe(first.templateId);
 		const [t] = await testDb
@@ -233,6 +294,12 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		const rows = await templateRows(first.templateId);
 		expect(rows[0]?.label).toBe("Roleplay");
 		expect(rows).toHaveLength(oldRows.length + 1);
+		// Every stored column equals the meeting's own copy, which now carries it.
+		const copy = (await storedDefs()) ?? "";
+		expect(rows).toEqual(await templateRows(copy));
+		expect(await templateRoles(first.templateId)).toEqual(
+			await templateRoles(copy),
+		);
 	});
 
 	// protects=end to end: an edit_agenda row lands in the saved template;
@@ -377,19 +444,22 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		}
 	});
 
-	// protects=a field from the other mode, and an unknown field, are VALIDATION; a blank name too;
-	// fails_when=the union is loose;
+	// protects=a field from the other mode, an unknown field, and a blank name are each VALIDATION, and the refusal is not INTERNAL;
+	// fails_when=the union is loose, or a schema failure escapes as a thrown zod error;
 	// no_claim=the zod message text.
-	it("rejects a wrong-mode field and a blank name", async () => {
-		await expect(
-			save({ mode: "new", name: "A", templateId: randomUUID() }),
-		).rejects.toBeDefined();
-		await expect(
-			save({ mode: "replace", templateId: randomUUID(), name: "A" }),
-		).rejects.toBeDefined();
-		await expect(save({ mode: "new", name: "   " })).rejects.toMatchObject({
-			code: "VALIDATION",
-		});
+	it.each([
+		[
+			"a templateId on mode new",
+			{ mode: "new", name: "A", templateId: randomUUID() },
+		],
+		[
+			"a name on mode replace",
+			{ mode: "replace", templateId: randomUUID(), name: "A" },
+		],
+		["an unknown field", { mode: "new", name: "A", bogus: 1 }],
+		["a blank name", { mode: "new", name: "   " }],
+	])("VALIDATION for %s", async (_n, target) => {
+		await expect(save(target)).rejects.toMatchObject({ code: "VALIDATION" });
 	});
 
 	// protects=a member and another club's officer get FORBIDDEN and nothing is written;
@@ -426,6 +496,168 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		await expect(
 			save(newTarget, { planHash: p.planHash }),
 		).rejects.toMatchObject({ code: "ARCHIVED" });
+		expect(
+			(await clubTemplates()).filter((t) => t.meetingId === null),
+		).toHaveLength(0);
+	});
+
+	// protects=materialising a never-opened meeting between preview and apply (no content change) does NOT make the plan stale;
+	// fails_when=the never-opened hash input differs in shape or value from the stored copy's (a false PLAN_STALE);
+	// no_claim=a real content change after materialisation, covered by the stale tests.
+	it("never-opened: materialisation alone is not PLAN_STALE", async () => {
+		expect(await storedDefs()).toBeNull();
+		const p = (await save(newTarget)) as Preview;
+		await loadAgendaDraft(seed.meetingId); // what the editor's page load does
+		expect(await storedDefs()).not.toBeNull();
+		const out = (await save(newTarget, { planHash: p.planHash })) as Applied;
+		expect(out.applied).toBe(true);
+	});
+
+	// protects=a change to a replace TARGET column the rows do not show (handoff) between preview and apply is PLAN_STALE and the target keeps the changed content;
+	// fails_when=the target is represented only by its shown rows (no content hash), so an overwrite lands on content the officer never saw;
+	// no_claim=none.
+	it("replace: a target-side change between preview and apply is PLAN_STALE", async () => {
+		const p1 = (await save(newTarget)) as Preview;
+		const first = (await save(newTarget, { planHash: p1.planHash })) as Applied;
+		const target = { mode: "replace", templateId: first.templateId };
+		const p2 = (await save(target)) as Preview;
+		await testDb
+			.update(meetingTemplateBeats)
+			.set({ handoff: true })
+			.where(eq(meetingTemplateBeats.templateId, first.templateId));
+		await expect(save(target, { planHash: p2.planHash })).rejects.toMatchObject(
+			{ code: "PLAN_STALE" },
+		);
+		expect(
+			(await templateRows(first.templateId)).every((r) => r.handoff === true),
+		).toBe(true);
+	});
+
+	// protects=a cancel landing AFTER the tool's own check, caught by the seam's own sentence, is LOCKED meeting_cancelled and writes no template;
+	// fails_when=SAVE_CANCELLED_MESSAGE from the seam is unmapped (INTERNAL);
+	// no_claim=the tool's own pre-check, covered by the cancelled test above.
+	it("a cancel landing after the tool's check is LOCKED from the seam", async () => {
+		await loadAgendaDraft(seed.meetingId);
+		const p = (await save(newTarget)) as Preview;
+		const before = await clubTemplates();
+		hook.beforeSeam = async () => {
+			await testDb
+				.update(meetings)
+				.set({ status: "cancelled" })
+				.where(eq(meetings.id, seed.meetingId));
+		};
+		await expect(
+			save(newTarget, { planHash: p.planHash }),
+		).rejects.toMatchObject({
+			code: "LOCKED",
+			detail: { reason: "meeting_cancelled", retryable: false },
+		});
+		expect(await clubTemplates()).toEqual(before);
+	});
+
+	// protects=a replace target deleted after the tool's check, caught by the seam, is NOT_FOUND with the list pointer;
+	// fails_when=CLUB_TEMPLATE_GONE_MESSAGE from the seam is unmapped (INTERNAL);
+	// no_claim=the tool's own target check, covered by the foreign/global/private test.
+	it("a replace target deleted after the tool's check is NOT_FOUND from the seam", async () => {
+		const p1 = (await save(newTarget)) as Preview;
+		const first = (await save(newTarget, { planHash: p1.planHash })) as Applied;
+		const target = { mode: "replace", templateId: first.templateId };
+		const p2 = (await save(target)) as Preview;
+		hook.beforeSeam = async () => {
+			await testDb
+				.delete(meetingTemplates)
+				.where(eq(meetingTemplates.id, first.templateId));
+		};
+		await expect(save(target, { planHash: p2.planHash })).rejects.toMatchObject(
+			{
+				code: "NOT_FOUND",
+				message: REPLACE_TARGET_NOT_LISTED_MESSAGE,
+			},
+		);
+	});
+
+	// protects=the seam's deadlock sentence is LOCKED with a retryable deadlock detail;
+	// fails_when=AGENDA_DEADLOCK_MESSAGE is unmapped (INTERNAL) or marked not retryable;
+	// no_claim=that Postgres really deadlocks here; the seam is made to throw its own constant.
+	it("the seam's deadlock sentence is LOCKED and retryable", async () => {
+		const p = (await save(newTarget)) as Preview;
+		hook.seamThrows = new Error(AGENDA_DEADLOCK_MESSAGE);
+		await expect(
+			save(newTarget, { planHash: p.planHash }),
+		).rejects.toMatchObject({
+			code: "LOCKED",
+			detail: { reason: "deadlock", retryable: true },
+		});
+	});
+
+	// protects=TemplateTooLargeError thrown by the seam is VALIDATION;
+	// fails_when=the class is unmapped (INTERNAL);
+	// no_claim=that the real seam can throw it; it is made to.
+	it("TemplateTooLargeError from the seam is VALIDATION", async () => {
+		const p = (await save(newTarget)) as Preview;
+		hook.seamThrows = new TemplateTooLargeError();
+		await expect(
+			save(newTarget, { planHash: p.planHash }),
+		).rejects.toMatchObject({ code: "VALIDATION" });
+	});
+
+	// protects=a replace target over the beat cap is VALIDATION on preview, not a truncated plan or INTERNAL;
+	// fails_when=TemplateTooLargeError from the target read is unmapped;
+	// no_claim=none.
+	it("a replace target over the beat cap is VALIDATION", async () => {
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: seed.clubId,
+				key: `big-${randomUUID().slice(0, 8)}`,
+				name: "Huge",
+			})
+			.returning({ id: meetingTemplates.id });
+		await testDb.insert(meetingTemplateBeats).values(
+			Array.from({ length: MAX_TEMPLATE_BEATS + 1 }, (_, i) => ({
+				templateId: t?.id ?? "",
+				sortOrder: i,
+				kind: "event" as const,
+				label: `R${i}`,
+				minutes: 1,
+			})),
+		);
+		await expect(
+			save({ mode: "replace", templateId: t?.id }),
+		).rejects.toMatchObject({ code: "VALIDATION" });
+	});
+
+	// protects=a meeting with no agenda rows is VALIDATION "no rows", and one over the cap is VALIDATION "too large to copy";
+	// fails_when=an empty template is saved, or an oversized snapshot is hashed/saved;
+	// no_claim=the exact wording beyond the distinguishing phrase.
+	it("a meeting with zero rows or over the row cap is VALIDATION", async () => {
+		await loadAgendaDraft(seed.meetingId);
+		const copy = (await storedDefs()) ?? "";
+		const beats = await testDb
+			.select()
+			.from(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, copy));
+		await testDb
+			.delete(meetingTemplateBeats)
+			.where(eq(meetingTemplateBeats.templateId, copy));
+		await expect(save(newTarget)).rejects.toMatchObject({
+			code: "VALIDATION",
+			message: expect.stringContaining("no rows"),
+		});
+		await testDb.insert(meetingTemplateBeats).values(
+			Array.from({ length: MAX_TEMPLATE_BEATS + 1 }, (_, i) => ({
+				templateId: copy,
+				sortOrder: i,
+				kind: "event" as const,
+				label: `R${i}`,
+				minutes: 1,
+			})),
+		);
+		await expect(save(newTarget)).rejects.toMatchObject({
+			code: "VALIDATION",
+			message: expect.stringContaining("too large to copy"),
+		});
+		expect(beats.length).toBeGreaterThan(0);
 		expect(
 			(await clubTemplates()).filter((t) => t.meetingId === null),
 		).toHaveLength(0);

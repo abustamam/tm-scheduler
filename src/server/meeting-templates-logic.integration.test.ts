@@ -806,27 +806,46 @@ describe.skipIf(!hasTestDb)("templateContentForHash (#1628)", () => {
 		);
 	});
 
-	// protects=the same value whatever order rows were inserted in (ties on sortOrder broken by id, not insertion);
-	// fails_when=the order depends on physical order;
-	// no_claim=none.
+	// protects=the same value whatever order rows were inserted in: beats by sortOrder, roles by key, not by insertion;
+	// fails_when=the order depends on physical order (beats not ordered by sortOrder, roles not ordered by key);
+	// no_claim=ties on sortOrder are not exercised: meeting_template_beats_order_unique (template_id, sort_order) makes a tie unrepresentable, so the id tie-break is a belt the database already wears.
 	it("is stable across insertion order", async () => {
 		const a = await mk(0);
 		const b = await mk(0);
-		const rows = [3, 1, 2].map((n) => ({
-			sortOrder: n,
-			kind: "event" as const,
-			label: `R${n}`,
-			minutes: n,
+		const beats = [
+			{ sortOrder: 2, label: "mid" },
+			{ sortOrder: 0, label: "zeta" },
+			{ sortOrder: 1, label: "alpha" },
+		].map((r) => ({ ...r, kind: "event" as const, minutes: 1 }));
+		const roles = ["q_z", "q_a", "q_m"].map((key) => ({
+			key,
+			name: key,
+			category: "functionary" as const,
 		}));
 		await testDb
 			.insert(meetingTemplateBeats)
-			.values(rows.map((r) => ({ ...r, templateId: a })));
+			.values(beats.map((r) => ({ ...r, templateId: a })));
 		await testDb
 			.insert(meetingTemplateBeats)
-			.values([...rows].reverse().map((r) => ({ ...r, templateId: b })));
+			.values([...beats].reverse().map((r) => ({ ...r, templateId: b })));
+		await testDb
+			.insert(meetingTemplateRoles)
+			.values(roles.map((r) => ({ ...r, templateId: a })));
+		await testDb
+			.insert(meetingTemplateRoles)
+			.values([...roles].reverse().map((r) => ({ ...r, templateId: b })));
 		const ca = await templateContentForHash(testDb, a);
 		const cb = await templateContentForHash(testDb, b);
-		expect(ca?.beats).toEqual(cb?.beats);
+		expect(ca?.beats.map((x) => x.label)).toEqual(["zeta", "alpha", "mid"]);
+		expect(cb?.beats).toEqual(ca?.beats);
+		expect(ca?.roles.map((r) => r.key)).toEqual([
+			"a_role",
+			"b_role",
+			"q_a",
+			"q_m",
+			"q_z",
+		]);
+		expect(cb?.roles).toEqual(ca?.roles);
 	});
 
 	// protects=a template over the beat cap throws instead of truncating;
@@ -834,6 +853,25 @@ describe.skipIf(!hasTestDb)("templateContentForHash (#1628)", () => {
 	// no_claim=the roles cap shares the same branch and is not separately seeded.
 	it("throws TemplateTooLargeError over the beat cap", async () => {
 		const id = await mk(MAX_TEMPLATE_BEATS + 1);
+		await expect(templateContentForHash(testDb, id)).rejects.toBeInstanceOf(
+			TemplateTooLargeError,
+		);
+	});
+
+	// protects=a template over the roles cap throws instead of truncating;
+	// fails_when=the roles read silently shortens a hash input;
+	// no_claim=the beat cap is the previous test.
+	it("throws TemplateTooLargeError over the roles cap", async () => {
+		const id = await mk(1);
+		await testDb.insert(meetingTemplateRoles).values(
+			Array.from({ length: MAX_TEMPLATE_ROLES - 1 }, (_, i) => ({
+				templateId: id,
+				key: `extra_${i}`,
+				name: "E",
+				category: "functionary" as const,
+			})),
+		);
+		// mk() declared 2 roles, so MAX_TEMPLATE_ROLES + 1 in all.
 		await expect(templateContentForHash(testDb, id)).rejects.toBeInstanceOf(
 			TemplateTooLargeError,
 		);

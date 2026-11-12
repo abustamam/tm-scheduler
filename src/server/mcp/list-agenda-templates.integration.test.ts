@@ -13,6 +13,7 @@ import {
 	meetingTemplateBeats,
 	meetingTemplates,
 } from "#/db/schema";
+import { MAX_TEMPLATE_BEATS } from "#/lib/meeting-template-limits";
 import {
 	cleanup,
 	hasTestDb,
@@ -20,6 +21,7 @@ import {
 	seedClub,
 	testDb,
 } from "#/test/db";
+import { readsOf, statementsDuring } from "#/test/query-spy";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
@@ -52,6 +54,7 @@ describe.skipIf(!hasTestDb)("list_agenda_templates (#1628)", () => {
 	let adminToken: string;
 	let memberToken: string;
 	let globalId: string;
+	const extraGlobals: string[] = [];
 
 	async function mint(userId: string) {
 		const raw = `tmk_${randomUUID().replaceAll("-", "")}`;
@@ -106,9 +109,9 @@ describe.skipIf(!hasTestDb)("list_agenda_templates (#1628)", () => {
 		globalId = await addTemplate(null, `Global ${RUN}`);
 	});
 	afterEach(async () => {
-		await testDb
-			.delete(meetingTemplates)
-			.where(eq(meetingTemplates.id, globalId));
+		for (const id of [globalId, ...extraGlobals.splice(0)]) {
+			await testDb.delete(meetingTemplates).where(eq(meetingTemplates.id, id));
+		}
 		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
 		await cleanup(other.clubId, [other.adminUserId, other.memberUserId]);
 	});
@@ -186,20 +189,81 @@ describe.skipIf(!hasTestDb)("list_agenda_templates (#1628)", () => {
 		expect(g.template?.rows).toHaveLength(2);
 	});
 
-	// protects=another club's template, a meeting's private copy, a disabled global and an unknown id are NOT_FOUND;
-	// fails_when=content is read before the id is checked against the listing;
-	// no_claim=nothing about which of the three leaks if the check moved.
-	it("NOT_FOUND for another club's, a private copy's and an unknown id", async () => {
-		const theirs = await addTemplate(other.clubId, "Theirs");
-		await loadAgendaDraft(seed.meetingId); // stores the meeting's private copy
-		const [priv] = await testDb
-			.select({ id: meetingTemplates.id })
-			.from(meetingTemplates)
-			.where(eq(meetingTemplates.meetingId, seed.meetingId));
-		for (const templateId of [theirs, priv?.id ?? "", randomUUID()]) {
-			await expect(
-				list(adminToken, { clubId: seed.clubId, templateId }),
-			).rejects.toMatchObject({ code: "NOT_FOUND" });
-		}
+	// protects=a templateId the listing did not return (another club's, a meeting's private copy, a disabled global, an unknown id) is NOT_FOUND and NO template content is read for it;
+	// fails_when=content is read before the id is checked against the listing (the beats and roles tables are queried);
+	// no_claim=which sentence is said beyond the code; the control below proves the spy sees a listed id's reads.
+	const notListed: [string, () => Promise<string>][] = [
+		["another club's template", () => addTemplate(other.clubId, "Theirs")],
+		[
+			"a meeting's private copy",
+			async () => {
+				await loadAgendaDraft(seed.meetingId); // stores the private copy
+				const [priv] = await testDb
+					.select({ id: meetingTemplates.id })
+					.from(meetingTemplates)
+					.where(eq(meetingTemplates.meetingId, seed.meetingId));
+				return priv?.id ?? "";
+			},
+		],
+		[
+			"a disabled global template",
+			async () => {
+				const id = await addTemplate(null, `Off global ${RUN}`, {
+					enabled: false,
+				});
+				extraGlobals.push(id);
+				return id;
+			},
+		],
+		["an unknown id", async () => randomUUID()],
+	];
+	it.each(
+		notListed,
+	)("NOT_FOUND, and no content read, for %s", async (_n, make) => {
+		const templateId = await make();
+		const input = { clubId: seed.clubId, templateId };
+		const statements = await statementsDuring(() =>
+			list(adminToken, input).catch(() => null),
+		);
+		await expect(list(adminToken, input)).rejects.toMatchObject({
+			code: "NOT_FOUND",
+		});
+		expect(statements.length).toBeGreaterThan(0);
+		expect(readsOf(statements, "meeting_template_beats")).toEqual([]);
+		expect(readsOf(statements, "meeting_template_roles")).toEqual([]);
+	});
+
+	// protects=the spy used above sees the content reads of a LISTED template;
+	// fails_when=the NOT_FOUND test's "no reads" holds vacuously because nothing is observed;
+	// no_claim=none.
+	it("control: a listed template's content reads are visible to the spy", async () => {
+		const id = await addTemplate(seed.clubId, "Mine");
+		const statements = await statementsDuring(() =>
+			list(adminToken, { clubId: seed.clubId, templateId: id }),
+		);
+		expect(readsOf(statements, "meeting_template_beats")).not.toEqual([]);
+	});
+
+	// protects=a disabled global template is not listed;
+	// fails_when=listAvailableTemplates' enabled filter is lost and a disabled global is offered;
+	// no_claim=none.
+	it("does not list a disabled global template", async () => {
+		const id = await addTemplate(null, `Off global ${RUN}`, { enabled: false });
+		extraGlobals.push(id);
+		const out = await list(adminToken, { clubId: seed.clubId });
+		expect(out.templates.map((t) => t.id)).not.toContain(id);
+		expect(out.templates.map((t) => t.id)).toContain(globalId);
+	});
+
+	// protects=a listed template over the row cap is VALIDATION, not a truncated list or INTERNAL;
+	// fails_when=TemplateTooLargeError is unmapped;
+	// no_claim=none.
+	it("a listed template over the beat cap is VALIDATION", async () => {
+		const id = await addTemplate(seed.clubId, "Huge", {
+			labels: Array.from({ length: MAX_TEMPLATE_BEATS + 1 }, (_, i) => `R${i}`),
+		});
+		await expect(
+			list(adminToken, { clubId: seed.clubId, templateId: id }),
+		).rejects.toMatchObject({ code: "VALIDATION" });
 	});
 });

@@ -1839,7 +1839,7 @@ export async function forkLegacyPointers(
 }
 
 /** What a save is refused with when the meeting is cancelled. Exported so a
- *  caller compares against THIS rather than a copy (`mcp/errors.ts`). */
+ *  caller compares against THIS rather than a copy (`mcp/tools/save-agenda-as-template.ts`). */
 export const SAVE_CANCELLED_MESSAGE =
 	"A cancelled meeting's agenda cannot be saved as a template.";
 

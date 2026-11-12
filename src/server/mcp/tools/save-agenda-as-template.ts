@@ -35,13 +35,13 @@ import {
 	SAVE_CANCELLED_MESSAGE,
 	saveMeetingAgendaAsClubTemplate,
 	TemplateTooLargeError,
-	templateContentForHash,
 } from "#/server/meeting-templates-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 import {
-	TEMPLATE_NOT_LISTED_MESSAGE,
+	REPLACE_TARGET_NOT_LISTED_MESSAGE,
+	readTemplateContent,
 	type TemplateRow,
 	toTemplateRow,
 } from "./list-agenda-templates";
@@ -91,20 +91,31 @@ type SavePlan = {
 
 type Target = z.infer<typeof inputSchema.target>;
 
-async function contentOrValidation(
-	templateId: string,
-): Promise<NonNullable<Awaited<ReturnType<typeof templateContentForHash>>>> {
-	let content: Awaited<ReturnType<typeof templateContentForHash>>;
-	try {
-		content = await templateContentForHash(db, templateId);
-	} catch (err) {
-		if (err instanceof TemplateTooLargeError) {
-			throw new McpError("VALIDATION", err.message);
-		}
-		throw err;
+/** `schema.parse`, with a failure told as `VALIDATION` rather than a thrown zod error. */
+function inputOrValidation<T extends z.ZodType>(
+	schema: T,
+	input: unknown,
+): z.infer<T> {
+	const parsed = schema.safeParse(input);
+	if (!parsed.success) {
+		throw new McpError(
+			"VALIDATION",
+			parsed.error.issues
+				.map((i) => `${i.path.join(".") || "input"}: ${i.message}`)
+				.join("; "),
+		);
 	}
-	if (!content) throw new McpError("NOT_FOUND", TEMPLATE_NOT_LISTED_MESSAGE);
-	return content;
+	return parsed.data;
+}
+
+/** The trimmed fields the seam will store for a "new" target, or `VALIDATION`. */
+function validNewFields(target: { name: string; description?: string | null }) {
+	const parsed = parseClubTemplateFields(
+		target.name,
+		target.description ?? null,
+	);
+	if ("error" in parsed) throw new McpError("VALIDATION", parsed.error);
+	return parsed;
 }
 
 /** The plan, refused for everything the preview and the apply both refuse. */
@@ -114,15 +125,10 @@ async function buildPlan(
 	target: Target,
 ): Promise<SavePlan> {
 	// Input validation first, so an invalid request is never reported as stale.
-	let fields: { name: string; description: string | null } | null = null;
-	if (target.mode === "new") {
-		const parsed = parseClubTemplateFields(
-			target.name,
-			target.description ?? null,
-		);
-		if ("error" in parsed) throw new McpError("VALIDATION", parsed.error);
-		fields = parsed;
-	}
+	const checked =
+		target.mode === "new"
+			? { mode: "new" as const, ...validNewFields(target) }
+			: target;
 
 	const snap = await readAgendaSnapshot(meetingId, db);
 	if (!snap || snap.clubId !== clubId) {
@@ -150,31 +156,29 @@ async function buildPlan(
 
 	let sourceContent: unknown;
 	if (snap.templateId !== null) {
-		sourceContent = await contentOrValidation(snap.templateId);
+		sourceContent = await readTemplateContent(
+			snap.templateId,
+			"Meeting not found.",
+		);
 	} else {
 		// Never opened: nothing is stored yet, so hash what the seam is about to
 		// store (the full derivation, not the snapshot's projection).
-		const planned = await plannedMaterialisation(db, meetingId);
-		if (!planned) throw new McpError("NOT_FOUND", "Meeting not found.");
-		sourceContent = {
-			beats: planned.seeds,
-			roles: [...planned.roles].sort((a, b) => a.key.localeCompare(b.key)),
-		};
+		sourceContent = await plannedMaterialisation(db, meetingId);
+		if (!sourceContent) throw new McpError("NOT_FOUND", "Meeting not found.");
 	}
 	const source = {
 		rows: snap.rows.map(toTemplateRow),
 		contentHash: digest(sourceContent),
 	};
 
-	if (target.mode === "new" && fields) {
+	if (checked.mode === "new") {
 		return {
 			meetingId,
 			mode: "new",
 			source,
-			target: { name: fields.name, description: fields.description },
+			target: { name: checked.name, description: checked.description },
 		};
 	}
-	if (target.mode !== "replace") throw new Error("unreachable");
 	// The tenant boundary is the query: this club's own template, never a
 	// global one, another club's, or a meeting's private copy.
 	const [own] = await db
@@ -182,19 +186,19 @@ async function buildPlan(
 		.from(meetingTemplates)
 		.where(
 			and(
-				eq(meetingTemplates.id, target.templateId),
+				eq(meetingTemplates.id, checked.templateId),
 				eq(meetingTemplates.clubId, clubId),
 				isNull(meetingTemplates.meetingId),
 			),
 		)
 		.limit(1);
 	if (!own) {
-		throw new McpError(
-			"NOT_FOUND",
-			"Call list_agenda_templates for this club's template ids.",
-		);
+		throw new McpError("NOT_FOUND", REPLACE_TARGET_NOT_LISTED_MESSAGE);
 	}
-	const current = await contentOrValidation(own.id);
+	const current = await readTemplateContent(
+		own.id,
+		REPLACE_TARGET_NOT_LISTED_MESSAGE,
+	);
 	return {
 		meetingId,
 		mode: "replace",
@@ -222,10 +226,7 @@ function seamError(err: unknown): unknown {
 		});
 	}
 	if (err.message === CLUB_TEMPLATE_GONE_MESSAGE) {
-		return new McpError(
-			"NOT_FOUND",
-			"Call list_agenda_templates for this club's template ids.",
-		);
+		return new McpError("NOT_FOUND", REPLACE_TARGET_NOT_LISTED_MESSAGE);
 	}
 	if (err.message === CLUB_ARCHIVED_MESSAGE) {
 		return new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
@@ -266,8 +267,14 @@ export const saveAgendaAsTemplateTool: McpToolDefinition = {
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
-		const args = z.object(inputSchema).parse(input);
-		const { club, user } = await authorizeTokenForMeeting(ctx, args.meetingId);
+		// Authorization, then the rest of the input (the SDK has already checked
+		// the whole schema on the wire; this order holds for a direct call too).
+		const meetingId = inputOrValidation(
+			z.object({ meetingId: inputSchema.meetingId }),
+			input,
+		).meetingId;
+		const { club, user } = await authorizeTokenForMeeting(ctx, meetingId);
+		const args = inputOrValidation(z.object(inputSchema), input);
 		const hashOf = (plan: SavePlan) =>
 			planHash({
 				tool: SAVE_AGENDA_AS_TEMPLATE_TOOL,

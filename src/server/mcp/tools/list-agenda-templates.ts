@@ -22,8 +22,13 @@ import type { McpToolDefinition } from "../tool";
 
 export const LIST_AGENDA_TEMPLATES_TOOL = "list_agenda_templates";
 
+/** `list_agenda_templates`'s answer for a templateId it did not list. */
 export const TEMPLATE_NOT_LISTED_MESSAGE =
 	"Call list_agenda_templates without templateId for this club's template ids.";
+
+/** `save_agenda_as_template`'s answer for a replace target that is not the club's own. */
+export const REPLACE_TARGET_NOT_LISTED_MESSAGE =
+	"Call list_agenda_templates for this club's template ids.";
 
 /** What a person reads of one agenda row. */
 export type TemplateRow = {
@@ -34,13 +39,7 @@ export type TemplateRow = {
 	roleKey: string | null;
 };
 
-export function toTemplateRow(r: {
-	kind: string;
-	label: string;
-	detail: string | null;
-	minutes: number;
-	roleKey: string | null;
-}): TemplateRow {
+export function toTemplateRow(r: TemplateRow): TemplateRow {
 	return {
 		kind: r.kind,
 		label: r.label,
@@ -48,6 +47,28 @@ export function toTemplateRow(r: {
 		minutes: r.minutes,
 		roleKey: r.roleKey,
 	};
+}
+
+/**
+ * A template's full stored content, with the two refusals both tools share: a
+ * template over the caps is `VALIDATION`, one that does not exist is
+ * `NOT_FOUND` with the caller's own sentence.
+ */
+export async function readTemplateContent(
+	templateId: string,
+	notFoundMessage: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof templateContentForHash>>>> {
+	let content: Awaited<ReturnType<typeof templateContentForHash>>;
+	try {
+		content = await templateContentForHash(db, templateId);
+	} catch (err) {
+		if (err instanceof TemplateTooLargeError) {
+			throw new McpError("VALIDATION", err.message);
+		}
+		throw err;
+	}
+	if (!content) throw new McpError("NOT_FOUND", notFoundMessage);
+	return content;
 }
 
 const inputSchema = {
@@ -116,17 +137,10 @@ export const listAgendaTemplatesTool: McpToolDefinition = {
 			if (!listed) {
 				throw new McpError("NOT_FOUND", TEMPLATE_NOT_LISTED_MESSAGE);
 			}
-			let content: Awaited<ReturnType<typeof templateContentForHash>>;
-			try {
-				content = await templateContentForHash(db, listed.id);
-			} catch (err) {
-				if (err instanceof TemplateTooLargeError) {
-					throw new McpError("VALIDATION", err.message);
-				}
-				throw err;
-			}
-			if (!content)
-				throw new McpError("NOT_FOUND", TEMPLATE_NOT_LISTED_MESSAGE);
+			const content = await readTemplateContent(
+				listed.id,
+				TEMPLATE_NOT_LISTED_MESSAGE,
+			);
 			out.template = {
 				id: listed.id,
 				name: listed.name,
