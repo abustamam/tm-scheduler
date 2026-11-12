@@ -143,7 +143,9 @@ describe("dropped lines", () => {
 	it("a {theme} line with no theme is struck with its reason; with a theme it renders filled", () => {
 		const { container, rerender, props } = renderPreview({ meeting: EMPTY });
 		const wa = within(output(container, "whatsapp"));
-		const struck = wa.getByText("Theme: {Theme}");
+		const struck = wa.getByText(
+			(_, el) => el?.tagName === "S" && el.textContent === "Theme: Theme",
+		);
 		expect(struck.tagName).toBe("S");
 		expect(wa.getByText("hidden: no Theme set for this meeting")).toBeTruthy();
 		rerender(<PromoPreview {...props} meeting={FULL} />);
@@ -185,7 +187,12 @@ describe("dropped lines", () => {
 		// On the flyer, a video-call line is dropped for a reason that holds even when the meeting has one.
 		rerender(<PromoPreview {...props} meeting={FULL} origin={ORIGIN} />);
 		const fl = within(output(container, "flyer"));
-		expect(fl.getByText("Video: {Video call link}")).toBeTruthy();
+		expect(
+			fl.getByText(
+				(_, el) =>
+					el?.tagName === "S" && el.textContent === "Video: Video call link",
+			),
+		).toBeTruthy();
 		expect(fl.getByText("hidden: never printed on the flyer")).toBeTruthy();
 	});
 
@@ -200,8 +207,46 @@ describe("dropped lines", () => {
 		const email = output(container, "email");
 		const subject = email.querySelector("p") as HTMLElement;
 		expect(subject.textContent).toContain("Subject:");
-		expect(within(subject).getByText("Theme: {Theme}").tagName).toBe("S");
+		const struck = within(subject).getByText(
+			(_, el) => el?.tagName === "S" && el.textContent === "Theme: Theme",
+		);
+		expect(struck.tagName).toBe("S");
 		expect(subject.textContent).toContain("hidden: no Theme set");
+	});
+});
+
+describe("dropped line chips", () => {
+	// protects=a known variable on a hidden line is a brace-free chip, the strike runs through it;
+	// fails_when=the chip shows braces, loses its rounded-full shape, or sits outside the <s>;
+	// no_claim=the chip's colours.
+	it("a known variable on a hidden line is a brace-free rounded chip inside the strike", () => {
+		const { container } = renderPreview({ meeting: EMPTY });
+		const wa = output(container, "whatsapp");
+		const chip = [
+			...wa.querySelectorAll('[data-dropped] [data-slot="preview-pill"]'),
+		].find((e) => e.textContent === "Theme") as HTMLElement;
+		expect(chip.textContent).toBe("Theme");
+		expect(chip.textContent).not.toMatch(/[{}]/);
+		expect(chip.className).toContain("rounded-full");
+		expect(chip.closest("s")).not.toBeNull();
+	});
+
+	// protects=an unknown {token} on a hidden line stays as typed and is not a chip;
+	// fails_when=an unknown token is chipped or loses its braces;
+	// no_claim=how the unknown token is treated in the editor.
+	it("an unknown {token} on a hidden line keeps its braces and is not a chip", () => {
+		const { container } = renderPreview({
+			template: { ...DEFAULT_PROMO_TEMPLATE, headline: "{theme} {Nope}" },
+			meeting: EMPTY,
+		});
+		const email = output(container, "email");
+		const struck = [...email.querySelectorAll("[data-dropped] s")].find((e) =>
+			e.textContent?.includes("Nope"),
+		) as HTMLElement;
+		expect(struck.textContent).toBe("Theme {Nope}");
+		const chips = struck.querySelectorAll('[data-slot="preview-pill"]');
+		expect(chips).toHaveLength(1);
+		expect(chips[0].textContent).toBe("Theme");
 	});
 });
 
