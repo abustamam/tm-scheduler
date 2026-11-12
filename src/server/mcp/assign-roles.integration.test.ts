@@ -166,7 +166,7 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 		return row;
 	}
 
-	/** Activity rows for one slot, newest first. Club-scoped: vitest runs files
+	/** Activity rows for one slot, oldest first (written order). Club-scoped: vitest runs files
 	 *  in parallel against one `tm_test`. */
 	async function actionsFor(slotId: string): Promise<string[]> {
 		const rows = await testDb
@@ -177,7 +177,8 @@ describe.skipIf(!hasTestDb)("assign_roles (#809)", () => {
 					eq(activityLog.clubId, seed.clubId),
 					eq(activityLog.targetId, slotId),
 				),
-			);
+			)
+			.orderBy(activityLog.createdAt, activityLog.id);
 		return rows.map((r) => r.action);
 	}
 
