@@ -13,7 +13,6 @@ import {
 	clubs,
 	meetings,
 	meetingTemplateBeats,
-	meetingTemplateRoles,
 	meetingTemplates,
 } from "#/db/schema";
 import {
