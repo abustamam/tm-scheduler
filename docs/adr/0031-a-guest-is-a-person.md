@@ -270,6 +270,13 @@ Every writer in this series that touches more than one of these takes them in th
    and those rows after was a 40P01 cycle with each. The scan sees committed rows only: a row
    that starts naming the guest after it, and before the guest lock, is not pre-locked, so the
    window is narrowed, not closed;
+   The opposite shape is the KEPT guest's own first ballot or check-in (#1623): its `INSERT ... ON
+   CONFLICT` writes a unique-index entry (session or meeting, guest) and key-shares the guest only
+   at the end of the statement, and the merge's re-point of the absorbed guest's row collides with
+   that pending entry, so no pre-lock on the merge's side can order it. The rule is on the WRITER:
+   `castVote` (identified guest voter) and `addGuestPresent` take the guest `FOR KEY SHARE` before
+   the insert, so they wait on the merge's guest lock holding nothing. A delete re-points nothing
+   onto another guest and needs no such change;
 5. then the `guests` rows (the row lock a path takes on the guest it changes).
 
 The merge lock comes before any row lock because a member removal holds it EXCLUSIVE and then the

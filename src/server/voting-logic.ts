@@ -1074,6 +1074,19 @@ export async function castVote(input: {
 	// with `CLUB_BUSY_MESSAGE`. The INSERT itself is the same single statement.
 	const inserted = await db.transaction(async (tx) => {
 		await lockMembershipsAgainstMerge(tx, [voterMemberId, candidateMemberId]);
+		// #1623: key-share the voting guest BEFORE the INSERT writes its
+		// (session, voter guest) unique-index entry. The INSERT's own FK check
+		// key-shares the guest only at the end of the statement, so a guest merge
+		// holding the kept guest FOR UPDATE and re-pointing the absorbed guest's
+		// ballot onto it would wait on that pending entry while this waited on
+		// the merge (40P01). Taken first, this waits on the merge holding nothing.
+		if (voterGuestId) {
+			await tx
+				.select({ id: guests.id })
+				.from(guests)
+				.where(eq(guests.id, voterGuestId))
+				.for("key share");
+		}
 		await materialiseAutoSession(tx, input.meetingId, input.category);
 		return tx
 			.insert(meetingVotes)
