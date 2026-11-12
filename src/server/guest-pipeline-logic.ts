@@ -135,6 +135,7 @@ import {
 	NOT_A_MEMBER_MESSAGE,
 	requireClubRole,
 } from "./guards";
+import { lockRowsNamingGuest } from "./guest-merge-logic";
 import {
 	createGuestRecord,
 	deleteAbandonedGuestPerson,
@@ -1819,6 +1820,11 @@ export async function applyDeleteGuest(
 				? noKeyUpdate(peek?.personId)
 				: forUpdate(peek?.personId),
 		);
+
+		// The slots and votes this delete re-points or cascades, before the guest
+		// row (ADR-0031 step 4, #1611): a speech save holds the slot and then
+		// key-shares the guest, and the guest-first order closed a 40P01 cycle.
+		await lockRowsNamingGuest(tx, input.guestId);
 
 		const [guest] = await tx
 			.select({
