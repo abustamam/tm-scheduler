@@ -270,13 +270,17 @@ Every writer in this series that touches more than one of these takes them in th
    and those rows after was a 40P01 cycle with each. The scan sees committed rows only: a row
    that starts naming the guest after it, and before the guest lock, is not pre-locked, so the
    window is narrowed, not closed;
-   The opposite shape is the KEPT guest's own first ballot or check-in (#1623): its `INSERT ... ON
-   CONFLICT` writes a unique-index entry (session or meeting, guest) and key-shares the guest only
-   at the end of the statement, and the merge's re-point of the absorbed guest's row collides with
-   that pending entry, so no pre-lock on the merge's side can order it. The rule is on the WRITER:
-   `castVote` (identified guest voter) and `addGuestPresent` take the guest `FOR KEY SHARE` before
-   the insert, so they wait on the merge's guest lock holding nothing. A delete re-points nothing
-   onto another guest and needs no such change;
+   - The writers that INSERT a row naming a guest (#1623) take the same order through
+     `keyShareGuests` (`guest-key-share.ts`): the guest rows the write names `FOR KEY SHARE` in ONE
+     statement, in id order, before the insert. Without it a first ballot or check-in writes its
+     unique-index entry before the FK check key-shares the guest, and the merge's re-point of the
+     absorbed guest's row collides with that entry while the writer waits on the merge's guest lock.
+     `castVote` (a guest voter) first materialises the session (an anonymous ballot's uncommitted
+     auto-session row must not queue it while it holds a guest), then locks the voter's EXISTING
+     ballot `FOR UPDATE`, so a re-vote meets the merge and the guest delete at the same first row
+     they lock (this step is what covers the delete), then key-shares the voter and the candidate
+     guest together (both may be merge parties) and inserts. `addGuestPresent` has no row to take
+     first: the merge does not pre-lock attendance rows;
 5. then the `guests` rows (the row lock a path takes on the guest it changes).
 
 The merge lock comes before any row lock because a member removal holds it EXCLUSIVE and then the

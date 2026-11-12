@@ -48,6 +48,7 @@ import {
 	loadDisqualifications,
 } from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { keyShareGuests } from "./guest-key-share";
 import { findGuestForContact } from "./guest-pipeline-logic";
 import { createGuestRecord } from "./guests-logic";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
@@ -974,16 +975,9 @@ export async function addGuestPresent(
 	const run = async (conn: DbOrTx) => {
 		const guestId = await resolveGuestId(conn, clubId, input, input.id);
 		// #1623: key-share the guest BEFORE the insert writes its (meeting, guest)
-		// unique-index entry. The insert's own FK check key-shares the guest only
-		// at the end of the statement, so a guest merge holding the guest FOR
-		// UPDATE and re-pointing the absorbed guest's attendance onto it would
-		// wait on that pending entry while this waited on the merge (40P01).
-		// Taken first, this waits on the merge holding nothing.
-		await conn
-			.select({ id: guests.id })
-			.from(guests)
-			.where(eq(guests.id, guestId))
-			.for("key share");
+		// unique-index entry (`keyShareGuests` has the argument). Attendance rows
+		// are not pre-locked by the merge, so there is no row to take first.
+		await keyShareGuests(conn, [guestId]);
 		const insert = conn.insert(meetingAttendance).values({
 			meetingId: input.meetingId,
 			guestId,

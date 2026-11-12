@@ -58,6 +58,7 @@ import {
 import { isReadableClubForMeeting } from "./club-readable-logic";
 import { CLUB_BUSY_MESSAGE, lockClubForWrite } from "./club-write-lock";
 import { assertClubNotArchived } from "./guards";
+import { keyShareGuests } from "./guest-key-share";
 import { createGuestRecord } from "./guests-logic";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import {
@@ -1074,20 +1075,32 @@ export async function castVote(input: {
 	// with `CLUB_BUSY_MESSAGE`. The INSERT itself is the same single statement.
 	const inserted = await db.transaction(async (tx) => {
 		await lockMembershipsAgainstMerge(tx, [voterMemberId, candidateMemberId]);
-		// #1623: key-share the voting guest BEFORE the INSERT writes its
-		// (session, voter guest) unique-index entry. The INSERT's own FK check
-		// key-shares the guest only at the end of the statement, so a guest merge
-		// holding the kept guest FOR UPDATE and re-pointing the absorbed guest's
-		// ballot onto it would wait on that pending entry while this waited on
-		// the merge (40P01). Taken first, this waits on the merge holding nothing.
+		await materialiseAutoSession(tx, input.meetingId, input.category);
+		// #1623, the guest merge's lock order (ADR-0031): the voter's EXISTING
+		// ballot `FOR UPDATE`, then every guest this ballot names, then the INSERT.
+		// The merge and the guest delete lock the votes naming a guest before the
+		// guest rows, so a re-voting guest meets them at that same first row. The
+		// session is materialised BEFORE any guest lock: an anonymous ballot's
+		// uncommitted auto-session row would otherwise queue this behind it while
+		// holding the guest (a three-way cycle with the merge).
 		if (voterGuestId) {
 			await tx
-				.select({ id: guests.id })
-				.from(guests)
-				.where(eq(guests.id, voterGuestId))
-				.for("key share");
+				.select({ id: meetingVotes.id })
+				.from(meetingVotes)
+				.innerJoin(
+					meetingVoteSessions,
+					eq(meetingVotes.sessionId, meetingVoteSessions.id),
+				)
+				.where(
+					and(
+						eq(meetingVoteSessions.meetingId, input.meetingId),
+						eq(meetingVoteSessions.category, input.category),
+						eq(meetingVotes.voterGuestId, voterGuestId),
+					),
+				)
+				.for("update", { of: meetingVotes });
+			await keyShareGuests(tx, [voterGuestId, candidateGuestId]);
 		}
-		await materialiseAutoSession(tx, input.meetingId, input.category);
 		return tx
 			.insert(meetingVotes)
 			.select(
