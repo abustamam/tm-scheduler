@@ -40,6 +40,10 @@ import {
 	UNDO_NOT_CONVERTED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
+import {
+	NO_STAGE_KIND_MESSAGE,
+	NOT_INVITABLE_KIND_MESSAGE,
+} from "#/lib/guest-invite";
 import { urlKeysForMeetings } from "#/lib/meeting-url";
 import { toStoredPhone } from "#/lib/phone";
 import {
@@ -4652,6 +4656,55 @@ describe.skipIf(!hasTestDb)("guest invites (#899)", () => {
 		const guestId = await seedGuest(seed.clubId, "Pat Prospect");
 		await invite(guestId, seed.meetingId);
 		expect((await pipelineRow(seed.clubId, guestId)).stage).toBe("prospect");
+	});
+
+	// A Visiting Toastmaster is outside the follow-up funnel (#1608).
+	async function seedVisitingToastmaster(name: string): Promise<string> {
+		const guestId = await seedGuest(seed.clubId, name);
+		await testDb
+			.update(guests)
+			.set({ kind: "visiting_toastmaster" })
+			.where(eq(guests.id, guestId));
+		return guestId;
+	}
+
+	// protects=no invite is recorded for a Toastmaster from another club, even
+	// though their stored stage is the default `prospect`;
+	// fails_when=applyRecordGuestInvite gates on stage alone;
+	// no_claim=the card hides the control (the board component test covers it).
+	it("refuses a Visiting Toastmaster and writes no invite row (#1608)", async () => {
+		const guestId = await seedVisitingToastmaster("Vic Visiting");
+		await expect(invite(guestId, seed.meetingId)).rejects.toThrow(
+			NOT_INVITABLE_KIND_MESSAGE,
+		);
+		expect(await inviteRows(guestId)).toHaveLength(0);
+	});
+
+	// protects=a Visiting Toastmaster keeps the stage they were stored with;
+	// fails_when=applySetGuestStage moves any kind;
+	// no_claim=changing the kind back to Guest (a separate writer).
+	it("refuses a stage move for a Visiting Toastmaster and leaves stage unchanged (#1608)", async () => {
+		const guestId = await seedVisitingToastmaster("Vic Staged");
+		await expect(
+			applySetGuestStage({
+				clubId: seed.clubId,
+				guestId,
+				stage: "following_up",
+			}),
+		).rejects.toThrow(NO_STAGE_KIND_MESSAGE);
+		expect((await pipelineRow(seed.clubId, guestId)).stage).toBe("prospect");
+	});
+
+	// protects=a Visiting Toastmaster can still be assigned a role at every
+	// open stage (criterion 6); fails_when=the picker starts filtering on kind;
+	// no_claim=the assign write itself (guests.integration.test.ts).
+	it("still lists a Visiting Toastmaster in the assign-guest picker (#1608)", async () => {
+		const guestId = await seedVisitingToastmaster("Vic Picker");
+		for (const stage of ["prospect", "following_up", "lost"] as const) {
+			await testDb.update(guests).set({ stage }).where(eq(guests.id, guestId));
+			const listed = await listClubGuests(seed.clubId);
+			expect(listed.map((g) => g.id)).toContain(guestId);
+		}
 	});
 
 	it("accepts a following-up guest", async () => {

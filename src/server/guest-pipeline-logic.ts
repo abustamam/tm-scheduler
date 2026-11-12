@@ -77,7 +77,12 @@ import {
 	UNDO_OTHER_GUEST_LINKED_MESSAGE,
 	UNLINK_NOT_LINKED_MESSAGE,
 } from "#/lib/guest-convert";
-import { isInvitableStage, NOT_INVITABLE_MESSAGE } from "#/lib/guest-invite";
+import {
+	isInvitableStage,
+	NO_STAGE_KIND_MESSAGE,
+	NOT_INVITABLE_KIND_MESSAGE,
+	NOT_INVITABLE_MESSAGE,
+} from "#/lib/guest-invite";
 import {
 	acceptedStatuses,
 	assertMeetingAccepts,
@@ -1917,12 +1922,18 @@ export async function applySetGuestStage(
 		.select({
 			id: guests.id,
 			stage: guests.stage,
+			kind: guests.kind,
 			convertedMembershipId: guests.convertedMembershipId,
 		})
 		.from(guests)
 		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 		.limit(1);
 	if (!guest) throw new Error("Guest not found in this club.");
+	// A Visiting Toastmaster is outside the funnel (#1608): their stored stage is
+	// left as it is, and never moved while they are one.
+	if (guest.kind === "visiting_toastmaster") {
+		throw new Error(NO_STAGE_KIND_MESSAGE);
+	}
 	// A joined guest is frozen because they ARE a member — reached only through
 	// convert-to-member. That reasoning stops applying the moment the membership
 	// is gone: `converted_membership_id` is `onDelete: "set null"`, so removing
@@ -1965,11 +1976,14 @@ export async function applyRecordGuestInvite(
 	input: RecordGuestInviteInput,
 ): Promise<{ ok: true }> {
 	const [guest] = await db
-		.select({ id: guests.id, stage: guests.stage })
+		.select({ id: guests.id, stage: guests.stage, kind: guests.kind })
 		.from(guests)
 		.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 		.limit(1);
 	if (!guest) throw new Error("Guest not found in this club.");
+	if (guest.kind === "visiting_toastmaster") {
+		throw new Error(NOT_INVITABLE_KIND_MESSAGE);
+	}
 	if (!isInvitableStage(guest.stage)) throw new Error(NOT_INVITABLE_MESSAGE);
 	const [meeting] = await db
 		.select({

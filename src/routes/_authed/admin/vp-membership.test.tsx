@@ -1414,3 +1414,67 @@ describe("VP Membership guest card — unconfirmed guest-book address (#1157)", 
 		expect(sent.data).not.toHaveProperty("confirmedEmail");
 	});
 });
+
+describe("VP Membership — Visiting Toastmasters are outside the funnel (#1608)", () => {
+	const VIC = "55555555-5555-4555-8555-555555555555";
+	const WES = "66666666-6666-4666-8666-666666666666";
+	const ORPHAN = "77777777-7777-4777-8777-777777777777";
+	const profile = (
+		guestId: string,
+		kind: "visitor" | "visiting_toastmaster",
+	): GuestProfileRow => ({
+		guestId,
+		kind,
+		homeClub: kind === "visiting_toastmaster" ? "Laguna Speakers" : null,
+		introducedByMemberId: null,
+		introducedByName: null,
+	});
+
+	// protects=lanes and their counts hold visitors only, and every Visiting
+	// Toastmaster (at any stage) is listed in the collapsed section with no
+	// stage or invite control, Edit and Joined… kept; a guest with no profile
+	// entry stays a visitor;
+	// fails_when=the board buckets on stage alone, or the section lists a visitor;
+	// no_claim=server refusals (integration suite) or the picker.
+	it("partitions the board by kind", async () => {
+		await renderRoute(
+			[
+				guestRow({ id: VIC, name: "Vic Visiting", stage: "prospect" }),
+				guestRow({ id: WES, name: "Wes Lost", stage: "lost" }),
+				guestRow({ id: ORPHAN, name: "Olga NoProfile", stage: "prospect" }),
+				guestRow({ name: "Ada Guest", stage: "prospect" }),
+			],
+			NO_NEXT_MEETING,
+			false,
+			{
+				rows: [
+					profile(VIC, "visiting_toastmaster"),
+					profile(WES, "visiting_toastmaster"),
+					profile("11111111-1111-4111-8111-111111111111", "visitor"),
+				],
+				brought: [],
+			},
+		);
+		const section = screen.getByTestId("visiting-toastmasters");
+		expect(within(section).getByText("Visiting Toastmasters (2)")).toBeTruthy();
+		expect(within(section).getByText("Vic Visiting")).toBeTruthy();
+		expect(within(section).getByText("Wes Lost")).toBeTruthy();
+		expect(within(section).queryByText("Ada Guest")).toBeNull();
+		expect(within(section).queryByText("Olga NoProfile")).toBeNull();
+		// No lane dropdown for a Visiting Toastmaster; Edit stays in the menu.
+		expect(
+			screen.queryByRole("button", { name: /^Lane for Vic Visiting/ }),
+		).toBeNull();
+		expect(
+			within(section).getAllByRole("button", { name: /Joined…/ }),
+		).toHaveLength(2);
+		expect(
+			within(section).queryByRole("button", { name: /invite/i }),
+		).toBeNull();
+		// Prospects lane: only the two visitors, so the header reads 2, Lost 0.
+		const prospects = screen.getByRole("heading", { name: /^Prospects/ });
+		expect(prospects.textContent).toMatch(/2$/);
+		const lost = screen.getByRole("heading", { name: /^Lost/ });
+		expect(lost.textContent).toMatch(/0$/);
+	});
+});
