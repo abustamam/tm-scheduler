@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -50,6 +50,7 @@ import {
 } from "#/components/club/meeting-toolbar";
 import { MeetingYourJobs } from "#/components/club/meeting-your-jobs";
 import { OpenActionItems } from "#/components/club/open-action-items";
+import { refreshAfterMeetingWrite } from "#/components/club/refresh-after-meeting-write";
 import { SyncStatus } from "#/components/club/sync-status";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { useMeetingCover } from "#/components/club/use-meeting-cover";
@@ -391,11 +392,17 @@ function MeetingView() {
 	// <MeetingMinutes> below and (PR 3) the attendance panel's roll-mode
 	// writes — two instances would each own their own `draining` flag and race
 	// the same persisted queue, replaying a stale status over a newer one.
+	const queryClient = useQueryClient();
 	const offlineMinutes = useOfflineMinutes({
 		meetingId: meeting.id,
-		onMutated: async () => {
-			await router.invalidate();
-		},
+		// The Ballot Counter console reads the winner from the query cache, which
+		// `router.invalidate()` does not touch (#1600). The key is the DRAINED
+		// meeting's, not the one on screen.
+		onMutated: (writtenMeetingId) =>
+			refreshAfterMeetingWrite(
+				{ invalidateRouter: () => router.invalidate(), queryClient },
+				writtenMeetingId,
+			),
 		minutes: minutes.data,
 	});
 
