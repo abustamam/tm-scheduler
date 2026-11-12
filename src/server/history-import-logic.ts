@@ -2174,7 +2174,7 @@ async function applyMeeting(
 				: slot.assignedMemberId === null && slot.assignedGuestId === null;
 			if (slotIsBundles) {
 				await putRef(tx, clubId, "role_slot", ps.sourceId, slot.id);
-			} else if (!refOf("role_slot", ps.sourceId)) {
+			} else if (owner && !refOf("role_slot", ps.sourceId)) {
 				// Kept, not lost (#1588): the slot's holder is GavelUp's.
 				omit("roleAssignment", ps.sourceId, PAST_KEPT_HOLDER);
 			}

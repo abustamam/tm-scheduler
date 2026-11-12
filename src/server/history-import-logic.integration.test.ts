@@ -44,7 +44,9 @@ import {
 	ERASED_ACCOUNT_REASON,
 	isBindingRefusal,
 	isJsonbSafeText,
+	KEPT_SPEECH,
 	MEETING_LEFT_ALONE,
+	PAST_KEPT_HOLDER,
 	type PersonResolution,
 	UPCOMING_INACTIVE_MEMBER,
 	UPCOMING_KEPT_HOLDER,
@@ -1306,10 +1308,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		const by = (k: string) => report.counts.find((c) => c.key === k);
 		// The kept holder is listed as not imported (#1588), not as missing.
 		expect(by("role_assignments")?.missing).toEqual([]);
-		expect(
-			report.notImported.find((r) => r.what === "Kept GavelUp's holder")
-				?.sourceIds,
-		).toEqual(["644304:1"]);
+		expect(idsFor(report, PAST_KEPT_HOLDER)).toEqual(["644304:1"]);
 		expect(by("awards")?.missing).toEqual(["644304:best_speaker"]);
 		expect(report.reconciled).toBe(false);
 		// And the others, held by who the bundle says, still reconcile.
@@ -1378,6 +1377,15 @@ EXECUTE FUNCTION zz_claim_slot()`),
 
 	// -- Kept holders and speeches on past meetings (#1588) ---------------------
 
+	type KeptRep = Awaited<ReturnType<typeof apply>>["report"];
+	/** The not-imported rows for one cause (its words AND its reason), so a rename or a sibling path cannot match by accident. */
+	const rowsFor = (report: KeptRep, cause: { what: string; reason: string }) =>
+		report.notImported.filter(
+			(r) => r.what === cause.what && r.reason === cause.reason,
+		);
+	const idsFor = (report: KeptRep, cause: { what: string; reason: string }) =>
+		rowsFor(report, cause).flatMap((r) => r.sourceIds ?? []);
+
 	/** Applies once, then returns the first member speech's ref, its slot and its role_slot ref. */
 	async function applyAndFindSpeechSlot() {
 		const stored = await upload();
@@ -1404,6 +1412,94 @@ EXECUTE FUNCTION zz_claim_slot()`),
 				),
 			);
 
+	/** Seeds the fixture's first meeting with Bob in its Toastmaster slot (GavelUp's holder, filled before any import). */
+	async function seedBobToastmaster(bundleTextOverride?: string) {
+		const existing = await seedMeetingAt(FIRST_AT, "completed");
+		const stored = await upload(bundleTextOverride);
+		const { preview, resolutions } = await resolveAll(stored.importId);
+		const key = preview.roleDefinitions.find((d) =>
+			d.labels.includes("Toastmaster"),
+		)?.standardKey as string;
+		const [def] = await testDb
+			.insert(roleDefinitions)
+			.values({
+				clubId: seed.clubId,
+				name: "Toastmaster",
+				category: "functionary",
+				key,
+			})
+			.returning({ id: roleDefinitions.id });
+		await testDb.insert(roleSlots).values({
+			meetingId: existing,
+			roleDefinitionId: def?.id as string,
+			slotIndex: 0,
+			status: "confirmed",
+			assignedMemberId: seed.memberId,
+		});
+		return { existing, stored, resolutions };
+	}
+
+	// protects=acceptance criterion 1 (#1588): a past slot GavelUp gave to another member, with no speech, award or other difference, keeps its holder and is listed as not imported, so the report reconciles;
+	// fails_when=the kept holder lands in the role-assignments missing list (reconciled false) or the holder is replaced;
+	// no_claim=a speech or award on the slot.
+	it("a past slot GavelUp filled for another member is kept and listed, with nothing else different, so the report reconciles", async () => {
+		const { existing, stored, resolutions } = await seedBobToastmaster();
+		const { report } = await apply(stored.importId, resolutions);
+		expect(idsFor(report, PAST_KEPT_HOLDER)).toEqual(["644304:1"]);
+		expect(
+			report.counts.find((c) => c.key === "role_assignments")?.missing,
+		).toEqual([]);
+		expect(report.reconciled).toBe(true);
+		const [held] = await testDb
+			.select({ member: roleSlots.assignedMemberId })
+			.from(roleSlots)
+			.where(
+				and(eq(roleSlots.meetingId, existing), eq(roleSlots.slotIndex, 0)),
+			);
+		expect(held?.member).toBe(seed.memberId);
+	});
+
+	// protects=a skipped holder whose GavelUp slot is filled is omitted ONCE, with the skip reason, not also as a kept holder;
+	// fails_when=the kept-holder branch fires without an owner (a second roleAssignment omission for the same source id);
+	// no_claim=which holder wins.
+	it("a skipped holder's slot that GavelUp filled is omitted once, with the skip reason", async () => {
+		const { stored, resolutions } = await seedBobToastmaster();
+		resolutions["es:900068"] = {
+			action: "skip",
+			reason: "Asked to be left out",
+		};
+		const { report } = await apply(stored.importId, resolutions);
+		expect(rowsFor(report, PAST_KEPT_HOLDER)).toEqual([]);
+		const mine = report.notImported.filter((r) =>
+			r.sourceIds?.includes("644304:1"),
+		);
+		expect(mine).toHaveLength(1);
+		expect(mine[0]?.reason).toBe("Asked to be left out");
+		expect(
+			report.counts.find((c) => c.key === "role_assignments")?.missing,
+		).toEqual([]);
+	});
+
+	// protects=a source slot with no holder, over a slot GavelUp filled, records no kept-holder row (nothing was counted for it);
+	// fails_when=the branch fires for a null owner;
+	// no_claim=the slot's own count.
+	it("a source slot with no holder, over a slot GavelUp filled, records no kept-holder omission", async () => {
+		const bundle = JSON.parse(bundleText()) as EasySpeakBundleV1;
+		const tm = bundle.meetings
+			.find((x) => x.esMeetingId === "644304")
+			?.roles.find((r) => r.role === "Toastmaster");
+		if (!tm) throw new Error("fixture");
+		(tm as { holder: unknown }).holder = null;
+		const { stored, resolutions } = await seedBobToastmaster(
+			JSON.stringify(bundle),
+		);
+		const { report } = await apply(stored.importId, resolutions);
+		expect(rowsFor(report, PAST_KEPT_HOLDER)).toEqual([]);
+		expect(
+			report.notImported.some((r) => r.sourceIds?.includes("644304:1")),
+		).toBe(false);
+	});
+
 	it("a speech the slot already has is kept and listed as such, once, and a re-run adds none", async () => {
 		const { stored, resolutions, speechRef, slot } =
 			await applyAndFindSpeechSlot();
@@ -1417,10 +1513,7 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			.from(roleSlots)
 			.where(eq(roleSlots.id, slot?.id as string));
 		expect(after?.speechId).toBe(slot?.speechId);
-		const kept = report.notImported.filter(
-			(r) => r.what === "Kept GavelUp's speech",
-		);
-		expect(kept.flatMap((r) => r.sourceIds)).toEqual([speechRef?.sourceId]);
+		expect(idsFor(report, KEPT_SPEECH)).toEqual([speechRef?.sourceId]);
 		expect(report.reconciled).toBe(true);
 	});
 
@@ -1430,12 +1523,8 @@ EXECUTE FUNCTION zz_claim_slot()`),
 		const first = await apply(stored.importId, resolutions);
 		const second = await apply(stored.importId, resolutions);
 		for (const { report } of [first, second]) {
-			expect(report.notImported.map((r) => r.what)).not.toContain(
-				"Kept GavelUp's speech",
-			);
-			expect(report.notImported.map((r) => r.what)).not.toContain(
-				"Kept GavelUp's holder",
-			);
+			expect(rowsFor(report, KEPT_SPEECH)).toEqual([]);
+			expect(rowsFor(report, PAST_KEPT_HOLDER)).toEqual([]);
 			expect(report.reconciled).toBe(true);
 		}
 	});
@@ -1447,9 +1536,8 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			.set({ assignedMemberId: seed.memberId, assignedGuestId: null })
 			.where(eq(roleSlots.id, slot?.id as string));
 		const { report } = await apply(stored.importId, resolutions);
-		expect(report.notImported.map((r) => r.what)).not.toContain(
-			"Kept GavelUp's holder",
-		);
+		expect(rowsFor(report, PAST_KEPT_HOLDER)).toEqual([]);
+		expect(rowsFor(report, KEPT_SPEECH)).toEqual([]);
 	});
 
 	it("a kept holder with a source speech lists both, each once", async () => {
@@ -1462,12 +1550,8 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			.set({ assignedMemberId: seed.memberId, assignedGuestId: null })
 			.where(eq(roleSlots.id, slot?.id as string));
 		const { report } = await apply(stored.importId, resolutions);
-		const ids = (what: string) =>
-			report.notImported
-				.filter((r) => r.what === what)
-				.flatMap((r) => r.sourceIds);
-		expect(ids("Kept GavelUp's holder")).toEqual([slotRef?.sourceId]);
-		expect(ids("Kept GavelUp's speech")).toEqual([speechRef?.sourceId]);
+		expect(idsFor(report, PAST_KEPT_HOLDER)).toEqual([slotRef?.sourceId]);
+		expect(idsFor(report, KEPT_SPEECH)).toEqual([speechRef?.sourceId]);
 		const [after] = await testDb
 			.select({
 				member: roleSlots.assignedMemberId,
