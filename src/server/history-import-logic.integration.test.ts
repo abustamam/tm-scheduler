@@ -1436,14 +1436,20 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			status: "confirmed",
 			assignedMemberId: seed.memberId,
 		});
-		return { existing, stored, resolutions };
+		return {
+			existing,
+			stored,
+			resolutions,
+			toastmasterDefId: def?.id as string,
+		};
 	}
 
 	// protects=acceptance criterion 1 (#1588): a past slot GavelUp gave to another member, with no speech, award or other difference, keeps its holder and is listed as not imported, so the report reconciles;
 	// fails_when=the kept holder lands in the role-assignments missing list (reconciled false) or the holder is replaced;
 	// no_claim=a speech or award on the slot.
 	it("a past slot GavelUp filled for another member is kept and listed, with nothing else different, so the report reconciles", async () => {
-		const { existing, stored, resolutions } = await seedBobToastmaster();
+		const { existing, stored, resolutions, toastmasterDefId } =
+			await seedBobToastmaster();
 		const { report } = await apply(stored.importId, resolutions);
 		expect(idsFor(report, PAST_KEPT_HOLDER)).toEqual(["644304:1"]);
 		expect(
@@ -1454,7 +1460,11 @@ EXECUTE FUNCTION zz_claim_slot()`),
 			.select({ member: roleSlots.assignedMemberId })
 			.from(roleSlots)
 			.where(
-				and(eq(roleSlots.meetingId, existing), eq(roleSlots.slotIndex, 0)),
+				and(
+					eq(roleSlots.meetingId, existing),
+					eq(roleSlots.roleDefinitionId, toastmasterDefId),
+					eq(roleSlots.slotIndex, 0),
+				),
 			);
 		expect(held?.member).toBe(seed.memberId);
 	});
