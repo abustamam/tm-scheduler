@@ -6,13 +6,16 @@
 // share a cache, and it adds no server surface: only fields
 // `getPublicPersonalMeetingView` already returns to any holder of a member id.
 // No attendance, no `reached_out`, no contact details.
-import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useRouter } from "@tanstack/react-router";
+import { Button } from "#/components/ui/button";
+import { isMeetingOver } from "#/lib/meeting-lifecycle";
 import { type DutyTarget, dutiesForRole } from "#/lib/role-duties";
 import { getPublicPersonalMeetingView } from "#/server/personal-meeting";
 import { RoleCalendarButton } from "./add-to-calendar-button";
 import { buildDutyContext } from "./duty-context";
 import { DUTY_ROW, DutyMark, dutyLabelClass } from "./duty-row";
+import { useConfirmOwnRole } from "./use-confirm-own-role";
 
 export function MeetingYourJobs({
 	clubId,
@@ -46,6 +49,17 @@ export function MeetingYourJobs({
 		refetchOnMount: "always",
 	});
 
+	const queryClient = useQueryClient();
+	const router = useRouter();
+	const { confirm, confirming } = useConfirmOwnRole({
+		memberId,
+		refetch: () =>
+			Promise.all([
+				queryClient.invalidateQueries({ queryKey: ["personal-meeting"] }),
+				router.invalidate(),
+			]),
+	});
+
 	// No identity, pending, error, rejected member: no card. The card is
 	// secondary to the agenda and must never break it.
 	const view = query.data;
@@ -53,6 +67,16 @@ export function MeetingYourJobs({
 	if (view.meeting.status === "cancelled") return null;
 	if (view.roles.length === 0) return null;
 
+	// Never offer Confirm over the member's own decline or on a closed meeting.
+	// An unanswered member gets it: the server's holder arm turns a blank answer
+	// into Coming without overwriting an answer (ADR-0026).
+	const canConfirm =
+		view.planStatus !== "not_coming" &&
+		!isMeetingOver({
+			status: view.meeting.status,
+			scheduledAt: view.meeting.scheduledAt,
+			timezone: view.club.timezone,
+		});
 	const target: DutyTarget = { clubId, meetingId: meetingKey };
 	const meetingPath = `/club/${clubId}/meeting/${meetingKey}`;
 
@@ -78,6 +102,19 @@ export function MeetingYourJobs({
 						<h3 className="font-semibold text-base text-foreground">
 							{role.roleName}
 						</h3>
+						<p className="text-muted-foreground text-sm">
+							{role.status === "confirmed" ? "Confirmed" : "Not confirmed yet"}
+						</p>
+						{role.status === "claimed" && canConfirm ? (
+							<Button
+								className="mt-2 min-h-11"
+								disabled={confirming !== null}
+								aria-busy={confirming === role.slotId}
+								onClick={() => void confirm(role.slotId, role.roleName)}
+							>
+								Confirm {role.roleName}
+							</Button>
+						) : null}
 						<div className="mt-2">
 							<RoleCalendarButton
 								view={view}
