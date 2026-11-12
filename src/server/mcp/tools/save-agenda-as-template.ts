@@ -1,0 +1,321 @@
+/**
+ * `save_agenda_as_template` — save one meeting's agenda as a club template (#1628).
+ *
+ * The app never edits a template directly: an officer edits a meeting's agenda
+ * and chooses "Save as club template". The connector mirrors that: shape a
+ * meeting with `edit_agenda`, then save it here. This calls the app's own seam,
+ * `saveMeetingAgendaAsClubTemplate`, and adds nothing to it.
+ *
+ * Preview, then apply, in the conversation (the `edit_agenda` shape). A call
+ * WITHOUT `planHash` writes nothing, not even the meeting's own stored copy: it
+ * reads through `readAgendaSnapshot` and returns the plan. The plan carries a
+ * CONTENT hash of what will be saved (and, for a replace, of what will be
+ * overwritten), so a change to any copied field, not only the rows a person
+ * reads, makes the plan stale. The apply re-plans, compares, then calls the
+ * seam. The re-plan runs outside the seam's transaction: an agenda edit landing
+ * between them is saved as it then stands, the same window the app's dialog has.
+ */
+
+import { and, eq, isNull } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "#/db";
+import { meetingTemplates } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
+import { parseClubTemplateFields } from "#/lib/club-template-key";
+import { digest, planHash } from "#/lib/mcp-plan";
+import { meetingRefusal } from "#/lib/meeting-lifecycle";
+import { MAX_TEMPLATE_BEATS } from "#/lib/meeting-template-limits";
+import {
+	AGENDA_DEADLOCK_MESSAGE,
+	plannedMaterialisation,
+	readAgendaSnapshot,
+} from "#/server/meeting-agenda-edit-logic";
+import {
+	CLUB_TEMPLATE_GONE_MESSAGE,
+	SAVE_CANCELLED_MESSAGE,
+	saveMeetingAgendaAsClubTemplate,
+	TemplateTooLargeError,
+	templateContentForHash,
+} from "#/server/meeting-templates-logic";
+import { authorizeTokenForMeeting } from "../authz-logic";
+import { McpError } from "../errors";
+import type { McpToolDefinition } from "../tool";
+import {
+	TEMPLATE_NOT_LISTED_MESSAGE,
+	type TemplateRow,
+	toTemplateRow,
+} from "./list-agenda-templates";
+
+export const SAVE_AGENDA_AS_TEMPLATE_TOOL = "save_agenda_as_template";
+
+export const TEMPLATE_PLAN_STALE_MESSAGE =
+	"The agenda or the template changed since that preview. Show the user the fresh plan and ask again.";
+
+const inputSchema = {
+	meetingId: z.string().uuid(),
+	target: z.discriminatedUnion("mode", [
+		z
+			.object({
+				mode: z.literal("new"),
+				name: z.string().max(400),
+				description: z.string().max(2000).nullable().optional(),
+			})
+			.strict(),
+		z
+			.object({ mode: z.literal("replace"), templateId: z.string().uuid() })
+			.strict(),
+	]),
+	planHash: z
+		.string()
+		.min(1)
+		.max(200)
+		.optional()
+		.describe(
+			"Omit to preview. Pass the planHash a preview returned to apply that plan.",
+		),
+};
+
+type SavePlan = {
+	meetingId: string;
+	mode: "new" | "replace";
+	source: { rows: TemplateRow[]; contentHash: string };
+	target:
+		| { name: string; description: string | null }
+		| {
+				templateId: string;
+				name: string;
+				currentRows: TemplateRow[];
+				currentContentHash: string;
+		  };
+};
+
+type Target = z.infer<typeof inputSchema.target>;
+
+async function contentOrValidation(
+	templateId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof templateContentForHash>>>> {
+	let content: Awaited<ReturnType<typeof templateContentForHash>>;
+	try {
+		content = await templateContentForHash(db, templateId);
+	} catch (err) {
+		if (err instanceof TemplateTooLargeError) {
+			throw new McpError("VALIDATION", err.message);
+		}
+		throw err;
+	}
+	if (!content) throw new McpError("NOT_FOUND", TEMPLATE_NOT_LISTED_MESSAGE);
+	return content;
+}
+
+/** The plan, refused for everything the preview and the apply both refuse. */
+async function buildPlan(
+	meetingId: string,
+	clubId: string,
+	target: Target,
+): Promise<SavePlan> {
+	// Input validation first, so an invalid request is never reported as stale.
+	let fields: { name: string; description: string | null } | null = null;
+	if (target.mode === "new") {
+		const parsed = parseClubTemplateFields(
+			target.name,
+			target.description ?? null,
+		);
+		if ("error" in parsed) throw new McpError("VALIDATION", parsed.error);
+		fields = parsed;
+	}
+
+	const snap = await readAgendaSnapshot(meetingId, db);
+	if (!snap || snap.clubId !== clubId) {
+		throw new McpError("NOT_FOUND", "Meeting not found.");
+	}
+	// `meetingRefusal` first: an unknown status throws a plain Error (INTERNAL).
+	if (meetingRefusal(snap.status, "record") === "cancelled") {
+		throw new McpError("LOCKED", SAVE_CANCELLED_MESSAGE, {
+			reason: "meeting_cancelled",
+			retryable: false,
+		});
+	}
+	if (snap.rows.length === 0) {
+		throw new McpError(
+			"VALIDATION",
+			"This meeting's agenda has no rows to save.",
+		);
+	}
+	if (snap.rows.length > MAX_TEMPLATE_BEATS) {
+		throw new McpError(
+			"VALIDATION",
+			`This meeting's agenda is too large to copy (${MAX_TEMPLATE_BEATS} rows maximum).`,
+		);
+	}
+
+	let sourceContent: unknown;
+	if (snap.templateId !== null) {
+		sourceContent = await contentOrValidation(snap.templateId);
+	} else {
+		// Never opened: nothing is stored yet, so hash what the seam is about to
+		// store (the full derivation, not the snapshot's projection).
+		const planned = await plannedMaterialisation(db, meetingId);
+		if (!planned) throw new McpError("NOT_FOUND", "Meeting not found.");
+		sourceContent = {
+			beats: planned.seeds,
+			roles: [...planned.roles].sort((a, b) => a.key.localeCompare(b.key)),
+		};
+	}
+	const source = {
+		rows: snap.rows.map(toTemplateRow),
+		contentHash: digest(sourceContent),
+	};
+
+	if (target.mode === "new" && fields) {
+		return {
+			meetingId,
+			mode: "new",
+			source,
+			target: { name: fields.name, description: fields.description },
+		};
+	}
+	if (target.mode !== "replace") throw new Error("unreachable");
+	// The tenant boundary is the query: this club's own template, never a
+	// global one, another club's, or a meeting's private copy.
+	const [own] = await db
+		.select({ id: meetingTemplates.id })
+		.from(meetingTemplates)
+		.where(
+			and(
+				eq(meetingTemplates.id, target.templateId),
+				eq(meetingTemplates.clubId, clubId),
+				isNull(meetingTemplates.meetingId),
+			),
+		)
+		.limit(1);
+	if (!own) {
+		throw new McpError(
+			"NOT_FOUND",
+			"Call list_agenda_templates for this club's template ids.",
+		);
+	}
+	const current = await contentOrValidation(own.id);
+	return {
+		meetingId,
+		mode: "replace",
+		source,
+		target: {
+			templateId: own.id,
+			name: current.name,
+			currentRows: current.beats.map(toTemplateRow),
+			currentContentHash: digest(current),
+		},
+	};
+}
+
+/** Map what the seam throws, by identity with its exported constants. */
+function seamError(err: unknown): unknown {
+	if (err instanceof McpError) return err;
+	if (err instanceof TemplateTooLargeError) {
+		return new McpError("VALIDATION", err.message);
+	}
+	if (!(err instanceof Error)) return err;
+	if (err.message === SAVE_CANCELLED_MESSAGE) {
+		return new McpError("LOCKED", err.message, {
+			reason: "meeting_cancelled",
+			retryable: false,
+		});
+	}
+	if (err.message === CLUB_TEMPLATE_GONE_MESSAGE) {
+		return new McpError(
+			"NOT_FOUND",
+			"Call list_agenda_templates for this club's template ids.",
+		);
+	}
+	if (err.message === CLUB_ARCHIVED_MESSAGE) {
+		return new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+	}
+	if (err.message === AGENDA_DEADLOCK_MESSAGE) {
+		return new McpError("LOCKED", err.message, {
+			reason: "deadlock",
+			retryable: true,
+		});
+	}
+	return err;
+}
+
+export const saveAgendaAsTemplateTool: McpToolDefinition = {
+	name: SAVE_AGENDA_AS_TEMPLATE_TOOL,
+	audience: "officer",
+	// A replace overwrites a template; a repeated "new" makes a second one.
+	annotations: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+	},
+	config: {
+		title: "Save an agenda as a club template",
+		description:
+			"Save one meeting's agenda as a club agenda template: target " +
+			"{mode:'new', name, description?} makes a new template, " +
+			"{mode:'replace', templateId} overwrites one of the club's own " +
+			"(list_agenda_templates gives the ids). Saving changes no meeting's " +
+			"agenda; the template is built from the meeting's agenda as it is " +
+			"now, so use edit_agenda first to shape it. edit_agenda changes that " +
+			"meeting for real, so shape a meeting that should carry the change or " +
+			"put it back afterwards. A replace overwrites the template and cannot " +
+			"be undone; the plan shows what it will overwrite. Without planHash " +
+			"this writes nothing and returns a plan and a planHash; show the " +
+			"plan to the user, then call again with the same input plus that " +
+			"planHash. A cancelled meeting is refused.",
+		inputSchema,
+	},
+	handler: async (input, ctx) => {
+		const args = z.object(inputSchema).parse(input);
+		const { club, user } = await authorizeTokenForMeeting(ctx, args.meetingId);
+		const hashOf = (plan: SavePlan) =>
+			planHash({
+				tool: SAVE_AGENDA_AS_TEMPLATE_TOOL,
+				clubId: club.clubId,
+				userId: user.id,
+				plan,
+			});
+
+		const plan = await buildPlan(args.meetingId, club.clubId, args.target);
+		const fresh = hashOf(plan);
+		if (args.planHash === undefined) {
+			return {
+				applied: false,
+				meetingId: args.meetingId,
+				clubId: club.clubId,
+				plan,
+				planHash: fresh,
+			};
+		}
+		if (fresh !== args.planHash) {
+			throw new McpError("PLAN_STALE", TEMPLATE_PLAN_STALE_MESSAGE, {
+				plan,
+				planHash: fresh,
+			});
+		}
+
+		try {
+			const { templateId } = await saveMeetingAgendaAsClubTemplate({
+				meetingId: args.meetingId,
+				clubId: club.clubId,
+				actorMemberId: club.membershipId,
+				...(args.target.mode === "new"
+					? {
+							mode: "new" as const,
+							name: args.target.name,
+							description: args.target.description ?? null,
+						}
+					: { mode: "replace" as const, templateId: args.target.templateId }),
+			});
+			return {
+				applied: true,
+				meetingId: args.meetingId,
+				clubId: club.clubId,
+				templateId,
+				plan,
+			};
+		} catch (err) {
+			throw seamError(err);
+		}
+	},
+};

@@ -55,6 +55,8 @@ const {
 	loadTemplateContent,
 	materializeTemplateRoles,
 	resolveMeetingRoleDefs,
+	TemplateTooLargeError,
+	templateContentForHash,
 } = await import("./meeting-templates-logic");
 
 describe.skipIf(!hasTestDb)("meeting template logic", () => {
@@ -710,5 +712,130 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 			expect(names).not.toContain("Contest Chair");
 			expect(names).toContain("Timer");
 		});
+	});
+});
+
+describe.skipIf(!hasTestDb)("templateContentForHash (#1628)", () => {
+	let seed: SeededClub;
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	async function mk(beatCount = 2) {
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: seed.clubId,
+				key: `h-${crypto.randomUUID().slice(0, 8)}`,
+				name: "H",
+				defaultLengthMinutes: 60,
+			})
+			.returning({ id: meetingTemplates.id });
+		const id = t?.id ?? "";
+		if (beatCount > 0)
+			await testDb.insert(meetingTemplateBeats).values(
+				Array.from({ length: beatCount }, (_, i) => ({
+					templateId: id,
+					sortOrder: i,
+					kind: "event" as const,
+					label: `Row ${i}`,
+					minutes: 1,
+				})),
+			);
+		await testDb.insert(meetingTemplateRoles).values([
+			{
+				templateId: id,
+				key: "b_role",
+				name: "B",
+				category: "functionary" as const,
+				sortOrder: 1,
+			},
+			{
+				templateId: id,
+				key: "a_role",
+				name: "A",
+				category: "functionary" as const,
+				sortOrder: 2,
+			},
+		]);
+		return id;
+	}
+
+	// protects=null for a missing template; beats by sortOrder, roles by key;
+	// fails_when=ordering follows insertion or sortOrder of roles;
+	// no_claim=none.
+	it("orders beats by sortOrder and roles by key; null when absent", async () => {
+		const id = await mk();
+		const c = await templateContentForHash(testDb, id);
+		expect(c?.beats.map((b) => b.label)).toEqual(["Row 0", "Row 1"]);
+		expect(c?.roles.map((r) => r.key)).toEqual(["a_role", "b_role"]);
+		expect(
+			await templateContentForHash(testDb, crypto.randomUUID()),
+		).toBeNull();
+	});
+
+	// protects=a change to a row's detail, a role's sortOrder or the default length changes the content;
+	// fails_when=a copied column is left out of the read;
+	// no_claim=none.
+	it("differs after a detail, role sortOrder or default length change", async () => {
+		const id = await mk();
+		const base = JSON.stringify(await templateContentForHash(testDb, id));
+		await testDb
+			.update(meetingTemplateBeats)
+			.set({ detail: "x" })
+			.where(eq(meetingTemplateBeats.templateId, id));
+		const afterDetail = JSON.stringify(
+			await templateContentForHash(testDb, id),
+		);
+		expect(afterDetail).not.toBe(base);
+		await testDb
+			.update(meetingTemplateRoles)
+			.set({ sortOrder: 9 })
+			.where(eq(meetingTemplateRoles.templateId, id));
+		const afterRole = JSON.stringify(await templateContentForHash(testDb, id));
+		expect(afterRole).not.toBe(afterDetail);
+		await testDb
+			.update(meetingTemplates)
+			.set({ defaultLengthMinutes: 75 })
+			.where(eq(meetingTemplates.id, id));
+		expect(JSON.stringify(await templateContentForHash(testDb, id))).not.toBe(
+			afterRole,
+		);
+	});
+
+	// protects=the same value whatever order rows were inserted in (ties on sortOrder broken by id, not insertion);
+	// fails_when=the order depends on physical order;
+	// no_claim=none.
+	it("is stable across insertion order", async () => {
+		const a = await mk(0);
+		const b = await mk(0);
+		const rows = [3, 1, 2].map((n) => ({
+			sortOrder: n,
+			kind: "event" as const,
+			label: `R${n}`,
+			minutes: n,
+		}));
+		await testDb
+			.insert(meetingTemplateBeats)
+			.values(rows.map((r) => ({ ...r, templateId: a })));
+		await testDb
+			.insert(meetingTemplateBeats)
+			.values([...rows].reverse().map((r) => ({ ...r, templateId: b })));
+		const ca = await templateContentForHash(testDb, a);
+		const cb = await templateContentForHash(testDb, b);
+		expect(ca?.beats).toEqual(cb?.beats);
+	});
+
+	// protects=a template over the beat cap throws instead of truncating;
+	// fails_when=the read silently shortens a hash input;
+	// no_claim=the roles cap shares the same branch and is not separately seeded.
+	it("throws TemplateTooLargeError over the beat cap", async () => {
+		const id = await mk(MAX_TEMPLATE_BEATS + 1);
+		await expect(templateContentForHash(testDb, id)).rejects.toBeInstanceOf(
+			TemplateTooLargeError,
+		);
 	});
 });

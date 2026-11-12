@@ -103,6 +103,8 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
 | `cancel_meeting` | **writes immediately** | "We're not meeting this Saturday — cancel it." Everyone keeps their role; Claude gets a drafted notice naming the date and every role holder, for you to copy and send |
 | `restore_meeting` | **writes immediately** | "Put Saturday's meeting back." Every role is exactly as it was; possible until the end of the meeting's day |
 | `edit_agenda` | previews, then writes when you approve | "Open with 15 minutes of Introductions so the program starts at 12:15" — add, remove, move or retime agenda rows |
+| `list_agenda_templates` | reads | "What agenda templates does our club have?" The club's own (disabled ones too) and the global ones, which is the default, and one template's rows on request |
+| `save_agenda_as_template` | previews, then writes when you approve | **Admins and officers.** "Save this meeting's agenda as a club template." Copies one meeting's agenda as it is now into a new club template, or replaces one of the club's own |
 | `update_meeting_schedule` | previews, then writes when you approve | **Admins and officers.** "Move our standing meeting to 7:30 PM", "our meetings are 60 minutes now" — change the standing time, the schedule line guests see, and/or the default meeting length |
 | `reschedule_meeting` | previews, then writes when you approve | **Admins and officers.** "Move Thursday's meeting to 7:30 PM", "make the 28th a 60-minute meeting" — change one upcoming meeting's date, start time and/or length |
 | `upsert_agendas` | writes nothing — gives you a link | "Set the themes for October's meetings" |
@@ -142,6 +144,14 @@ Turn the connector on in a chat (the tools icon), then just ask. Claude picks th
   changed the agenda in between it gets a fresh plan instead. The whole batch applies or none of
   it does. It never changes the meeting's scheduled time, and a completed or cancelled meeting is
   refused. Anything it did is undone in the agenda editor like any other edit.
+- **`save_agenda_as_template` asks twice, and saving changes no meeting.** The first call writes
+  nothing: it shows the rows that would be saved and, for a replace, the rows it would overwrite.
+  A replace cannot be undone. To make a template with a change in it (say a 5-minute roleplay
+  before Table Topics): choose a scheduled meeting that should carry the change, have Claude
+  read it with `get_agenda`, shape it with `edit_agenda` (that edit is real: it changes the
+  meeting), then save it with `save_agenda_as_template`. To leave the meeting as it was, ask
+  Claude to reverse the edit with `edit_agenda` afterwards. `list_agenda_templates` shows the
+  result.
 - **`reschedule_meeting` asks twice.** The first call writes nothing: it shows the meeting's old and
   new start, end and date in club time, and warns when the agenda's run sheet would end after the
   new end time (a warning, not a refusal; use `edit_agenda` to shorten rows). It applies only when

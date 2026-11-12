@@ -271,6 +271,78 @@ export async function loadTemplateContent(
 	return { beats, roles };
 }
 
+/** Thrown by `templateContentForHash` for a template over the row caps. */
+export class TemplateTooLargeError extends Error {
+	constructor() {
+		super(
+			`That agenda is too large to read (${MAX_TEMPLATE_BEATS} rows or ${MAX_TEMPLATE_ROLES} roles maximum).`,
+		);
+		this.name = "TemplateTooLargeError";
+	}
+}
+
+/**
+ * A template's complete stored content, for a plan hash (#1628): every column
+ * `copyTemplateContent` copies, read on the connection given (so it works
+ * inside a transaction), beats by `sortOrder` then `id`, roles by `key`.
+ * Null for a template that does not exist. Never truncates: a template over
+ * the caps throws `TemplateTooLargeError`.
+ */
+export async function templateContentForHash(conn: DbOrTx, templateId: string) {
+	const [tpl] = await conn
+		.select({
+			name: meetingTemplates.name,
+			defaultLengthMinutes: meetingTemplates.defaultLengthMinutes,
+		})
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	if (!tpl) return null;
+	const beats = await conn
+		.select({
+			sortOrder: meetingTemplateBeats.sortOrder,
+			kind: meetingTemplateBeats.kind,
+			label: meetingTemplateBeats.label,
+			detail: meetingTemplateBeats.detail,
+			minutes: meetingTemplateBeats.minutes,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+			flex: meetingTemplateBeats.flex,
+			handoff: meetingTemplateBeats.handoff,
+			markGreen: meetingTemplateBeats.markGreen,
+			markYellow: meetingTemplateBeats.markYellow,
+			markRed: meetingTemplateBeats.markRed,
+			clubGoverned: meetingTemplateBeats.clubGoverned,
+		})
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder), asc(meetingTemplateBeats.id))
+		.limit(MAX_TEMPLATE_BEATS + 1);
+	if (beats.length > MAX_TEMPLATE_BEATS) throw new TemplateTooLargeError();
+	const roles = await conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			category: meetingTemplateRoles.category,
+			defaultCount: meetingTemplateRoles.defaultCount,
+			sortOrder: meetingTemplateRoles.sortOrder,
+			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+			slotsUnordered: meetingTemplateRoles.slotsUnordered,
+			description: meetingTemplateRoles.description,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId))
+		.orderBy(asc(meetingTemplateRoles.key))
+		.limit(MAX_TEMPLATE_ROLES + 1);
+	if (roles.length > MAX_TEMPLATE_ROLES) throw new TemplateTooLargeError();
+	return {
+		name: tpl.name,
+		defaultLengthMinutes: tpl.defaultLengthMinutes,
+		beats,
+		roles,
+	};
+}
+
 /**
  * The `key` of a template row, or null if it no longer exists.
  *
@@ -1766,6 +1838,11 @@ export async function forkLegacyPointers(
 	return pointing.map((m) => m.id);
 }
 
+/** What a save is refused with when the meeting is cancelled. Exported so a
+ *  caller compares against THIS rather than a copy (`mcp/errors.ts`). */
+export const SAVE_CANCELLED_MESSAGE =
+	"A cancelled meeting's agenda cannot be saved as a template.";
+
 export type SaveClubTemplateInput = {
 	meetingId: string;
 	clubId: string;
@@ -1872,8 +1949,7 @@ async function saveInTransaction(
 		// operation's own sentence.
 		assertMeetingAccepts(meeting.status, "record", {
 			messages: {
-				cancelled:
-					"A cancelled meeting's agenda cannot be saved as a template.",
+				cancelled: SAVE_CANCELLED_MESSAGE,
 			},
 		});
 

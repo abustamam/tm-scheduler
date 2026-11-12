@@ -96,6 +96,15 @@ function sortDeep(value: unknown): unknown {
 	return out;
 }
 
+/**
+ * `sha256(canonicalize(value))`, lowercase hex: a stable fingerprint of one
+ * piece of content (a template's stored rows) for a plan to carry. The ONE
+ * place hashing lives; a tool never builds its own (#1628).
+ */
+export function digest(value: unknown): string {
+	return createHash("sha256").update(canonicalize(value)).digest("hex");
+}
+
 /** What a plan hash is taken over: the plan, plus who is applying it and where. */
 export interface PlanHashInput {
 	/** The MCP tool name, so a hash is not portable between tools. */

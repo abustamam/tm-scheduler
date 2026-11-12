@@ -31,6 +31,7 @@ import { getImportReportTool } from "./get-import-report";
 import { getLineupBlastTool } from "./get-lineup-blast";
 import { getMyFeedbackTool } from "./get-my-feedback";
 import { getMyScheduleTool } from "./get-my-schedule";
+import { listAgendaTemplatesTool } from "./list-agenda-templates";
 import { listMeetingsTool } from "./list-meetings";
 import { recordAttendanceTool } from "./record-attendance";
 import { recordGuestBookTool } from "./record-guest-book";
@@ -40,6 +41,7 @@ import { reopenMeetingTool } from "./reopen-meeting";
 import { requestCoverTool } from "./request-cover";
 import { rescheduleMeetingTool } from "./reschedule-meeting";
 import { restoreMeetingTool } from "./restore-meeting";
+import { saveAgendaAsTemplateTool } from "./save-agenda-as-template";
 import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setContactPreferenceTool } from "./set-contact-preference";
@@ -73,6 +75,8 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	recordTableTopicsTool,
 	upsertAgendasTool,
 	editAgendaTool,
+	listAgendaTemplatesTool,
+	saveAgendaAsTemplateTool,
 	editMeetingTool,
 	editRoleSlotsTool,
 	editSpeakerSlotsTool,

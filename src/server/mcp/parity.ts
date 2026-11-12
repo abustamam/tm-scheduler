@@ -235,7 +235,9 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("area-visits", "recordClubVisit", "areaDirector", { gap: true }),
 	row("area-visits", "clearClubVisit", "areaDirector", { gap: true }),
 	row("meeting-templates", "applyTemplateToMeeting", "admin", { gap: true }),
-	row("meeting-templates", "saveAgendaAsClubTemplate", "admin", { gap: true }),
+	row("meeting-templates", "saveAgendaAsClubTemplate", "admin", {
+		tool: "save_agenda_as_template",
+	}),
 	row("auth-context", "setActiveClub", "self", {
 		notOnConnector: {
 			category: "UI-only state",

@@ -426,6 +426,39 @@ export const AGENDA_PLAN_WRITE_OPTIONS: Readonly<MeetingWriteOptions> =
 	});
 
 /**
+ * What `materialiseForMeeting` would store for a meeting that has no agenda
+ * yet, computed and written nowhere: the beats and declared roles, in full
+ * (the snapshot projects roles to five fields; materialisation stores them all,
+ * `slotsUnordered` and `sortOrder` included). `materialiseAgendaForMeeting`
+ * writes from the same `standardAgendaFrom` derivation, so a plan hash over
+ * this covers what a save will store (#1628). Null for an unknown meeting.
+ */
+export async function plannedMaterialisation(
+	conn: DbOrTx,
+	meetingId: string,
+): Promise<StandardAgenda | null> {
+	const [meeting] = await conn
+		.select({
+			clubId: meetings.clubId,
+			geIntroducesFunctionaries: clubs.geIntroducesFunctionaries,
+			tableTopicsMinSeconds: clubs.tableTopicsMinSeconds,
+			tableTopicsMaxSeconds: clubs.tableTopicsMaxSeconds,
+		})
+		.from(meetings)
+		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) return null;
+	return standardAgendaFrom(conn, meeting.clubId, {
+		geIntroducesFunctionaries: meeting.geIntroducesFunctionaries,
+		tableTopicsLimits: {
+			minSeconds: meeting.tableTopicsMinSeconds,
+			maxSeconds: meeting.tableTopicsMaxSeconds,
+		},
+	});
+}
+
+/**
  * Build this meeting its own editable copy of the standard agenda, once.
  *
  * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
