@@ -16,12 +16,12 @@ import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import {
-	type BandEdge,
-	bandInsets,
-	bandLabel,
-	nextBandEdge,
-	readBandEdge,
-	writeBandEdge,
+	type CallControlsEdge,
+	callControlsInset,
+	callControlsLabel,
+	nextCallControlsEdge,
+	readCallControlsEdge,
+	writeCallControlsEdge,
 } from "#/lib/call-controls-band";
 import { fitScale } from "#/lib/slide-fit";
 import {
@@ -149,24 +149,24 @@ export function MeetingPresent({
 	// The band for the call's controls (#1468). Read after mount, never in the
 	// initial state: the server renders "none", and a stored edge read during
 	// render would hydrate to a different tree.
-	const [band, setBand] = useState<BandEdge>("none");
+	const [band, setBand] = useState<CallControlsEdge>("none");
 	const [bandToast, setBandToast] = useState<string | null>(null);
 	const bandToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	useEffect(() => {
-		setBand(readBandEdge());
+		setBand(readCallControlsEdge());
 		return () => {
 			if (bandToastTimer.current) clearTimeout(bandToastTimer.current);
 		};
 	}, []);
 	const cycleBand = useCallback(() => {
-		const edge = nextBandEdge(band);
+		const edge = nextCallControlsEdge(band);
 		setBand(edge);
-		writeBandEdge(edge);
-		setBandToast(bandLabel(edge));
+		writeCallControlsEdge(edge);
+		setBandToast(callControlsLabel(edge));
 		if (bandToastTimer.current) clearTimeout(bandToastTimer.current);
 		bandToastTimer.current = setTimeout(() => setBandToast(null), 2000);
 	}, [band]);
-	const insets = bandInsets(band);
+	const insets = callControlsInset(band);
 
 	const last = deck.length - 1;
 	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
@@ -190,10 +190,6 @@ export function MeetingPresent({
 			if (k === "f" || k === "F") {
 				if (document.fullscreenElement) document.exitFullscreen();
 				else document.documentElement.requestFullscreen?.();
-				return;
-			}
-			if (k === "z" || k === "Z") {
-				cycleBand();
 				return;
 			}
 			if (overview) {
@@ -238,7 +234,11 @@ export function MeetingPresent({
 				}
 				return;
 			}
-			if (k === "ArrowRight" || k === "PageDown" || k === " ") {
+			if (k === "z" || k === "Z") {
+				// Deck only: with the overview open the branch above has returned.
+				e.preventDefault();
+				cycleBand();
+			} else if (k === "ArrowRight" || k === "PageDown" || k === " ") {
 				e.preventDefault();
 				next();
 			} else if (k === "ArrowLeft" || k === "PageUp") {
@@ -297,19 +297,6 @@ export function MeetingPresent({
 
 	return (
 		<div className="fixed inset-0 bg-black">
-			<button
-				type="button"
-				aria-label="Previous slide"
-				className="absolute inset-y-0 left-0 z-10 w-1/4 cursor-w-resize opacity-0"
-				onClick={prev}
-			/>
-			<button
-				type="button"
-				aria-label="Next slide"
-				className="absolute inset-y-0 right-0 z-10 w-1/4 cursor-e-resize opacity-0"
-				onClick={next}
-			/>
-
 			{/* The stage is the screen minus the call-controls band (#1468): the slide
 			    letterboxes inside it and the chrome sits on it, so neither lands under
 			    the call's own toolbar. Plain black, like the letterbox. */}
@@ -329,14 +316,27 @@ export function MeetingPresent({
 					<button
 						type="button"
 						onClick={cycleBand}
-						title="Space for call controls (Z)"
-						aria-label={bandLabel(band)}
+						title={`${callControlsLabel(band)} (Z)`}
+						aria-label={callControlsLabel(band)}
 						className="cursor-pointer rounded-full bg-black/35 p-[0.6vmin] text-white"
 					>
 						<PanelTop className="size-[2.2vmin]" aria-hidden />
 					</button>
 					<PptxDownloadButton deck={deck} clubName={clubName} />
 				</div>
+				<button
+					type="button"
+					aria-label="Previous slide"
+					className="absolute inset-y-0 left-0 z-10 w-1/4 cursor-w-resize opacity-0"
+					onClick={prev}
+				/>
+				<button
+					type="button"
+					aria-label="Next slide"
+					className="absolute inset-y-0 right-0 z-10 w-1/4 cursor-e-resize opacity-0"
+					onClick={next}
+				/>
+
 				{/* Letterboxed 16:9 frame so screen matches the .pptx exactly. */}
 				<div
 					className="relative"
@@ -361,7 +361,8 @@ export function MeetingPresent({
 
 				{/* Top-center: the one region empty on both splash and content slides.
 			    Bottom-center would sit on the footer's centered trademark
-			    disclaimer; top-right holds the PPTX button, top-left the content
+			    disclaimer; top-right holds the call-controls and
+			    PPTX buttons, top-left the content
 			    header. The dark pill keeps it legible over both the light content
 			    ground and the dark splash.
 
@@ -389,21 +390,20 @@ export function MeetingPresent({
 					{i + 1} / {deck.length}
 				</button>
 				{bandToast ? (
-					<output className="absolute bottom-[2vmin] left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/60 px-[1.4vmin] py-[0.4vmin] text-[1.6vmin] text-white">
+					<output className="absolute top-1/2 left-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/60 px-[1.4vmin] py-[0.4vmin] text-[1.6vmin] text-white">
 						{bandToast}
 					</output>
 				) : null}
+				{overview ? (
+					<SlideOverview
+						labels={labels}
+						current={i}
+						cursor={cursor}
+						onPick={jumpTo}
+						onClose={() => setOverview(false)}
+					/>
+				) : null}
 			</div>
-
-			{overview ? (
-				<SlideOverview
-					labels={labels}
-					current={i}
-					cursor={cursor}
-					onPick={jumpTo}
-					onClose={() => setOverview(false)}
-				/>
-			) : null}
 		</div>
 	);
 }

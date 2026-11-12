@@ -6,57 +6,73 @@
  *  and differ by app version), remembered in this browser only: it describes one
  *  laptop's call setup, not the club or the meeting. */
 
-export const BAND_EDGES = ["none", "top", "right", "bottom", "left"] as const;
-export type BandEdge = (typeof BAND_EDGES)[number];
+export type CallControlsEdge = "none" | "top" | "right" | "bottom" | "left";
 
-export const BAND_STORAGE_KEY = "gavelup:present-call-band";
+export const CALL_CONTROLS_EDGES: readonly CallControlsEdge[] = [
+	"none",
+	"top",
+	"right",
+	"bottom",
+	"left",
+];
 
-/** Thickness of the band, in CSS px. */
-export const BAND_PX: Record<Exclude<BandEdge, "none">, number> = {
-	top: 72,
-	bottom: 72,
-	left: 260,
-	right: 260,
-};
+export const CALL_CONTROLS_STORAGE_KEY = "gavelup:present-call-controls";
 
-export function isBandEdge(v: unknown): v is BandEdge {
-	return typeof v === "string" && (BAND_EDGES as readonly string[]).includes(v);
-}
+/** Thickness in CSS px: top/bottom height, left/right width. */
+export const CALL_CONTROLS_BAND_PX = {
+	horizontal: 72,
+	vertical: 260,
+} as const;
 
 /** none -> top -> right -> bottom -> left -> none. */
-export function nextBandEdge(edge: BandEdge): BandEdge {
-	return BAND_EDGES[(BAND_EDGES.indexOf(edge) + 1) % BAND_EDGES.length];
+export function nextCallControlsEdge(e: CallControlsEdge): CallControlsEdge {
+	return CALL_CONTROLS_EDGES[
+		(CALL_CONTROLS_EDGES.indexOf(e) + 1) % CALL_CONTROLS_EDGES.length
+	];
+}
+
+/** Storage can hold anything: unknown or null reads as "none". */
+export function parseCallControlsEdge(raw: string | null): CallControlsEdge {
+	return CALL_CONTROLS_EDGES.find((e) => e === raw) ?? "none";
 }
 
 /** Insets (px) the slide stage keeps clear of the band. */
-export function bandInsets(edge: BandEdge): {
+export function callControlsInset(e: CallControlsEdge): {
 	top: number;
 	right: number;
 	bottom: number;
 	left: number;
 } {
-	const insets = { top: 0, right: 0, bottom: 0, left: 0 };
-	if (edge !== "none") insets[edge] = BAND_PX[edge];
-	return insets;
+	const inset = { top: 0, right: 0, bottom: 0, left: 0 };
+	if (e === "top" || e === "bottom")
+		inset[e] = CALL_CONTROLS_BAND_PX.horizontal;
+	if (e === "left" || e === "right") inset[e] = CALL_CONTROLS_BAND_PX.vertical;
+	return inset;
 }
 
-export function bandLabel(edge: BandEdge): string {
-	return `Space for call controls: ${edge}`;
+/** The edge as the presenter reads it: "off" for none. */
+export function callControlsEdgeName(e: CallControlsEdge): string {
+	return e === "none" ? "off" : e;
 }
 
-/** Storage can throw (private window, blocked site data) and can hold anything. */
-export function readBandEdge(): BandEdge {
+export function callControlsLabel(e: CallControlsEdge): string {
+	return `Space for call controls: ${callControlsEdgeName(e)}`;
+}
+
+/** Storage can throw (private window, blocked site data). */
+export function readCallControlsEdge(): CallControlsEdge {
 	try {
-		const v = window.localStorage.getItem(BAND_STORAGE_KEY);
-		return isBandEdge(v) ? v : "none";
+		return parseCallControlsEdge(
+			window.localStorage.getItem(CALL_CONTROLS_STORAGE_KEY),
+		);
 	} catch {
 		return "none";
 	}
 }
 
-export function writeBandEdge(edge: BandEdge): void {
+export function writeCallControlsEdge(e: CallControlsEdge): void {
 	try {
-		window.localStorage.setItem(BAND_STORAGE_KEY, edge);
+		window.localStorage.setItem(CALL_CONTROLS_STORAGE_KEY, e);
 	} catch {
 		// Not remembered; the band still applies for this page view.
 	}
