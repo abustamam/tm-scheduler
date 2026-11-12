@@ -14,7 +14,9 @@ import {
 	toStoredText,
 } from "#/lib/promo-template";
 import {
+	BRACE_CLASS,
 	FIELD_BUTTON_CLASS,
+	PILL_CLASS,
 	TemplateField,
 	UNKNOWN_CLASS,
 } from "./template-field";
@@ -129,13 +131,13 @@ describe("opening the menu", () => {
 		expect(listbox()).toBeNull();
 	});
 
-	// protects=Escape on a menu opened with Insert variable closes it even when an @ trigger sits
+	// protects=Escape on a menu opened with Add a detail closes it even when an @ trigger sits
 	// underneath; fails_when=the @ keeps the menu open after Escape;
-	// no_claim=Insert variable's pick position (the picking tests).
-	it("Escape after @ then Insert variable closes the menu", async () => {
+	// no_claim=Add a detail's pick position (the picking tests).
+	it("Escape after @ then Add a detail closes the menu", async () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		expect(listbox()).not.toBeNull();
 		await user.keyboard("{Escape}");
 		expect(listbox()).toBeNull();
@@ -205,15 +207,15 @@ describe("picking", () => {
 		expect(document.activeElement).toBe(ta);
 	});
 
-	// protects=Insert variable opens the same listbox, focus in the textarea, pick at the last caret;
+	// protects=Add a detail opens the same listbox, focus in the textarea, pick at the last caret;
 	// fails_when=it inserts at the end or steals focus;
 	// no_claim=the phone keyboard staying up.
-	it("Insert variable inserts at the last caret position", async () => {
+	it("Add a detail inserts at the last caret position", async () => {
 		const { user, ta } = setup({ initial: "ab cd" });
 		await user.click(ta);
 		ta.setSelectionRange(2, 2);
 		await user.keyboard("{ArrowRight}{ArrowLeft}");
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		expect(listbox()).not.toBeNull();
 		expect(document.activeElement).toBe(ta);
 		await user.click(screen.getByRole("option", { name: /^Date/ }));
@@ -222,9 +224,9 @@ describe("picking", () => {
 
 	// protects=a never-focused field gets the variable at its end; fails_when=it is lost or put at the start;
 	// no_claim=a replaced selection (the last-caret test covers a collapsed caret only).
-	it("Insert variable on a never-focused field appends", async () => {
+	it("Add a detail on a never-focused field appends", async () => {
 		const { user, ta } = setup({ initial: "Hello " });
-		await user.click(screen.getByRole("button", { name: "Insert variable" }));
+		await user.click(screen.getByRole("button", { name: "Add a detail" }));
 		await user.click(screen.getByRole("option", { name: /^Date/ }));
 		expect(ta.value).toBe("Hello {Date}");
 	});
@@ -260,11 +262,11 @@ describe("accessibility", () => {
 		const { user, ta } = setup();
 		await user.type(ta, "@");
 		expect(document.querySelector("[aria-live=polite]")?.textContent).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 		await user.keyboard("{Enter}");
 		expect(document.querySelector("[aria-live=polite]")?.textContent).toBe(
-			"Inserted Date",
+			"Added Date",
 		);
 	});
 
@@ -302,11 +304,11 @@ describe("accessibility", () => {
 });
 
 describe("controls and announcements", () => {
-	// protects=the Insert variable button carries the 44px-below-md class, read from the component's
+	// protects=the Add a detail button carries the 44px-below-md class, read from the component's
 	// constant; fails_when=the class is dropped from the button; no_claim=real rendered height (QA pass).
-	it("Insert variable carries FIELD_BUTTON_CLASS", () => {
+	it("Add a detail carries FIELD_BUTTON_CLASS", () => {
 		setup();
-		const button = screen.getByRole("button", { name: "Insert variable" });
+		const button = screen.getByRole("button", { name: "Add a detail" });
 		for (const c of FIELD_BUTTON_CLASS.split(" "))
 			expect(button.classList.contains(c)).toBe(true);
 		expect(FIELD_BUTTON_CLASS.split(" ")[0]).toBe("h-11");
@@ -314,21 +316,21 @@ describe("controls and announcements", () => {
 
 	// protects=a reopened menu is announced again: the opening text is cleared on close;
 	// fails_when=open, Escape, reopen leaves the same live-region text and so says nothing;
-	// no_claim=that a screen reader speaks it, or that an "Inserted X" survives (the announce test).
+	// no_claim=that a screen reader speaks it, or that an "Added X" survives (the announce test).
 	it("empties the opening announcement while the menu is closed", async () => {
 		const { user, ta } = setup();
 		const live = () =>
 			document.querySelector("[aria-live=polite]")?.textContent;
 		await user.type(ta, "@");
 		expect(live()).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 		await user.keyboard("{Escape}");
 		expect(live()).toBe("");
 		await user.clear(ta);
 		await user.type(ta, "@");
 		expect(live()).toBe(
-			`${PROMO_VARIABLES.length} variables, use up and down then Enter`,
+			`${PROMO_VARIABLES.length} details, use up and down then Enter`,
 		);
 	});
 
@@ -383,25 +385,89 @@ describe("pills and Enter", () => {
 });
 
 describe("counter, typos and defaults", () => {
-	// protects=the counter counts the STORED length ({Word of the Day} = 14 not 17);
-	// fails_when=it counts the friendly text; no_claim=the over-limit styling.
-	it("counts the stored form", () => {
-		setup({ initial: "{Word of the Day}" });
-		expect(screen.getByText("14 / 160")).toBeTruthy();
+	// protects=the counter counts the STORED length ({Word of the Day} = 14 not 17) and is silent under 80%;
+	// fails_when=it counts the friendly text or shows while comfortably under the limit;
+	// no_claim=the over-limit styling.
+	it("counts the stored form and is silent under 80%", () => {
+		setup({ initial: "{Word of the Day}", limit: 17 });
+		// stored 14 of 17 = 82%: shows, counting 3 left (not 0 left for the 17 friendly chars)
+		expect(screen.getByText("3 characters left")).toBeTruthy();
+		cleanup();
+		setup({ initial: "{Word of the Day}", limit: 160 });
+		expect(screen.queryByText(/characters/)).toBeNull();
 	});
 
-	// protects=bullets count lines and the longest line; fails_when=blank lines are counted;
-	// no_claim=the over-limit styling or the max-lines refusal at Save.
-	it("shows bullet count and longest line", () => {
+	// protects=the counter appears from 80% and says "too long" over the limit;
+	// fails_when=either message is missing or wrong; no_claim=the colour.
+	it("counts characters left from 80% and too long over the limit", () => {
+		setup({ initial: "x".repeat(128), limit: 160 });
+		expect(screen.getByText("32 characters left")).toBeTruthy();
+		cleanup();
+		setup({ initial: "x".repeat(127), limit: 160 });
+		expect(screen.queryByText(/characters/)).toBeNull();
+		cleanup();
+		setup({ initial: "x".repeat(165), limit: 160 });
+		expect(screen.getByText("5 characters too long")).toBeTruthy();
+	});
+
+	// protects=bullets are silent while fine, then name the line count or the long line;
+	// fails_when=blank lines are counted or a message is missing; no_claim=colour.
+	it("bullets: silent when fine, too many lines, an over-long line", () => {
+		const base = { label: "Headline", limit: undefined } as const;
+		setup({ ...base, bullets: { perLine: 10, max: 2 }, initial: "one\n\ntwo" });
+		expect(screen.queryByText(/Keep it to|too long/)).toBeNull();
+		cleanup();
+		setup({ ...base, bullets: { perLine: 10, max: 2 }, initial: "a\nb\nc" });
+		expect(screen.getByText("Keep it to 2 reasons (you have 3)")).toBeTruthy();
+		cleanup();
 		setup({
-			label: "Headline",
-			limit: undefined,
-			bullets: { perLine: 160, max: 8 },
-			initial: "one\n\ntwelve chars",
+			...base,
+			bullets: { perLine: 10, max: 5 },
+			initial: "ok\n\nfine\nabcdefghijkl",
 		});
-		expect(
-			screen.getByText("2 of 8 bullets, longest line 12 / 160"),
-		).toBeTruthy();
+		// The number the user sees in the textarea: the blank line counts.
+		expect(screen.getByText("Line 4 is 2 characters too long")).toBeTruthy();
+	});
+
+	// protects=the look is literal: transparent textarea ink over a visible backdrop, round pills, hidden braces;
+	// fails_when=the textarea paints its own text, the backdrop is transparent, a pill is not round or a brace shows;
+	// no_claim=painted pixels or alignment.
+	it("paints the textarea transparent over a visible backdrop with round pills", () => {
+		const { ta } = setup({ initial: "a {Date}" });
+		expect(ta.classList.contains("text-transparent")).toBe(true);
+		expect(ta.classList.contains("caret-foreground")).toBe(true);
+		const backdrop = document.querySelector(
+			'[data-slot="template-field-backdrop"]',
+		);
+		expect(backdrop?.classList.contains("text-foreground")).toBe(true);
+		expect(backdrop?.classList.contains("text-transparent")).toBe(false);
+		const pill = document.querySelector('[data-slot="template-pill"]');
+		expect(pill?.classList.contains("rounded-full")).toBe(true);
+		const braces = pill?.querySelectorAll("span") ?? [];
+		expect(braces.length).toBe(2);
+		for (const brace of braces) {
+			expect(brace.classList.contains("text-transparent")).toBe(true);
+		}
+	});
+
+	// protects=a known variable paints as a pill with invisible braces and a visible label; an unknown token keeps visible braces;
+	// fails_when=the pill loses PILL_CLASS, a brace is visible, or the typo has no flag; no_claim=painted pixels.
+	it("paints a known variable as a pill and an unknown one with braces", () => {
+		setup({ initial: "a {Date} b {foo}" });
+		const pill = document.querySelector("[data-slot=template-pill]");
+		expect(pill?.className).toBe(PILL_CLASS);
+		const braces = pill?.querySelectorAll(`.${BRACE_CLASS}`);
+		expect(braces?.length).toBe(2);
+		expect(braces?.[0].textContent).toBe("{");
+		expect(braces?.[1].textContent).toBe("}");
+		expect(pill?.textContent).toBe("{Date}");
+		const label = [...(pill?.childNodes ?? [])].find(
+			(n) => n.nodeType === Node.TEXT_NODE,
+		);
+		expect(label?.textContent).toBe("Date");
+		const unknown = document.querySelector(`.${UNKNOWN_CLASS.split(" ")[0]}`);
+		expect(unknown?.textContent).toBe("{foo}");
+		expect(unknown?.querySelector(`.${BRACE_CLASS}`)).toBeNull();
 	});
 
 	// protects=typo line, wavy underline and Fix; fails_when=Fix leaves the typo or the line stays;
@@ -410,7 +476,7 @@ describe("counter, typos and defaults", () => {
 		const { user, ta } = setup({ initial: "a {Word of Day} b {Word of Day}" });
 		expect(
 			screen.getByText(
-				"Not a variable: {Word of Day}. Did you mean Word of the Day?",
+				"GavelUp doesn't recognize {Word of Day}. Did you mean Word of the Day?",
 			),
 		).toBeTruthy();
 		const unknown = document.querySelector(
@@ -419,7 +485,7 @@ describe("counter, typos and defaults", () => {
 		expect(unknown?.className).toBe(UNKNOWN_CLASS);
 		await user.click(screen.getByRole("button", { name: "Fix" }));
 		expect(ta.value).toBe("a {Word of the Day} b {Word of the Day}");
-		expect(screen.queryByText(/Not a variable/)).toBeNull();
+		expect(screen.queryByText(/recognize/)).toBeNull();
 	});
 
 	// protects=no-suggestion typos say "exactly as typed" with no Fix; fails_when=a Fix is offered;
@@ -427,21 +493,27 @@ describe("counter, typos and defaults", () => {
 	it("{foo} has no Fix", () => {
 		setup({ initial: "{foo}" });
 		expect(
-			screen.getByText("Not a variable: {foo}. It will show exactly as typed."),
+			screen.getByText(
+				"GavelUp doesn't recognize {foo}, so it will show exactly as typed.",
+			),
 		).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Fix" })).toBeNull();
 	});
 
-	// protects=Use default only when changed, restores the default;
+	// protects=Restore original only when changed, restores the default;
 	// fails_when=it shows on an unchanged field or does not restore;
 	// no_claim=the absence of a server call (this component has none to call).
-	it("Use default appears after an edit and restores the default", async () => {
+	it("Restore original appears after an edit and restores the default", async () => {
 		const { user, ta } = setup({ initial: "Default {Date}" });
-		expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Restore original" }),
+		).toBeNull();
 		await user.type(ta, "!");
-		await user.click(screen.getByRole("button", { name: "Use default" }));
+		await user.click(screen.getByRole("button", { name: "Restore original" }));
 		expect(ta.value).toBe("Default {Date}");
-		expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: "Restore original" }),
+		).toBeNull();
 	});
 });
 

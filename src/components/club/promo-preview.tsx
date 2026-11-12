@@ -46,7 +46,7 @@ export const CHANNEL_LABEL: Record<PromoChannel, string> = {
 export const PART_LABEL: Record<PromoPart, string> = {
 	intro: "Intro",
 	whyJoin: "Why join",
-	callToAction: "Call to action",
+	callToAction: "Closing line",
 };
 
 /** The widest the flyer thumbnail draws, and its width before the first measurement. */

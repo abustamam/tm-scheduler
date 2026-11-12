@@ -177,9 +177,7 @@ describe("a club switch on Club settings", () => {
 			expect((await headline()).value).toBe("Club B headline"),
 		);
 		await user.type(await headline(), "!");
-		await user.click(
-			screen.getByRole("button", { name: "Save promo template" }),
-		);
+		await user.click(screen.getByRole("button", { name: "Save template" }));
 		await waitFor(() => expect(updatePromoTemplate).toHaveBeenCalledTimes(1));
 		const sent = vi.mocked(updatePromoTemplate).mock.calls[0]?.[0] as {
 			data: { clubId: string };
@@ -202,7 +200,9 @@ describe("View as this club (read-only impersonation)", () => {
 			screen.queryByRole("button", { name: "Save guest invites" }),
 		).toBeNull();
 		expect(
-			screen.queryByRole("button", { name: "Reset to default" }),
+			screen.queryByRole("button", {
+				name: "Start over with GavelUp's wording",
+			}),
 		).toBeNull();
 		expect(
 			screen.getByText(/Not available while viewing as this club\. Editing/),

@@ -61,6 +61,8 @@ describe.skipIf(!hasChrome)(
 		let aside = "";
 		let actions = "";
 		let panel = "";
+		// The muted line under the button row.
+		let note = "";
 
 		// `Button`'s real base and default-size classes, read from its source.
 		let buttonClass = "";
@@ -73,10 +75,11 @@ describe.skipIf(!hasChrome)(
 					<div class="${g}">
 						<div class="space-y-4">
 							<div class="${a}" id="actions">
-								<button type="submit" class="min-w-48 flex-1 h-9">Save promo template</button>
+								<button type="submit" class="min-w-48 flex-1 h-9">Save template</button>
 								${btn("Discard changes")}
-								${btn("Reset to default (follows future updates)")}
+								${btn("Start over with GavelUp's template")}
 							</div>
+							<p class="${note}" id="note">Starting over also picks up improvements GavelUp makes to its template later.</p>
 						</div>
 						<aside class="${aside}" id="aside">
 							<div id="panels">
@@ -112,6 +115,7 @@ describe.skipIf(!hasChrome)(
 			grid = classContaining("lg:grid-cols");
 			aside = classContaining("lg:sticky");
 			actions = classContaining("flex flex-wrap gap-2");
+			note = classContaining("text-xs text-muted-foreground");
 			const preFixGrid = grid.replace(/\bgrid-cols-1\b/, "");
 			const preFixActions = actions.replace(/\bflex-wrap\b/, "");
 			css = await buildAppCss([
@@ -142,6 +146,10 @@ describe.skipIf(!hasChrome)(
 			expect(
 				row.overflowsX,
 				"the Save / Discard / Reset row runs past the screen edge",
+			).toBe(false);
+			expect(
+				probe(grid, actions, "#note").overflowsX,
+				"the muted line under the button row runs past the screen edge",
 			).toBe(false);
 		});
 

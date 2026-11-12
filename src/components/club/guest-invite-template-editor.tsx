@@ -124,8 +124,8 @@ export function GuestInviteTemplateEditor({
 			const [k, f] = path as [InviteKind?, GuestInviteField?];
 			toast.error(
 				k && f
-					? `${INVITE_KIND_LABELS[k]}: the ${FIELD_LABEL[f].toLowerCase()} is too long.`
-					: "Check the templates: a field is not valid.",
+					? `${INVITE_KIND_LABELS[k]}: the ${FIELD_LABEL[f].toLowerCase()} is empty or too long.`
+					: "Check the templates: a field is empty or too long.",
 			);
 			return;
 		}
@@ -159,7 +159,7 @@ export function GuestInviteTemplateEditor({
 			// whatever is in the form, saved or not.
 			setFields((prev) => ({ ...prev, [k]: defaults[k] }));
 			setBaseline((prev) => ({ ...prev, [k]: defaults[k] }));
-			toast.success(`${INVITE_KIND_LABELS[k]} reset to the default.`);
+			toast.success(`${INVITE_KIND_LABELS[k]} is back to GavelUp's wording.`);
 			await onSaved();
 		} catch (err) {
 			toast.error(err instanceof Error ? err.message : "Something went wrong.");
@@ -179,9 +179,10 @@ export function GuestInviteTemplateEditor({
 			<p className="text-sm text-muted-foreground">
 				The VP Membership page drafts an invite in one of four wordings,
 				depending on how recently the guest visited. Write your own for any of
-				them. You send each one yourself; nothing is sent from GavelUp. Type @
-				or {"{"} in a field to insert a variable. An empty variable leaves
-				nothing in its place.
+				them. You send each one yourself; nothing is sent from GavelUp. The
+				highlighted words, like Guest first name, fill in by themselves. Type @
+				to add one. A detail with nothing to fill in leaves nothing in its
+				place.
 			</p>
 
 			<form onSubmit={onSave} className="space-y-4">
@@ -320,7 +321,7 @@ function InviteTab({
 					onClick={onReset}
 					disabled={saving}
 				>
-					Reset to default
+					Start over with GavelUp's wording
 				</Button>
 			</div>
 			<aside
