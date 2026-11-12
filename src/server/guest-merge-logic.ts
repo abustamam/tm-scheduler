@@ -189,7 +189,19 @@ export async function applyMergeGuests(
 	// absorbed guest's slots and votes (`lockRowsNamingAbsorbed`, #1611),
 	// then both guest rows `FOR UPDATE` in id order. Every writer that locks a
 	// slot or a vote row and then key-shares a guest therefore meets the merge
-	// at the same first row, never the guest. The row
+	// at the same first row, never the guest (for the rows this merge pre-locks,
+	// i.e. those naming the absorbed guest; the merge's own first locks are the
+	// club advisory lock and the Persons, not a vote row). `castVote` (a guest voter, #1623)
+	// takes that same order: its existing ballot `FOR UPDATE`, then every guest
+	// the ballot names in id order (`keyShareGuests`), then the INSERT; a re-vote
+	// therefore waits on this merge (or `applyDeleteGuest`, which locks the same
+	// vote rows first) at the vote row holding no guest. A FIRST ballot or
+	// check-in has no row to lock first and its INSERT ... ON CONFLICT writes a
+	// unique-index entry before its FK check key-shares the guest, which this
+	// merge's re-point would collide with; `keyShareGuests` before the INSERT
+	// makes the writer wait here holding no index entry. Attendance rows are not
+	// pre-locked by this merge, so `addGuestPresent` has no row to take first.
+	// The row
 	// locks also matter beyond ordering: every foreign-key INSERT naming a guest
 	// (a public RSVP, a ballot join) key-shares its row, so a writer racing the
 	// merge waits instead of inserting a row that names the deleted guest.

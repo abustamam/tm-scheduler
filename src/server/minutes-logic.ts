@@ -48,6 +48,7 @@ import {
 	loadDisqualifications,
 } from "./award-candidates-logic";
 import { loadClubDefaultCountryCode } from "./clubs-logic";
+import { keyShareGuests } from "./guest-key-share";
 import { findGuestForContact } from "./guest-pipeline-logic";
 import { createGuestRecord } from "./guests-logic";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
@@ -973,6 +974,10 @@ export async function addGuestPresent(
 	const clubId = await getMeetingClubId(input.meetingId, tx ?? db);
 	const run = async (conn: DbOrTx) => {
 		const guestId = await resolveGuestId(conn, clubId, input, input.id);
+		// #1623: key-share the guest BEFORE the insert writes its (meeting, guest)
+		// unique-index entry (`keyShareGuests` has the argument). Attendance rows
+		// are not pre-locked by the merge, so there is no row to take first.
+		await keyShareGuests(conn, [guestId]);
 		const insert = conn.insert(meetingAttendance).values({
 			meetingId: input.meetingId,
 			guestId,
