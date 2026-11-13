@@ -40,6 +40,7 @@ import {
 	parseClubTemplateFields,
 	retiredTemplateKey,
 } from "#/lib/club-template-key";
+import { digest } from "#/lib/mcp-plan";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	MAX_TEMPLATE_BEATS,
@@ -269,6 +270,78 @@ export async function loadTemplateContent(
 	]);
 	if (exists.length === 0) return null;
 	return { beats, roles };
+}
+
+/** Thrown by `templateContentForHash` for a template over the row caps. */
+export class TemplateTooLargeError extends Error {
+	constructor() {
+		super(
+			`That agenda is too large to read (${MAX_TEMPLATE_BEATS} rows or ${MAX_TEMPLATE_ROLES} roles maximum).`,
+		);
+		this.name = "TemplateTooLargeError";
+	}
+}
+
+/**
+ * A template's complete stored content, for a plan hash (#1628): every column
+ * `copyTemplateContent` copies, read on the connection given (so it works
+ * inside a transaction), beats by `sortOrder` then `id`, roles by `key`.
+ * Null for a template that does not exist. Never truncates: a template over
+ * the caps throws `TemplateTooLargeError`.
+ */
+export async function templateContentForHash(conn: DbOrTx, templateId: string) {
+	const [tpl] = await conn
+		.select({
+			name: meetingTemplates.name,
+			defaultLengthMinutes: meetingTemplates.defaultLengthMinutes,
+		})
+		.from(meetingTemplates)
+		.where(eq(meetingTemplates.id, templateId))
+		.limit(1);
+	if (!tpl) return null;
+	const beats = await conn
+		.select({
+			sortOrder: meetingTemplateBeats.sortOrder,
+			kind: meetingTemplateBeats.kind,
+			label: meetingTemplateBeats.label,
+			detail: meetingTemplateBeats.detail,
+			minutes: meetingTemplateBeats.minutes,
+			roleKey: meetingTemplateBeats.roleKey,
+			repeatsRoleKey: meetingTemplateBeats.repeatsRoleKey,
+			flex: meetingTemplateBeats.flex,
+			handoff: meetingTemplateBeats.handoff,
+			markGreen: meetingTemplateBeats.markGreen,
+			markYellow: meetingTemplateBeats.markYellow,
+			markRed: meetingTemplateBeats.markRed,
+			clubGoverned: meetingTemplateBeats.clubGoverned,
+		})
+		.from(meetingTemplateBeats)
+		.where(eq(meetingTemplateBeats.templateId, templateId))
+		.orderBy(asc(meetingTemplateBeats.sortOrder), asc(meetingTemplateBeats.id))
+		.limit(MAX_TEMPLATE_BEATS + 1);
+	if (beats.length > MAX_TEMPLATE_BEATS) throw new TemplateTooLargeError();
+	const roles = await conn
+		.select({
+			key: meetingTemplateRoles.key,
+			name: meetingTemplateRoles.name,
+			category: meetingTemplateRoles.category,
+			defaultCount: meetingTemplateRoles.defaultCount,
+			sortOrder: meetingTemplateRoles.sortOrder,
+			isSpeakerRole: meetingTemplateRoles.isSpeakerRole,
+			slotsUnordered: meetingTemplateRoles.slotsUnordered,
+			description: meetingTemplateRoles.description,
+		})
+		.from(meetingTemplateRoles)
+		.where(eq(meetingTemplateRoles.templateId, templateId))
+		.orderBy(asc(meetingTemplateRoles.key))
+		.limit(MAX_TEMPLATE_ROLES + 1);
+	if (roles.length > MAX_TEMPLATE_ROLES) throw new TemplateTooLargeError();
+	return {
+		name: tpl.name,
+		defaultLengthMinutes: tpl.defaultLengthMinutes,
+		beats,
+		roles,
+	};
 }
 
 /**
@@ -1766,13 +1839,36 @@ export async function forkLegacyPointers(
 	return pointing.map((m) => m.id);
 }
 
+/** What a save is refused with when the meeting is cancelled. Exported so a
+ *  caller compares against THIS rather than a copy (`mcp/tools/save-agenda-as-template.ts`). */
+export const SAVE_CANCELLED_MESSAGE =
+	"A cancelled meeting's agenda cannot be saved as a template.";
+
+/** What a replace is refused with when the target's content is no longer the
+ *  content its caller's `expectedTargetContentHash` was taken from. Exported so
+ *  a caller compares against THIS (`mcp/tools/save-agenda-as-template.ts`). */
+export const CLUB_TEMPLATE_CHANGED_MESSAGE =
+	"That club template changed since it was read.";
+
 export type SaveClubTemplateInput = {
 	meetingId: string;
 	clubId: string;
 	actorMemberId: string | null;
 } & (
 	| { mode: "new"; name: string; description: string | null }
-	| { mode: "replace"; templateId: string }
+	| {
+			mode: "replace";
+			templateId: string;
+			/**
+			 * Optional. The `digest` (`#/lib/mcp-plan`) of the target's
+			 * `templateContentForHash` the caller showed a person before asking
+			 * for the overwrite. Compared INSIDE the transaction, after the
+			 * target's FOR UPDATE, so a change between the caller's read and this
+			 * lock refuses (`CLUB_TEMPLATE_CHANGED_MESSAGE`) before anything is
+			 * written. Omitted: no comparison (the app's dialog passes none).
+			 */
+			expectedTargetContentHash?: string;
+	  }
 );
 
 /**
@@ -1810,7 +1906,11 @@ export async function saveMeetingAgendaAsClubTemplate(
 		if ("error" in parsed) throw new Error(parsed.error);
 		plan = { mode: "new", fields: parsed };
 	} else {
-		plan = { mode: "replace", templateId: input.templateId };
+		plan = {
+			mode: "replace",
+			templateId: input.templateId,
+			expectedTargetContentHash: input.expectedTargetContentHash,
+		};
 	}
 
 	try {
@@ -1835,7 +1935,11 @@ export async function saveMeetingAgendaAsClubTemplate(
 
 type SavePlan =
 	| { mode: "new"; fields: ClubTemplateFields }
-	| { mode: "replace"; templateId: string };
+	| {
+			mode: "replace";
+			templateId: string;
+			expectedTargetContentHash: string | undefined;
+	  };
 
 async function saveInTransaction(
 	input: SaveClubTemplateInput,
@@ -1872,8 +1976,7 @@ async function saveInTransaction(
 		// operation's own sentence.
 		assertMeetingAccepts(meeting.status, "record", {
 			messages: {
-				cancelled:
-					"A cancelled meeting's agenda cannot be saved as a template.",
+				cancelled: SAVE_CANCELLED_MESSAGE,
 			},
 		});
 
@@ -1970,6 +2073,17 @@ async function saveInTransaction(
 				.from(meetingTemplates)
 				.where(ownedTarget)
 				.for("update");
+
+			// The caller's expected content, checked HERE: under the club write
+			// lock and the target's row lock, so nothing that writes a club
+			// template can change it between this read and the swap below.
+			if (plan.expectedTargetContentHash !== undefined) {
+				const content = await templateContentForHash(tx, templateId);
+				if (!content) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+				if (digest(content) !== plan.expectedTargetContentHash) {
+					throw new Error(CLUB_TEMPLATE_CHANGED_MESSAGE);
+				}
+			}
 
 			// A source that IS the target (old data: the meeting pointed straight
 			// at the club template) has nothing to swap in — deleting the target's

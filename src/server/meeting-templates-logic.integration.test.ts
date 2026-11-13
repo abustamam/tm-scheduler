@@ -18,7 +18,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-templates-logic.integration.test.ts
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
@@ -27,6 +27,7 @@ import {
 	meetingTemplates,
 	roleDefinitions,
 } from "#/db/schema";
+import { digest } from "#/lib/mcp-plan";
 import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
@@ -34,9 +35,11 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -50,11 +53,15 @@ const mine = (names: string[]) => names.filter((n) => n.includes(RUN));
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const {
+	CLUB_TEMPLATE_CHANGED_MESSAGE,
 	copyTemplateForMeeting,
 	listAvailableTemplates,
 	loadTemplateContent,
 	materializeTemplateRoles,
 	resolveMeetingRoleDefs,
+	saveMeetingAgendaAsClubTemplate,
+	TemplateTooLargeError,
+	templateContentForHash,
 } = await import("./meeting-templates-logic");
 
 describe.skipIf(!hasTestDb)("meeting template logic", () => {
@@ -712,3 +719,313 @@ describe.skipIf(!hasTestDb)("meeting template logic", () => {
 		});
 	});
 });
+
+describe.skipIf(!hasTestDb)("templateContentForHash (#1628)", () => {
+	let seed: SeededClub;
+	beforeEach(async () => {
+		seed = await seedClub();
+	});
+	afterEach(async () => {
+		await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+	});
+
+	async function mk(beatCount = 2) {
+		const [t] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: seed.clubId,
+				key: `h-${crypto.randomUUID().slice(0, 8)}`,
+				name: "H",
+				defaultLengthMinutes: 60,
+			})
+			.returning({ id: meetingTemplates.id });
+		const id = t?.id ?? "";
+		if (beatCount > 0)
+			await testDb.insert(meetingTemplateBeats).values(
+				Array.from({ length: beatCount }, (_, i) => ({
+					templateId: id,
+					sortOrder: i,
+					kind: "event" as const,
+					label: `Row ${i}`,
+					minutes: 1,
+				})),
+			);
+		await testDb.insert(meetingTemplateRoles).values([
+			{
+				templateId: id,
+				key: "b_role",
+				name: "B",
+				category: "functionary" as const,
+				sortOrder: 1,
+			},
+			{
+				templateId: id,
+				key: "a_role",
+				name: "A",
+				category: "functionary" as const,
+				sortOrder: 2,
+			},
+		]);
+		return id;
+	}
+
+	// protects=null for a missing template; beats by sortOrder, roles by key;
+	// fails_when=ordering follows insertion or sortOrder of roles;
+	// no_claim=none.
+	it("orders beats by sortOrder and roles by key; null when absent", async () => {
+		const id = await mk();
+		const c = await templateContentForHash(testDb, id);
+		expect(c?.beats.map((b) => b.label)).toEqual(["Row 0", "Row 1"]);
+		expect(c?.roles.map((r) => r.key)).toEqual(["a_role", "b_role"]);
+		expect(
+			await templateContentForHash(testDb, crypto.randomUUID()),
+		).toBeNull();
+	});
+
+	// protects=a change to a row's detail, a role's sortOrder or the default length changes the content;
+	// fails_when=a copied column is left out of the read;
+	// no_claim=none.
+	it("differs after a detail, role sortOrder or default length change", async () => {
+		const id = await mk();
+		const base = JSON.stringify(await templateContentForHash(testDb, id));
+		await testDb
+			.update(meetingTemplateBeats)
+			.set({ detail: "x" })
+			.where(eq(meetingTemplateBeats.templateId, id));
+		const afterDetail = JSON.stringify(
+			await templateContentForHash(testDb, id),
+		);
+		expect(afterDetail).not.toBe(base);
+		await testDb
+			.update(meetingTemplateRoles)
+			.set({ sortOrder: 9 })
+			.where(eq(meetingTemplateRoles.templateId, id));
+		const afterRole = JSON.stringify(await templateContentForHash(testDb, id));
+		expect(afterRole).not.toBe(afterDetail);
+		await testDb
+			.update(meetingTemplates)
+			.set({ defaultLengthMinutes: 75 })
+			.where(eq(meetingTemplates.id, id));
+		expect(JSON.stringify(await templateContentForHash(testDb, id))).not.toBe(
+			afterRole,
+		);
+	});
+
+	// protects=the same value whatever order rows were inserted in: beats by sortOrder, roles by key, not by insertion;
+	// fails_when=the order depends on physical order (beats not ordered by sortOrder, roles not ordered by key);
+	// no_claim=ties on sortOrder are not exercised: meeting_template_beats_order_unique (template_id, sort_order) makes a tie unrepresentable, so the id tie-break is a belt the database already wears.
+	it("is stable across insertion order", async () => {
+		const a = await mk(0);
+		const b = await mk(0);
+		const beats = [
+			{ sortOrder: 2, label: "mid" },
+			{ sortOrder: 0, label: "zeta" },
+			{ sortOrder: 1, label: "alpha" },
+		].map((r) => ({ ...r, kind: "event" as const, minutes: 1 }));
+		const roles = ["q_z", "q_a", "q_m"].map((key) => ({
+			key,
+			name: key,
+			category: "functionary" as const,
+		}));
+		await testDb
+			.insert(meetingTemplateBeats)
+			.values(beats.map((r) => ({ ...r, templateId: a })));
+		await testDb
+			.insert(meetingTemplateBeats)
+			.values([...beats].reverse().map((r) => ({ ...r, templateId: b })));
+		await testDb
+			.insert(meetingTemplateRoles)
+			.values(roles.map((r) => ({ ...r, templateId: a })));
+		await testDb
+			.insert(meetingTemplateRoles)
+			.values([...roles].reverse().map((r) => ({ ...r, templateId: b })));
+		const ca = await templateContentForHash(testDb, a);
+		const cb = await templateContentForHash(testDb, b);
+		expect(ca?.beats.map((x) => x.label)).toEqual(["zeta", "alpha", "mid"]);
+		expect(cb?.beats).toEqual(ca?.beats);
+		expect(ca?.roles.map((r) => r.key)).toEqual([
+			"a_role",
+			"b_role",
+			"q_a",
+			"q_m",
+			"q_z",
+		]);
+		expect(cb?.roles).toEqual(ca?.roles);
+	});
+
+	// protects=a template over the beat cap throws instead of truncating;
+	// fails_when=the read silently shortens a hash input;
+	// no_claim=the roles cap shares the same branch and is not separately seeded.
+	it("throws TemplateTooLargeError over the beat cap", async () => {
+		const id = await mk(MAX_TEMPLATE_BEATS + 1);
+		await expect(templateContentForHash(testDb, id)).rejects.toBeInstanceOf(
+			TemplateTooLargeError,
+		);
+	});
+
+	// protects=a template over the roles cap throws instead of truncating;
+	// fails_when=the roles read silently shortens a hash input;
+	// no_claim=the beat cap is the previous test.
+	it("throws TemplateTooLargeError over the roles cap", async () => {
+		const id = await mk(1);
+		await testDb.insert(meetingTemplateRoles).values(
+			Array.from({ length: MAX_TEMPLATE_ROLES - 1 }, (_, i) => ({
+				templateId: id,
+				key: `extra_${i}`,
+				name: "E",
+				category: "functionary" as const,
+			})),
+		);
+		// mk() declared 2 roles, so MAX_TEMPLATE_ROLES + 1 in all.
+		await expect(templateContentForHash(testDb, id)).rejects.toBeInstanceOf(
+			TemplateTooLargeError,
+		);
+	});
+});
+
+describe.skipIf(!hasTestDb)(
+	"saveMeetingAgendaAsClubTemplate expectedTargetContentHash (#1628)",
+	() => {
+		let seed: SeededClub;
+		beforeEach(async () => {
+			seed = await seedClub();
+		});
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		const base = () => ({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			actorMemberId: null,
+		});
+
+		/** A club template saved from the meeting, and its content digest now. */
+		async function target() {
+			const { templateId } = await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "new",
+				name: "Target",
+				description: null,
+			});
+			const hash = async () => {
+				const c = await templateContentForHash(testDb, templateId);
+				return digest(c);
+			};
+			return { templateId, hash };
+		}
+		async function stored(templateId: string) {
+			const beats = await testDb
+				.select()
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, templateId))
+				.orderBy(
+					asc(meetingTemplateBeats.sortOrder),
+					asc(meetingTemplateBeats.id),
+				);
+			return beats.map(({ id: _i, ...rest }) => rest);
+		}
+		/** Change what the visible rows do not show, and the target's content. */
+		const flipHandoff = (templateId: string) =>
+			testDb
+				.update(meetingTemplateBeats)
+				.set({ handoff: true })
+				.where(eq(meetingTemplateBeats.templateId, templateId));
+		/** Make the target differ from the meeting's agenda so a swap is visible. */
+		const markTarget = (templateId: string) =>
+			testDb
+				.update(meetingTemplateBeats)
+				.set({ label: "Marked by someone else" })
+				.where(eq(meetingTemplateBeats.templateId, templateId));
+
+		// protects=a replace whose expected hash matches the target's content swaps it for the meeting's agenda;
+		// fails_when=a matching hash is refused, or the replace does not happen;
+		// no_claim=says nothing about a mismatch or about concurrency.
+		it("a matching hash replaces", async () => {
+			const t = await target();
+			await markTarget(t.templateId);
+			const expected = await t.hash();
+			await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+				expectedTargetContentHash: expected,
+			});
+			const rows = await stored(t.templateId);
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.some((r) => r.label === "Marked by someone else")).toBe(
+				false,
+			);
+		});
+
+		// protects=a mismatching hash (a change the visible rows do not show: handoff) refuses and leaves the target's rows as they were;
+		// fails_when=the comparison is missing or inverted, so the overwrite happens anyway;
+		// no_claim=the refusal's mapping to PLAN_STALE is the tool's test, not this one.
+		it("a stale hash refuses and the target is untouched", async () => {
+			const t = await target();
+			const stale = await t.hash();
+			await flipHandoff(t.templateId);
+			const before = await stored(t.templateId);
+			expect(before.every((r) => r.handoff === true)).toBe(true);
+			await expect(
+				saveMeetingAgendaAsClubTemplate({
+					...base(),
+					mode: "replace",
+					templateId: t.templateId,
+					expectedTargetContentHash: stale,
+				}),
+			).rejects.toThrow(CLUB_TEMPLATE_CHANGED_MESSAGE);
+			expect(await stored(t.templateId)).toEqual(before);
+		});
+
+		// protects=with the parameter omitted a replace overwrites whatever is there, as before;
+		// fails_when=the omitted parameter is treated as a hash that must match;
+		// no_claim=none.
+		it("omitted: replaces as before", async () => {
+			const t = await target();
+			await markTarget(t.templateId);
+			await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+			});
+			expect(
+				(await stored(t.templateId)).some(
+					(r) => r.label === "Marked by someone else",
+				),
+			).toBe(false);
+		});
+
+		// protects=a writer that commits WHILE the replace waits for the club lock is seen: the replace compares after it acquires the lock, refuses, and the writer's rows survive;
+		// fails_when=the comparison runs before the lock is held (or not at all), so the writer's committed change is overwritten;
+		// no_claim=only the club write lock is contended here; the target row's own FOR UPDATE is not separately raced.
+		it("a writer committing while the replace waits on the lock is seen", async () => {
+			const t = await target();
+			const expected = await t.hash();
+			const writer = await openBlockingTx(async (tx) => {
+				const { lockClubForWrite } = await import("./club-write-lock");
+				await lockClubForWrite(tx, seed.clubId);
+				await tx
+					.update(meetingTemplateBeats)
+					.set({ handoff: true })
+					.where(eq(meetingTemplateBeats.templateId, t.templateId));
+			});
+			const replacing = saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+				expectedTargetContentHash: expected,
+			});
+			replacing.catch(() => {});
+			try {
+				await waitForLockWait("pg_advisory_xact_lock", writer.pid);
+			} finally {
+				await writer.commit();
+			}
+			await expect(replacing).rejects.toThrow(CLUB_TEMPLATE_CHANGED_MESSAGE);
+			expect(
+				(await stored(t.templateId)).every((r) => r.handoff === true),
+			).toBe(true);
+		});
+	},
+);

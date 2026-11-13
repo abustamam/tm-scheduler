@@ -208,6 +208,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_lineup_blast",
 			"get_my_feedback",
 			"get_my_schedule",
+			"list_agenda_templates",
 			"list_meetings",
 			"record_attendance",
 			"record_guest_book",
@@ -217,6 +218,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"request_cover",
 			"reschedule_meeting",
 			"restore_meeting",
+			"save_agenda_as_template",
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",
@@ -607,6 +609,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				operations: [
 					{ op: "add", label: "Introductions", minutes: 15, at: "start" },
 				],
+			}),
+			// #1628. Template reads and a save PREVIEW (writes nothing): neither
+			// carries a guest row, and the sweep watches the day one does.
+			toolsCall("list_agenda_templates", { clubId: seed.clubId }),
+			toolsCall("save_agenda_as_template", {
+				meetingId: seed.meetingId,
+				target: { mode: "new", name: "Sweep template" },
 			}),
 			// #1057. LAST, after `assign_roles` has put the contact-bearing guest on
 			// a slot: the cancel's result carries a drafted notice that names every

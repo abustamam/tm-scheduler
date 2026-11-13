@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalize, planHash } from "./mcp-plan";
+import { canonicalize, digest, planHash } from "./mcp-plan";
 
 const base = {
 	tool: "record_guest_book",
@@ -115,5 +115,24 @@ describe("planHash", () => {
 			planHash(base),
 		);
 		expect(planHash({ ...base, userId: "user_xyz" })).not.toBe(planHash(base));
+	});
+});
+
+describe("digest", () => {
+	// protects=a content hash is the same whatever order object keys were built in;
+	// fails_when=digest hashes insertion order, so an equal template reads as stale;
+	// no_claim=nothing about which fields a caller puts in the value.
+	it("ignores object key order", () => {
+		expect(digest({ a: 1, b: { y: 2, x: 3 } })).toBe(
+			digest({ b: { x: 3, y: 2 }, a: 1 }),
+		);
+		expect(digest({ a: 1 })).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	// protects=row order is part of a template's identity;
+	// fails_when=digest sorts arrays, so a reordered agenda hashes the same;
+	// no_claim=none.
+	it("respects array order", () => {
+		expect(digest([1, 2, 3])).not.toBe(digest([3, 2, 1]));
 	});
 });

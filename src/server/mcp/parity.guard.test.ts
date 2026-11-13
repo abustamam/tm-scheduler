@@ -49,6 +49,7 @@ const UNROWED_TOOLS: Record<string, string> = {
 	get_my_feedback: "read-only",
 	get_my_schedule: "read-only",
 	find_people: "read-only",
+	list_agenda_templates: "read-only",
 	set_contact_preference:
 		"its app function (setMyPreferredContact) is a gap row: self-gated, the tool is officer-gated",
 	upsert_agendas:

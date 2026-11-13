@@ -426,6 +426,59 @@ export const AGENDA_PLAN_WRITE_OPTIONS: Readonly<MeetingWriteOptions> =
 	});
 
 /**
+ * EXACTLY the rows `materialiseForMeeting` inserts for a meeting's private copy
+ * of the standard agenda, as plain values: the template row, the beats and the
+ * declared roles, each without its `templateId`. Pure. `materialiseForMeeting`
+ * inserts this function's output and `plannedMaterialisation` hashes it, so a
+ * change to what is stored cannot skip a plan hash (#1628).
+ */
+export function plannedMaterialisationRows(
+	meetingId: string,
+	clubId: string,
+	standard: StandardAgenda,
+) {
+	return {
+		template: {
+			clubId,
+			meetingId,
+			key: privateCopyKey(meetingId),
+			name: "Standard meeting",
+		},
+		beats: standard.seeds,
+		roles: standard.roles,
+	};
+}
+
+/**
+ * What `materialiseForMeeting` would store for a meeting that has no agenda
+ * yet, computed and written nowhere, in the shape `templateContentForHash`
+ * returns for the stored copy (`{ name, defaultLengthMinutes, beats, roles }`,
+ * roles by `key`, the columns the insert leaves unset at their stored values),
+ * so a hash taken before the copy exists equals one taken after it does.
+ * Null for an unknown meeting.
+ */
+export async function plannedMaterialisation(conn: DbOrTx, meetingId: string) {
+	const [meeting] = await conn
+		.select({ clubId: meetings.clubId })
+		.from(meetings)
+		.where(eq(meetings.id, meetingId))
+		.limit(1);
+	if (!meeting) return null;
+	const standard = await standardAgendaForClub(conn, meeting.clubId);
+	if (!standard) return null;
+	const rows = plannedMaterialisationRows(meetingId, meeting.clubId, standard);
+	return {
+		name: rows.template.name,
+		// `meeting_templates.default_length_minutes` is nullable and not inserted.
+		defaultLengthMinutes: null as number | null,
+		beats: rows.beats,
+		roles: rows.roles
+			.map((role) => ({ ...role, description: null as string | null }))
+			.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+	};
+}
+
+/**
  * Build this meeting its own editable copy of the standard agenda, once.
  *
  * In a TRANSACTION with a re-read under `FOR UPDATE`: two officers opening the
@@ -478,24 +531,24 @@ async function materialiseForMeeting(
 		});
 		if (locked.templateId) return locked.templateId;
 
-		const { seeds, roles: declared } = await standardAgendaFrom(tx, clubId, {
-			geIntroducesFunctionaries,
-			tableTopicsLimits,
-		});
+		const planned = plannedMaterialisationRows(
+			meetingId,
+			clubId,
+			await standardAgendaFrom(tx, clubId, {
+				geIntroducesFunctionaries,
+				tableTopicsLimits,
+			}),
+		);
+		const declared = planned.roles;
 		const [tpl] = await tx
 			.insert(meetingTemplates)
-			.values({
-				clubId,
-				meetingId,
-				key: privateCopyKey(meetingId),
-				name: "Standard meeting",
-			})
+			.values(planned.template)
 			.returning({ id: meetingTemplates.id });
 		if (!tpl) throw new Error("Failed to create the agenda copy.");
 
 		await tx
 			.insert(meetingTemplateBeats)
-			.values(seeds.map((seed) => ({ ...seed, templateId: tpl.id })));
+			.values(planned.beats.map((seed) => ({ ...seed, templateId: tpl.id })));
 
 		// DECLARE the roles those beats name. `toRow` drops a role beat whose key
 		// the template does not declare — a deliberate corruption guard, written

@@ -36,6 +36,7 @@ describe("MCP tool annotations", () => {
 			"get_lineup_blast",
 			"get_my_feedback",
 			"get_my_schedule",
+			"list_agenda_templates",
 			"list_meetings",
 			"whoami",
 		]);
@@ -68,6 +69,7 @@ describe("MCP tool annotations", () => {
 			"record_table_topics",
 			"release_my_role",
 			"request_cover",
+			"save_agenda_as_template",
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",
