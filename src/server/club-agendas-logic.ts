@@ -43,6 +43,7 @@ import {
 	CLUB_TEMPLATE_NAME_MAX,
 	parseClubTemplateFields,
 } from "#/lib/club-template-key";
+import { digest } from "#/lib/mcp-plan";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { standardAgendaForClub } from "./meeting-agenda-edit-logic";
@@ -57,6 +58,7 @@ import {
 	planTemplateConversion,
 	releasesAnything,
 	removesAnything,
+	templateContentForHash,
 	WouldReleaseError,
 	WouldRemoveError,
 } from "./meeting-templates-logic";
@@ -76,8 +78,22 @@ export const ALREADY_ADOPTED_MESSAGE =
 	"Your club already has a default agenda.";
 
 /** What adopting names the template, and the key it asks for. */
-const ADOPTED_TEMPLATE_NAME = "Our standard agenda";
+export const ADOPTED_TEMPLATE_NAME = "Our standard agenda";
 const ADOPTED_TEMPLATE_KEY = "standard";
+
+/**
+ * A check under the club lock found the template other than the caller's plan
+ * said: `expectContentHash`, `expectIsDefault` or `expectStored` no longer
+ * matches. Nothing was written by the call that threw it.
+ */
+export class TemplateChangedError extends Error {
+	/** Set by a caller whose EARLIER write already committed. */
+	partiallyApplied?: string[];
+	constructor() {
+		super("That template changed since it was read.");
+		this.name = "TemplateChangedError";
+	}
+}
 
 /** A drizzle transaction handle. */
 type Tx = Parameters<Parameters<(typeof database)["transaction"]>[0]>[0];
@@ -227,6 +243,25 @@ export async function assertGeChangeAllowed(
 // Template management
 // ---------------------------------------------------------------------------
 
+/** Under the club lock: the stored content still digests to `expected`, if given. */
+async function assertContentHash(
+	tx: Tx,
+	templateId: string,
+	expected: string | undefined,
+): Promise<void> {
+	if (expected === undefined) return;
+	const content = await templateContentForHash(tx, templateId);
+	if (!content || digest(content) !== expected)
+		throw new TemplateChangedError();
+}
+
+/** The columns `renameClubTemplate`'s `expectStored` compares. */
+export type StoredTemplateFields = {
+	name: string;
+	description: string | null;
+	enabled: boolean;
+};
+
 /** Rename a club template. Name 1–80 characters after trimming; the `key` is
  *  untouched, so a copy made from the old name still traces back to it. */
 export async function renameClubTemplate(input: {
@@ -234,11 +269,39 @@ export async function renameClubTemplate(input: {
 	templateId: string;
 	name: string;
 	description: string | null;
+	/**
+	 * Optional. The name, description and enabled the caller showed a person
+	 * before asking for the write, compared under the club lock after the
+	 * ownership check: a mismatch writes nothing (`TemplateChangedError`), so a
+	 * name-only caller cannot write back a description someone else just
+	 * changed. No app caller passes it.
+	 */
+	expectStored?: StoredTemplateFields;
 }): Promise<void> {
 	const parsed = parseClubTemplateFields(input.name, input.description);
 	if ("error" in parsed) throw new Error(parsed.error);
 	await database.transaction(async (tx) => {
 		await lockClubRow(tx, input.clubId);
+		if (input.expectStored) {
+			const [stored] = await tx
+				.select({
+					name: meetingTemplates.name,
+					description: meetingTemplates.description,
+					enabled: meetingTemplates.enabled,
+				})
+				.from(meetingTemplates)
+				.where(ownedBy(input.clubId, input.templateId))
+				.limit(1);
+			if (!stored) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+			const want = input.expectStored;
+			if (
+				stored.name !== want.name ||
+				stored.description !== want.description ||
+				stored.enabled !== want.enabled
+			) {
+				throw new TemplateChangedError();
+			}
+		}
 		const [updated] = await tx
 			.update(meetingTemplates)
 			.set({ name: parsed.name, description: parsed.description })
@@ -261,6 +324,12 @@ export function duplicateName(name: string): string {
 export async function duplicateClubTemplate(input: {
 	clubId: string;
 	templateId: string;
+	/**
+	 * Optional. The `digest` of the template's `templateContentForHash` the
+	 * caller showed a person, compared under the club lock: a mismatch copies
+	 * nothing (`TemplateChangedError`). No app caller passes it.
+	 */
+	expectContentHash?: string;
 }): Promise<{ templateId: string }> {
 	return database.transaction(async (tx) => {
 		await lockClubRow(tx, input.clubId);
@@ -276,6 +345,7 @@ export async function duplicateClubTemplate(input: {
 			.for("share")
 			.limit(1);
 		if (!source) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+		await assertContentHash(tx, input.templateId, input.expectContentHash);
 		const name = duplicateName(source.name);
 		const key = await nextClubTemplateKey(tx, input.clubId, name);
 		const [created] = await tx
@@ -344,6 +414,20 @@ export async function setClubTemplateEnabled(input: {
 export async function deleteClubTemplate(input: {
 	clubId: string;
 	templateId: string;
+	/**
+	 * Optional. The `digest` of the template's `templateContentForHash` the
+	 * caller showed a person before asking for the delete, compared under the
+	 * club lock: a #909 replace holds the same lock, so a mismatch means the
+	 * content changed after the caller looked, and nothing is deleted
+	 * (`TemplateChangedError`). No app caller passes it.
+	 */
+	expectContentHash?: string;
+	/**
+	 * Optional. Whether the caller's plan said this is the club's default,
+	 * compared under the club lock beside the content hash: a template made the
+	 * default after the plan is not deleted (`TemplateChangedError`).
+	 */
+	expectIsDefault?: boolean;
 }): Promise<{ wasDefault: boolean }> {
 	return database.transaction(async (tx) => {
 		const club = await lockClubRow(tx, input.clubId);
@@ -353,6 +437,13 @@ export async function deleteClubTemplate(input: {
 			.where(ownedBy(input.clubId, input.templateId))
 			.limit(1);
 		if (!owned) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+		await assertContentHash(tx, owned.id, input.expectContentHash);
+		if (
+			input.expectIsDefault !== undefined &&
+			(club.defaultTemplateId === owned.id) !== input.expectIsDefault
+		) {
+			throw new TemplateChangedError();
+		}
 		await forkLegacyPointers(tx, owned.id);
 		const [deleted] = await tx
 			.delete(meetingTemplates)
@@ -545,6 +636,139 @@ export async function adoptStandardAgenda(input: {
 	return result;
 }
 
+/** What the default would do to ONE upcoming meeting, before any write. */
+type Verdict =
+	| { kind: "convert" }
+	| { kind: "keptEdited"; onDefaultCopy: boolean }
+	| { kind: "keptSignups"; roles: string[] }
+	| { kind: "keptRoles"; roles: string[] };
+
+/** The WHERE for a club's upcoming scheduled meetings: what the default applies to. */
+export function upcomingScheduledMeetings(clubId: string) {
+	return and(
+		eq(meetings.clubId, clubId),
+		eq(meetings.status, "scheduled"),
+		gte(meetings.scheduledAt, new Date()),
+	);
+}
+
+/** Put one meeting's verdict into the matching list of `result`. */
+function recordVerdict(
+	result: SetDefaultResult,
+	ref: MeetingRef,
+	verdict: Verdict,
+): void {
+	if (verdict.kind === "convert") result.applied.push(ref);
+	else if (verdict.kind === "keptEdited") {
+		result.keptEdited.push({ ...ref, onDefaultCopy: verdict.onDefaultCopy });
+	} else if (verdict.kind === "keptSignups") {
+		result.keptSignups.push({ ...ref, roles: verdict.roles });
+	} else result.keptRoles.push({ ...ref, roles: verdict.roles });
+}
+
+/**
+ * The club's upcoming scheduled meetings, soonest first (`scheduledAt`, then
+ * `id`, so two meetings at the same instant have ONE order), and the classifier
+ * both the loop and the preview run per meeting. Null when the club is gone.
+ */
+async function loadUpcoming(clubId: string, templateId: string) {
+	const [standard, [target], candidates] = await Promise.all([
+		standardAgendaForClub(database, clubId),
+		database
+			.select({ key: meetingTemplates.key })
+			.from(meetingTemplates)
+			.where(ownedBy(clubId, templateId))
+			.limit(1),
+		database
+			.select({
+				id: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				templateId: meetings.templateId,
+			})
+			.from(meetings)
+			.where(upcomingScheduledMeetings(clubId))
+			.orderBy(asc(meetings.scheduledAt), asc(meetings.id)),
+	]);
+	if (!standard) return null;
+	const expected: ComparableAgenda = {
+		beats: standard.seeds,
+		roles: standard.roles,
+	};
+
+	const [club] = await database
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const keys = await urlKeysForClubMeetings(
+		clubId,
+		candidates,
+		club?.timezone ?? "UTC",
+	);
+	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
+		meetingId: m.id,
+		scheduledAt: m.scheduledAt,
+		urlKey: keys(m.id),
+	});
+
+	/** Everything the loop decides before it calls the conversion. */
+	const classify = async (
+		meeting: (typeof candidates)[number],
+	): Promise<Verdict> => {
+		const copy =
+			meeting.templateId === null
+				? null
+				: await loadComparableCopy(database, meeting.id, meeting.templateId);
+		const standardNow =
+			meeting.templateId === null ||
+			(copy !== null &&
+				copy.key === privateCopyKey(meeting.id) &&
+				agendaMatchesStandard(copy, expected));
+		if (!standardNow) {
+			return {
+				kind: "keptEdited",
+				onDefaultCopy: copy !== null && copy.key === target?.key,
+			};
+		}
+		const plan = await planTemplateConversion(meeting.id, templateId);
+		if (releasesAnything(plan)) {
+			return {
+				kind: "keptSignups",
+				roles: plan.releasedRoleNames,
+			};
+		}
+		if (removesAnything(plan)) {
+			return {
+				kind: "keptRoles",
+				roles: plan.removedRoleNames,
+			};
+		}
+		return { kind: "convert" };
+	};
+	return { expected, candidates, refOf, classify };
+}
+
+/**
+ * What setting `templateId` as the default WOULD do to each upcoming meeting,
+ * writing nothing (#1630). The same classification the loop runs, so the two
+ * cannot disagree: a meeting the loop would convert is in `applied`. Never
+ * returns `failed`; a meeting that cannot be classified throws rather than be
+ * guessed into a bucket.
+ */
+export async function previewDefaultForUpcoming(
+	clubId: string,
+	templateId: string,
+): Promise<SetDefaultResult> {
+	const result = emptyResult(templateId);
+	const upcoming = await loadUpcoming(clubId, templateId);
+	if (!upcoming) return result;
+	for (const meeting of upcoming.candidates) {
+		const ref = upcoming.refOf(meeting);
+		recordVerdict(result, ref, await upcoming.classify(meeting));
+	}
+	return result;
+}
+
 /**
  * Apply the default to each upcoming meeting still on the standard agenda,
  * where doing so deletes no slot at all — so releases no claimed role, drops
@@ -568,77 +792,16 @@ async function applyDefaultToUpcoming(
 	templateId: string,
 ): Promise<SetDefaultResult> {
 	const result = emptyResult(templateId);
-	const [standard, [target], candidates] = await Promise.all([
-		standardAgendaForClub(database, clubId),
-		database
-			.select({ key: meetingTemplates.key })
-			.from(meetingTemplates)
-			.where(ownedBy(clubId, templateId))
-			.limit(1),
-		database
-			.select({
-				id: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				templateId: meetings.templateId,
-			})
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.clubId, clubId),
-					eq(meetings.status, "scheduled"),
-					gte(meetings.scheduledAt, new Date()),
-				),
-			)
-			.orderBy(asc(meetings.scheduledAt)),
-	]);
-	if (!standard) return result;
-	const expected: ComparableAgenda = {
-		beats: standard.seeds,
-		roles: standard.roles,
-	};
-
-	const [club] = await database
-		.select({ timezone: clubs.timezone })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	const keys = await urlKeysForClubMeetings(
-		clubId,
-		candidates,
-		club?.timezone ?? "UTC",
-	);
-	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
-		meetingId: m.id,
-		scheduledAt: m.scheduledAt,
-		urlKey: keys(m.id),
-	});
+	const upcoming = await loadUpcoming(clubId, templateId);
+	if (!upcoming) return result;
+	const { expected, candidates, refOf } = upcoming;
 
 	for (const [index, meeting] of candidates.entries()) {
 		const ref = refOf(meeting);
 		try {
-			const copy =
-				meeting.templateId === null
-					? null
-					: await loadComparableCopy(database, meeting.id, meeting.templateId);
-			const standardNow =
-				meeting.templateId === null ||
-				(copy !== null &&
-					copy.key === privateCopyKey(meeting.id) &&
-					agendaMatchesStandard(copy, expected));
-			if (!standardNow) {
-				result.keptEdited.push({
-					...ref,
-					onDefaultCopy: copy !== null && copy.key === target?.key,
-				});
-				continue;
-			}
-			const plan = await planTemplateConversion(meeting.id, templateId);
-			if (releasesAnything(plan)) {
-				result.keptSignups.push({ ...ref, roles: plan.releasedRoleNames });
-				continue;
-			}
-			if (removesAnything(plan)) {
-				result.keptRoles.push({ ...ref, roles: plan.removedRoleNames });
+			const verdict = await upcoming.classify(meeting);
+			if (verdict.kind !== "convert") {
+				recordVerdict(result, ref, verdict);
 				continue;
 			}
 			await applyTemplateConversion({

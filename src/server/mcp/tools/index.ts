@@ -15,13 +15,17 @@
  */
 import type { McpToolDefinition } from "../tool";
 import { addMembersTool } from "./add-members";
+import { adoptStandardAgendaTool } from "./adopt-standard-agenda";
 import { applyAgendaTemplateTool } from "./apply-agenda-template";
 import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
 import { completeMeetingTool } from "./complete-meeting";
 import { createMeetingsTool } from "./create-meetings";
+import { deleteAgendaTemplateTool } from "./delete-agenda-template";
+import { duplicateAgendaTemplateTool } from "./duplicate-agenda-template";
 import { editAgendaTool } from "./edit-agenda";
+import { editAgendaTemplateTool } from "./edit-agenda-template";
 import { editMeetingTool } from "./edit-meeting";
 import { editMemberTool } from "./edit-member";
 import { editRoleSlotsTool } from "./edit-role-slots";
@@ -46,6 +50,7 @@ import { saveAgendaAsTemplateTool } from "./save-agenda-as-template";
 import { setAttendanceTool } from "./set-attendance";
 import { setAwardsTool } from "./set-awards";
 import { setContactPreferenceTool } from "./set-contact-preference";
+import { setDefaultAgendaTemplateTool } from "./set-default-agenda-template";
 import { setMemberStandingTool } from "./set-member-standing";
 import { setMyAttendanceTool } from "./set-my-attendance";
 import { setMyContactPreferenceTool } from "./set-my-contact-preference";
@@ -79,6 +84,11 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	listAgendaTemplatesTool,
 	saveAgendaAsTemplateTool,
 	applyAgendaTemplateTool,
+	editAgendaTemplateTool,
+	duplicateAgendaTemplateTool,
+	deleteAgendaTemplateTool,
+	setDefaultAgendaTemplateTool,
+	adoptStandardAgendaTool,
 	editMeetingTool,
 	editRoleSlotsTool,
 	editSpeakerSlotsTool,

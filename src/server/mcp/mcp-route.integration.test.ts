@@ -31,6 +31,7 @@ import {
 	guests,
 	impersonationSessions,
 	meetings,
+	meetingTemplates,
 	officerTerms,
 	people,
 	roleSlots,
@@ -192,13 +193,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"add_members",
+			"adopt_standard_agenda",
 			"apply_agenda_template",
 			"assign_roles",
 			"cancel_meeting",
 			"claim_open_role",
 			"complete_meeting",
 			"create_meetings",
+			"delete_agenda_template",
+			"duplicate_agenda_template",
 			"edit_agenda",
+			"edit_agenda_template",
 			"edit_meeting",
 			"edit_member",
 			"edit_role_slots",
@@ -223,6 +228,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"set_attendance",
 			"set_awards",
 			"set_contact_preference",
+			"set_default_agenda_template",
 			"set_member_standing",
 			"set_my_attendance",
 			"set_my_contact_preference",
@@ -534,6 +540,16 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			theme: "Past",
 		});
 		const pastDate = utcToZonedWallTime(past, "America/Chicago").slice(0, 10);
+		// #1630. The template tools preview against one of the club's own.
+		const [sweepTemplate] = await testDb
+			.insert(meetingTemplates)
+			.values({
+				clubId: seed.clubId,
+				key: `sweep-${randomUUID().slice(0, 8)}`,
+				name: "Sweep managed template",
+			})
+			.returning({ id: meetingTemplates.id });
+		const sweepTemplateId = sweepTemplate?.id as string;
 
 		// Sweep every tool that can name a guest, on the raw response text rather
 		// than a parsed field: a leak through an unexpected key is exactly the
@@ -624,6 +640,27 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				meetingId: seed.meetingId,
 				templateId: null,
 			}),
+			// #1630. PREVIEWS of the five template-management tools (no planHash,
+			// nothing written). They name templates and meetings by date, never a
+			// guest row, and the sweep watches the day one does.
+			toolsCall("edit_agenda_template", {
+				clubId: seed.clubId,
+				templateId: sweepTemplateId,
+				name: "Sweep renamed",
+			}),
+			toolsCall("duplicate_agenda_template", {
+				clubId: seed.clubId,
+				templateId: sweepTemplateId,
+			}),
+			toolsCall("delete_agenda_template", {
+				clubId: seed.clubId,
+				templateId: sweepTemplateId,
+			}),
+			toolsCall("set_default_agenda_template", {
+				clubId: seed.clubId,
+				templateId: sweepTemplateId,
+			}),
+			toolsCall("adopt_standard_agenda", { clubId: seed.clubId }),
 			// #1057. LAST, after `assign_roles` has put the contact-bearing guest on
 			// a slot: the cancel's result carries a drafted notice that names every
 			// role holder, so this is the one tool in the sweep whose text is BUILT
