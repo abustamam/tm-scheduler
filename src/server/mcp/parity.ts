@@ -268,12 +268,24 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("officer-training", "resetTrainingWindow", "admin", { gap: true }),
 	row("officer-training", "addTrainingRecord", "admin", { gap: true }),
 	row("officer-training", "removeTrainingRecord", "admin", { gap: true }),
-	row("club-agendas", "renameClubTemplate", "admin", { gap: true }),
-	row("club-agendas", "duplicateClubTemplateFn", "admin", { gap: true }),
-	row("club-agendas", "setClubTemplateEnabled", "admin", { gap: true }),
-	row("club-agendas", "deleteClubTemplateFn", "admin", { gap: true }),
-	row("club-agendas", "setClubDefaultTemplate", "admin", { gap: true }),
-	row("club-agendas", "adoptStandardAgendaFn", "admin", { gap: true }),
+	row("club-agendas", "renameClubTemplate", "admin", {
+		tool: "edit_agenda_template",
+	}),
+	row("club-agendas", "duplicateClubTemplateFn", "admin", {
+		tool: "duplicate_agenda_template",
+	}),
+	row("club-agendas", "setClubTemplateEnabled", "admin", {
+		tool: "edit_agenda_template",
+	}),
+	row("club-agendas", "deleteClubTemplateFn", "admin", {
+		tool: "delete_agenda_template",
+	}),
+	row("club-agendas", "setClubDefaultTemplate", "admin", {
+		tool: "set_default_agenda_template",
+	}),
+	row("club-agendas", "adoptStandardAgendaFn", "admin", {
+		tool: "adopt_standard_agenda",
+	}),
 	row("speech-requests", "submitSpeechRequest", "self", { gap: true }),
 	row("speech-requests", "editSpeechRequest", "self", { gap: true }),
 	row("speech-requests", "withdrawMySpeechRequest", "self", { gap: true }),

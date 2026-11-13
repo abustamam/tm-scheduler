@@ -14,7 +14,13 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { apiTokens, clubs, meetings, members } from "#/db/schema";
+import {
+	apiTokens,
+	clubs,
+	meetings,
+	meetingTemplates,
+	members,
+} from "#/db/schema";
 import {
 	cleanup,
 	hasTestDb,
@@ -105,6 +111,15 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 		find_people: { clubId: s.clubId },
 		list_agenda_templates: { clubId: s.clubId },
 		apply_agenda_template: { meetingId: s.meetingId, templateId: null },
+		edit_agenda_template: {
+			clubId: s.clubId,
+			templateId: randomUUID(),
+			name: "Renamed",
+		},
+		duplicate_agenda_template: { clubId: s.clubId, templateId: randomUUID() },
+		delete_agenda_template: { clubId: s.clubId, templateId: randomUUID() },
+		set_default_agenda_template: { clubId: s.clubId, templateId: null },
+		adopt_standard_agenda: { clubId: s.clubId },
 		save_agenda_as_template: {
 			meetingId: s.meetingId,
 			target: { mode: "new", name: "Club template" },
@@ -159,14 +174,26 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(26);
+		expect(OFFICER_TOOLS).toHaveLength(31);
 	});
 
 	it.each(
 		OFFICER_TOOLS,
 	)("%s: an officer is served, a member is refused with the exact message", async (name) => {
 		const s = await club();
-		const input = officerInputs(s)[name] ?? {};
+		let input = officerInputs(s)[name] ?? {};
+		// The template tools need a template of this club for the control call.
+		if ("templateId" in input && input.templateId !== null) {
+			const [t] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: s.clubId,
+					key: `aud-${randomUUID().slice(0, 8)}`,
+					name: "Audience template",
+				})
+				.returning({ id: meetingTemplates.id });
+			input = { ...input, templateId: t?.id };
+		}
 		const adminToken = await tokenFor(s.adminUserId);
 		const memberToken = await tokenFor(s.memberUserId);
 

@@ -43,6 +43,7 @@ import {
 	CLUB_TEMPLATE_NAME_MAX,
 	parseClubTemplateFields,
 } from "#/lib/club-template-key";
+import { digest } from "#/lib/mcp-plan";
 import { logActivity } from "./activity";
 import { lockClubForWrite } from "./club-write-lock";
 import { standardAgendaForClub } from "./meeting-agenda-edit-logic";
@@ -57,6 +58,7 @@ import {
 	planTemplateConversion,
 	releasesAnything,
 	removesAnything,
+	templateContentForHash,
 	WouldReleaseError,
 	WouldRemoveError,
 } from "./meeting-templates-logic";
@@ -76,8 +78,16 @@ export const ALREADY_ADOPTED_MESSAGE =
 	"Your club already has a default agenda.";
 
 /** What adopting names the template, and the key it asks for. */
-const ADOPTED_TEMPLATE_NAME = "Our standard agenda";
+export const ADOPTED_TEMPLATE_NAME = "Our standard agenda";
 const ADOPTED_TEMPLATE_KEY = "standard";
+
+/** `deleteClubTemplate`'s `expectContentHash` no longer matches the stored content. */
+export class TemplateChangedError extends Error {
+	constructor() {
+		super("That template changed since it was read.");
+		this.name = "TemplateChangedError";
+	}
+}
 
 /** A drizzle transaction handle. */
 type Tx = Parameters<Parameters<(typeof database)["transaction"]>[0]>[0];
@@ -344,6 +354,14 @@ export async function setClubTemplateEnabled(input: {
 export async function deleteClubTemplate(input: {
 	clubId: string;
 	templateId: string;
+	/**
+	 * Optional. The `digest` of the template's `templateContentForHash` the
+	 * caller showed a person before asking for the delete, compared under the
+	 * club lock: a #909 replace holds the same lock, so a mismatch means the
+	 * content changed after the caller looked, and nothing is deleted
+	 * (`TemplateChangedError`). No app caller passes it.
+	 */
+	expectContentHash?: string;
 }): Promise<{ wasDefault: boolean }> {
 	return database.transaction(async (tx) => {
 		const club = await lockClubRow(tx, input.clubId);
@@ -353,6 +371,12 @@ export async function deleteClubTemplate(input: {
 			.where(ownedBy(input.clubId, input.templateId))
 			.limit(1);
 		if (!owned) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+		if (input.expectContentHash !== undefined) {
+			const content = await templateContentForHash(tx, owned.id);
+			if (!content || digest(content) !== input.expectContentHash) {
+				throw new TemplateChangedError();
+			}
+		}
 		await forkLegacyPointers(tx, owned.id);
 		const [deleted] = await tx
 			.delete(meetingTemplates)
@@ -545,6 +569,128 @@ export async function adoptStandardAgenda(input: {
 	return result;
 }
 
+/** What the default would do to ONE upcoming meeting, before any write. */
+type Verdict =
+	| { kind: "convert" }
+	| { kind: "keptEdited"; onDefaultCopy: boolean }
+	| { kind: "keptSignups"; roles: string[] }
+	| { kind: "keptRoles"; roles: string[] };
+
+/**
+ * The club's upcoming scheduled meetings, soonest first (`scheduledAt`, then
+ * `id`, so two meetings at the same instant have ONE order), and the classifier
+ * both the loop and the preview run per meeting. Null when the club is gone.
+ */
+async function loadUpcoming(clubId: string, templateId: string) {
+	const [standard, [target], candidates] = await Promise.all([
+		standardAgendaForClub(database, clubId),
+		database
+			.select({ key: meetingTemplates.key })
+			.from(meetingTemplates)
+			.where(ownedBy(clubId, templateId))
+			.limit(1),
+		database
+			.select({
+				id: meetings.id,
+				scheduledAt: meetings.scheduledAt,
+				templateId: meetings.templateId,
+			})
+			.from(meetings)
+			.where(
+				and(
+					eq(meetings.clubId, clubId),
+					eq(meetings.status, "scheduled"),
+					gte(meetings.scheduledAt, new Date()),
+				),
+			)
+			.orderBy(asc(meetings.scheduledAt), asc(meetings.id)),
+	]);
+	if (!standard) return null;
+	const expected: ComparableAgenda = {
+		beats: standard.seeds,
+		roles: standard.roles,
+	};
+
+	const [club] = await database
+		.select({ timezone: clubs.timezone })
+		.from(clubs)
+		.where(eq(clubs.id, clubId))
+		.limit(1);
+	const keys = await urlKeysForClubMeetings(
+		clubId,
+		candidates,
+		club?.timezone ?? "UTC",
+	);
+	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
+		meetingId: m.id,
+		scheduledAt: m.scheduledAt,
+		urlKey: keys(m.id),
+	});
+
+	/** Everything the loop decides before it calls the conversion. */
+	const classify = async (
+		meeting: (typeof candidates)[number],
+	): Promise<Verdict> => {
+		const copy =
+			meeting.templateId === null
+				? null
+				: await loadComparableCopy(database, meeting.id, meeting.templateId);
+		const standardNow =
+			meeting.templateId === null ||
+			(copy !== null &&
+				copy.key === privateCopyKey(meeting.id) &&
+				agendaMatchesStandard(copy, expected));
+		if (!standardNow) {
+			return {
+				kind: "keptEdited",
+				onDefaultCopy: copy !== null && copy.key === target?.key,
+			};
+		}
+		const plan = await planTemplateConversion(meeting.id, templateId);
+		if (releasesAnything(plan)) {
+			return {
+				kind: "keptSignups",
+				roles: plan.releasedRoleNames,
+			};
+		}
+		if (removesAnything(plan)) {
+			return {
+				kind: "keptRoles",
+				roles: plan.removedRoleNames,
+			};
+		}
+		return { kind: "convert" };
+	};
+	return { expected, candidates, refOf, classify };
+}
+
+/**
+ * What setting `templateId` as the default WOULD do to each upcoming meeting,
+ * writing nothing (#1630). The same classification the loop runs, so the two
+ * cannot disagree: a meeting the loop would convert is in `applied`. Never
+ * returns `failed`; a meeting that cannot be classified throws rather than be
+ * guessed into a bucket.
+ */
+export async function previewDefaultForUpcoming(
+	clubId: string,
+	templateId: string,
+): Promise<SetDefaultResult> {
+	const result = emptyResult(templateId);
+	const upcoming = await loadUpcoming(clubId, templateId);
+	if (!upcoming) return result;
+	for (const meeting of upcoming.candidates) {
+		const ref = upcoming.refOf(meeting);
+		const verdict = await upcoming.classify(meeting);
+		if (verdict.kind === "convert") result.applied.push(ref);
+		else if (verdict.kind === "keptEdited") {
+			result.keptEdited.push({ ...ref, onDefaultCopy: verdict.onDefaultCopy });
+		} else if (verdict.kind === "keptSignups") {
+			result.keptSignups.push({ ...ref, roles: verdict.roles });
+		} else result.keptRoles.push({ ...ref, roles: verdict.roles });
+	}
+	return result;
+}
+
 /**
  * Apply the default to each upcoming meeting still on the standard agenda,
  * where doing so deletes no slot at all — so releases no claimed role, drops
@@ -568,77 +714,27 @@ async function applyDefaultToUpcoming(
 	templateId: string,
 ): Promise<SetDefaultResult> {
 	const result = emptyResult(templateId);
-	const [standard, [target], candidates] = await Promise.all([
-		standardAgendaForClub(database, clubId),
-		database
-			.select({ key: meetingTemplates.key })
-			.from(meetingTemplates)
-			.where(ownedBy(clubId, templateId))
-			.limit(1),
-		database
-			.select({
-				id: meetings.id,
-				scheduledAt: meetings.scheduledAt,
-				templateId: meetings.templateId,
-			})
-			.from(meetings)
-			.where(
-				and(
-					eq(meetings.clubId, clubId),
-					eq(meetings.status, "scheduled"),
-					gte(meetings.scheduledAt, new Date()),
-				),
-			)
-			.orderBy(asc(meetings.scheduledAt)),
-	]);
-	if (!standard) return result;
-	const expected: ComparableAgenda = {
-		beats: standard.seeds,
-		roles: standard.roles,
-	};
-
-	const [club] = await database
-		.select({ timezone: clubs.timezone })
-		.from(clubs)
-		.where(eq(clubs.id, clubId))
-		.limit(1);
-	const keys = await urlKeysForClubMeetings(
-		clubId,
-		candidates,
-		club?.timezone ?? "UTC",
-	);
-	const refOf = (m: { id: string; scheduledAt: Date }): MeetingRef => ({
-		meetingId: m.id,
-		scheduledAt: m.scheduledAt,
-		urlKey: keys(m.id),
-	});
+	const upcoming = await loadUpcoming(clubId, templateId);
+	if (!upcoming) return result;
+	const { expected, candidates, refOf } = upcoming;
 
 	for (const [index, meeting] of candidates.entries()) {
 		const ref = refOf(meeting);
 		try {
-			const copy =
-				meeting.templateId === null
-					? null
-					: await loadComparableCopy(database, meeting.id, meeting.templateId);
-			const standardNow =
-				meeting.templateId === null ||
-				(copy !== null &&
-					copy.key === privateCopyKey(meeting.id) &&
-					agendaMatchesStandard(copy, expected));
-			if (!standardNow) {
+			const verdict = await upcoming.classify(meeting);
+			if (verdict.kind === "keptEdited") {
 				result.keptEdited.push({
 					...ref,
-					onDefaultCopy: copy !== null && copy.key === target?.key,
+					onDefaultCopy: verdict.onDefaultCopy,
 				});
 				continue;
 			}
-			const plan = await planTemplateConversion(meeting.id, templateId);
-			if (releasesAnything(plan)) {
-				result.keptSignups.push({ ...ref, roles: plan.releasedRoleNames });
+			if (verdict.kind === "keptSignups") {
+				result.keptSignups.push({ ...ref, roles: verdict.roles });
 				continue;
 			}
-			if (removesAnything(plan)) {
-				result.keptRoles.push({ ...ref, roles: plan.removedRoleNames });
+			if (verdict.kind === "keptRoles") {
+				result.keptRoles.push({ ...ref, roles: verdict.roles });
 				continue;
 			}
 			await applyTemplateConversion({
