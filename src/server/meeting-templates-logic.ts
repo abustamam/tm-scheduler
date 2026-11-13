@@ -761,7 +761,7 @@ export async function copyTemplateForMeeting(
 		)
 		.for("share")
 		.limit(1);
-	if (!source) throw new Error("That meeting template no longer exists.");
+	if (!source) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 
 	const [copy] = await conn
 		.insert(meetingTemplates)
@@ -967,6 +967,18 @@ export async function loadMeetingShapeDefs(
 // ---------------------------------------------------------------------------
 // Conversion — switching a meeting's shape to (or away from) a template.
 // ---------------------------------------------------------------------------
+
+/** What a conversion says when the template is not one this club can see (#1629). */
+export const CONVERT_TEMPLATE_GONE_MESSAGE =
+	"That meeting template no longer exists.";
+
+/** What a conversion says for a cancelled meeting (#1629). */
+export const CONVERT_CANCELLED_MESSAGE =
+	"A cancelled meeting cannot change its template.";
+
+type ConversionTransaction = Parameters<
+	Parameters<(typeof database)["transaction"]>[0]
+>[0];
 
 /** A member or guest whose slot the conversion released. */
 export type ReleasedHolder = {
@@ -1359,7 +1371,7 @@ export async function planTemplateConversion(
 				),
 			)
 			.limit(1);
-		if (!visible) throw new Error("That meeting template no longer exists.");
+		if (!visible) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 	}
 
 	const current = await loadSlotsForConversion(database, meetingId);
@@ -1442,6 +1454,15 @@ export async function applyTemplateConversion(input: {
 		templateId: string | null;
 		standard: ComparableAgenda;
 	};
+	/**
+	 * Called once with the FINAL plan (the one computed against the installed
+	 * role definitions) and the transaction, after the repeated refusals and
+	 * before the first destructive write. Throwing rolls back (#1629).
+	 */
+	expectPlan?: (
+		final: ConversionPlanDetail,
+		tx: ConversionTransaction,
+	) => Promise<void>;
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1462,7 +1483,7 @@ export async function applyTemplateConversion(input: {
 				and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
 			)
 			.limit(1);
-		if (!visible) throw new Error("That meeting template no longer exists.");
+		if (!visible) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 	}
 
 	return database.transaction(async (tx) => {
@@ -1478,7 +1499,7 @@ export async function applyTemplateConversion(input: {
 		// this operation's own.
 		assertMeetingAccepts(meeting.status, "plan", {
 			messages: {
-				cancelled: "A cancelled meeting cannot change its template.",
+				cancelled: CONVERT_CANCELLED_MESSAGE,
 			},
 		});
 
@@ -1509,8 +1530,21 @@ export async function applyTemplateConversion(input: {
 				)
 				.for("share")
 				.limit(1);
-			if (!source) throw new Error("That meeting template no longer exists.");
+			if (!source) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 		}
+
+		// Lock this meeting's slots, in ascending id order, to commit (#1629).
+		// The meeting lock does not exclude claim writers
+		// (`meeting-slot-lock.ts`), so without this a claim that commits after
+		// the plans below are computed is cleared by the release-then-delete and
+		// appears in nobody's preview. A claim now waits, then finds its slot
+		// kept or gone. Ascending id: the multi-slot writers lock in that order.
+		await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, meetingId))
+			.orderBy(asc(roleSlots.id))
+			.for("update");
 
 		// The no-release re-check, UNDER the lock and before the first write.
 		// The same derivation the preview runs — the SOURCE template's own
@@ -1613,6 +1647,7 @@ export async function applyTemplateConversion(input: {
 		if (input.refuseIfRemoving && removesAnything(plan)) {
 			throw new WouldRemoveError(plan);
 		}
+		if (input.expectPlan) await input.expectPlan(plan, tx);
 
 		// Re-point, do not tear down. A slot whose role the target set still
 		// declares is the SAME role — the officer re-picked the shape it already
