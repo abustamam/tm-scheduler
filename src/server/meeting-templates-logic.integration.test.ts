@@ -18,7 +18,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-templates-logic.integration.test.ts
  */
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
@@ -26,6 +26,7 @@ import {
 	meetingTemplateRoles,
 	meetingTemplates,
 	roleDefinitions,
+	roleSlots,
 } from "#/db/schema";
 import { digest } from "#/lib/mcp-plan";
 import {
@@ -53,6 +54,7 @@ const mine = (names: string[]) => names.filter((n) => n.includes(RUN));
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const {
+	applyTemplateConversion,
 	CLUB_TEMPLATE_CHANGED_MESSAGE,
 	copyTemplateForMeeting,
 	listAvailableTemplates,
@@ -1026,6 +1028,238 @@ describe.skipIf(!hasTestDb)(
 			expect(
 				(await stored(t.templateId)).every((r) => r.handoff === true),
 			).toBe(true);
+		});
+	},
+);
+
+describe.skipIf(!hasTestDb)(
+	"applyTemplateConversion expectPlan and slot locks (#1629)",
+	() => {
+		let seed: SeededClub;
+		let templateId: string;
+		beforeEach(async () => {
+			seed = await seedClub();
+			// A club template with one role the seed's Timer is not: applying it
+			// removes the Timer slot.
+			const [tpl] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: seed.clubId,
+					key: `contest-${crypto.randomUUID().slice(0, 8)}`,
+					name: "Contest",
+				})
+				.returning({ id: meetingTemplates.id });
+			templateId = tpl?.id ?? "";
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId,
+				key: "contest_chair",
+				name: "Contest Chair",
+				category: "leadership",
+				defaultCount: 1,
+				sortOrder: 10,
+			});
+			await testDb.insert(meetingTemplateBeats).values({
+				templateId,
+				sortOrder: 0,
+				kind: "event",
+				label: "Call to order",
+				minutes: 2,
+			});
+		});
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		const base = () => ({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			templateId,
+			actorMemberId: null,
+		});
+		const slotRows = () =>
+			testDb
+				.select({
+					id: roleSlots.id,
+					member: roleSlots.assignedMemberId,
+					def: roleSlots.roleDefinitionId,
+				})
+				.from(roleSlots)
+				.where(eq(roleSlots.meetingId, seed.meetingId))
+				.orderBy(asc(roleSlots.id));
+		const meetingTemplate = async () =>
+			(
+				await testDb
+					.select({ t: meetings.templateId })
+					.from(meetings)
+					.where(eq(meetings.id, seed.meetingId))
+			)[0]?.t ?? null;
+		const claimSeedSlot = () =>
+			testDb
+				.update(roleSlots)
+				.set({ assignedMemberId: seed.memberId, status: "claimed" })
+				.where(eq(roleSlots.id, seed.slotId));
+
+		// protects=expectPlan runs once with the final plan although neither refusal flag is set, and the conversion then applies;
+		// fails_when=the hook is only called under refuseIfReleasing/refuseIfRemoving, or never, or the plan is not the final one;
+		// no_claim=the hook's plan equalling the preview for a legacy unkeyed role is covered in the tool tests.
+		it("calls expectPlan once with the final plan when no refusal flag is set", async () => {
+			await claimSeedSlot();
+			const seen: unknown[] = [];
+			await applyTemplateConversion({
+				...base(),
+				expectPlan: async (final) => {
+					seen.push(final);
+				},
+			});
+			expect(seen).toHaveLength(1);
+			expect(seen[0]).toMatchObject({
+				claimedSlotsReleased: 1,
+				removedRoleNames: ["Timer"],
+				slotsAdded: 1,
+			});
+			expect(await meetingTemplate()).not.toBeNull();
+			expect((await slotRows()).some((r) => r.id === seed.slotId)).toBe(false);
+		});
+
+		// protects=omitting expectPlan behaves as before: the conversion applies and releases the claim;
+		// fails_when=the option became required or changed the result;
+		// no_claim=the full pre-existing conversion suite is meeting-template-convert.integration.test.ts.
+		it("applies without expectPlan", async () => {
+			await claimSeedSlot();
+			const plan = await applyTemplateConversion(base());
+			expect(plan.claimedSlotsReleased).toBe(1);
+			expect((await slotRows()).filter((r) => r.member !== null)).toEqual([]);
+		});
+
+		// protects=a throwing expectPlan rolls back: slots, the claim and the meeting's template pointer are unchanged;
+		// fails_when=the hook runs after the first destructive write, or its throw is swallowed;
+		// no_claim=activity-log rows are not asserted.
+		it("a throwing expectPlan leaves every table unchanged", async () => {
+			await claimSeedSlot();
+			const before = await slotRows();
+			const templatesBefore = await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.clubId, seed.clubId));
+			await expect(
+				applyTemplateConversion({
+					...base(),
+					expectPlan: async () => {
+						throw new Error("stop");
+					},
+				}),
+			).rejects.toThrow("stop");
+			expect(await slotRows()).toEqual(before);
+			expect(await meetingTemplate()).toBeNull();
+			expect(
+				await testDb
+					.select({ id: meetingTemplates.id })
+					.from(meetingTemplates)
+					.where(eq(meetingTemplates.clubId, seed.clubId)),
+			).toEqual(templatesBefore);
+		});
+
+		// protects=a claim that starts after expectPlan has passed waits on the slot lock, and afterwards finds its slot gone: no committed assignment is cleared;
+		// fails_when=the slot lock is removed (the claim commits at once, so the wait below times out, and the conversion would wipe it);
+		// no_claim=a kept-slot outcome is not covered here, the seed's role is not in the target template.
+		it("a claim after expectPlan waits on the slot lock and is refused, not wiped", async () => {
+			let claim: Promise<unknown[]> | undefined;
+			await applyTemplateConversion({
+				...base(),
+				expectPlan: async (_final, tx) => {
+					const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+					const applyPid = Number((res.rows[0] as { pid: number }).pid);
+					claim = claimSeedSlot().returning({ id: roleSlots.id });
+					claim.catch(() => {});
+					await waitForLockWait("update", applyPid);
+				},
+			});
+			// The slot was deleted by the conversion: the claim matched no row.
+			expect(await claim).toEqual([]);
+			expect((await slotRows()).filter((r) => r.member !== null)).toEqual([]);
+		});
+
+		// protects=a claim on a slot the target template KEEPS waits on the slot lock, and after both commit the claimant holds that kept slot;
+		// fails_when=the slot lock is removed (the claim commits at once, so the wait times out) or the kept slot is cleared by the conversion;
+		// no_claim=a template matching the slot by key rather than by the seed's name-only match.
+		it("a claim on a kept slot waits on the slot lock and survives", async () => {
+			const [kept] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: seed.clubId,
+					key: `keep-${crypto.randomUUID().slice(0, 8)}`,
+					name: "Keeps Timer",
+				})
+				.returning({ id: meetingTemplates.id });
+			const keptId = kept?.id ?? "";
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId: keptId,
+				key: "timer",
+				name: "Timer",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 10,
+			});
+			let claim: Promise<unknown[]> | undefined;
+			await applyTemplateConversion({
+				...base(),
+				templateId: keptId,
+				expectPlan: async (final, tx) => {
+					expect(final.removedRoleNames).toEqual([]);
+					const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+					const applyPid = Number((res.rows[0] as { pid: number }).pid);
+					claim = claimSeedSlot().returning({ id: roleSlots.id });
+					claim.catch(() => {});
+					await waitForLockWait("update", applyPid);
+				},
+			});
+			expect(await claim).toEqual([{ id: seed.slotId }]);
+			const rows = await slotRows();
+			expect(rows.map((r) => [r.id, r.member])).toEqual([
+				[seed.slotId, seed.memberId],
+			]);
+		});
+
+		// protects=a writer holding the LOWER slot id, then (after the conversion has started and is blocked behind it) taking the HIGHER one, and the conversion both commit with no deadlock;
+		// fails_when=the conversion locks slots in descending order or any order but ascending id (it would hold the higher id and the writer's second lock would deadlock);
+		// no_claim=attachSpeechToOpenSlot's non-ascending source order is not exercised.
+		it("a two-slot ascending writer interleaved with the conversion both commit", async () => {
+			const [second] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: seed.roleDefinitionId,
+					slotIndex: 1,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			const ids = [seed.slotId, second?.id ?? ""].sort();
+			const [lower, higher] = [ids[0] ?? "", ids[1] ?? ""];
+			let writerTx:
+				| Parameters<Parameters<typeof openBlockingTx>[0]>[0]
+				| undefined;
+			const lockSlot = (tx: NonNullable<typeof writerTx>, id: string) =>
+				tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, id))
+					.for("update");
+			const writer = await openBlockingTx(async (tx) => {
+				writerTx = tx;
+				await lockSlot(tx, lower);
+			});
+			const converting = applyTemplateConversion(base());
+			converting.catch(() => {});
+			try {
+				await waitForLockWait("for update", writer.pid);
+				// The conversion is parked on the lower id; the writer now takes the higher.
+				if (!writerTx) throw new Error("writer transaction missing");
+				await lockSlot(writerTx, higher);
+			} finally {
+				await writer.commit();
+			}
+			await converting;
+			expect(await slotRows()).toHaveLength(1);
 		});
 	},
 );

@@ -57,6 +57,7 @@ describe("MCP tool annotations", () => {
 			.map((t) => t.name)
 			.sort();
 		expect(destructive).toEqual([
+			"apply_agenda_template",
 			"assign_roles",
 			"cancel_meeting",
 			"claim_open_role",

@@ -66,9 +66,10 @@ import {
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { isDeadlock } from "./pg-errors";
 
-export type DbOrTx =
-	| typeof db
-	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+/** A Drizzle transaction handle. */
+export type DbTx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+export type DbOrTx = typeof db | DbTx;
 
 /** The stock roles by key — what `materializeTemplateRoles` seeds a minted
  *  standard role's guide from. */
@@ -761,7 +762,7 @@ export async function copyTemplateForMeeting(
 		)
 		.for("share")
 		.limit(1);
-	if (!source) throw new Error("That meeting template no longer exists.");
+	if (!source) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 
 	const [copy] = await conn
 		.insert(meetingTemplates)
@@ -967,6 +968,14 @@ export async function loadMeetingShapeDefs(
 // ---------------------------------------------------------------------------
 // Conversion — switching a meeting's shape to (or away from) a template.
 // ---------------------------------------------------------------------------
+
+/** What a conversion says when the template is not one this club can see (#1629). */
+export const CONVERT_TEMPLATE_GONE_MESSAGE =
+	"That meeting template no longer exists.";
+
+/** What a conversion says for a cancelled meeting (#1629). */
+export const CONVERT_CANCELLED_MESSAGE =
+	"A cancelled meeting cannot change its template.";
 
 /** A member or guest whose slot the conversion released. */
 export type ReleasedHolder = {
@@ -1359,7 +1368,7 @@ export async function planTemplateConversion(
 				),
 			)
 			.limit(1);
-		if (!visible) throw new Error("That meeting template no longer exists.");
+		if (!visible) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 	}
 
 	const current = await loadSlotsForConversion(database, meetingId);
@@ -1442,6 +1451,21 @@ export async function applyTemplateConversion(input: {
 		templateId: string | null;
 		standard: ComparableAgenda;
 	};
+	/**
+	 * Called once, under the meeting, source-template and slot locks and BEFORE
+	 * this transaction's first write (before the private copy is detached, the
+	 * new copy inserted or any role definition minted), so a caller can capture
+	 * what the meeting looked like as the officer's preview saw it (#1629).
+	 */
+	beforeWrites?: (tx: DbTx) => Promise<void>;
+	/**
+	 * Called once with the FINAL plan (the one computed against the installed
+	 * role definitions) and the transaction, after the repeated refusals and
+	 * before slots are re-pointed, released or deleted. By then the private
+	 * copy is re-keyed and bank rows may be minted; a throw rolls back
+	 * everything the transaction has done (#1629).
+	 */
+	expectPlan?: (final: ConversionPlanDetail, tx: DbTx) => Promise<void>;
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1462,7 +1486,7 @@ export async function applyTemplateConversion(input: {
 				and(eq(meetingTemplates.id, templateId), templateVisibleTo(clubId)),
 			)
 			.limit(1);
-		if (!visible) throw new Error("That meeting template no longer exists.");
+		if (!visible) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 	}
 
 	return database.transaction(async (tx) => {
@@ -1478,7 +1502,7 @@ export async function applyTemplateConversion(input: {
 		// this operation's own.
 		assertMeetingAccepts(meeting.status, "plan", {
 			messages: {
-				cancelled: "A cancelled meeting cannot change its template.",
+				cancelled: CONVERT_CANCELLED_MESSAGE,
 			},
 		});
 
@@ -1509,8 +1533,21 @@ export async function applyTemplateConversion(input: {
 				)
 				.for("share")
 				.limit(1);
-			if (!source) throw new Error("That meeting template no longer exists.");
+			if (!source) throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
 		}
+
+		// Lock this meeting's slots, in ascending id order, to commit (#1629).
+		// The meeting lock does not exclude claim writers
+		// (`meeting-slot-lock.ts`), so without this a claim that commits after
+		// the plans below are computed is cleared by the release-then-delete and
+		// appears in nobody's preview. A claim now waits, then finds its slot
+		// kept or gone. Ascending id: the multi-slot writers lock in that order.
+		await tx
+			.select({ id: roleSlots.id })
+			.from(roleSlots)
+			.where(eq(roleSlots.meetingId, meetingId))
+			.orderBy(asc(roleSlots.id))
+			.for("update");
 
 		// The no-release re-check, UNDER the lock and before the first write.
 		// The same derivation the preview runs — the SOURCE template's own
@@ -1528,6 +1565,8 @@ export async function applyTemplateConversion(input: {
 				throw new WouldRemoveError(lockedPlan);
 			}
 		}
+
+		if (input.beforeWrites) await input.beforeWrites(tx);
 
 		// The meeting's CURRENT private template, if it has one — captured before
 		// we repoint, because that is what we must retire afterwards.
@@ -1613,6 +1652,7 @@ export async function applyTemplateConversion(input: {
 		if (input.refuseIfRemoving && removesAnything(plan)) {
 			throw new WouldRemoveError(plan);
 		}
+		if (input.expectPlan) await input.expectPlan(plan, tx);
 
 		// Re-point, do not tear down. A slot whose role the target set still
 		// declares is the SAME role — the officer re-picked the shape it already

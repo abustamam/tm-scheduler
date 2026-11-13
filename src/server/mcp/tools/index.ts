@@ -15,6 +15,7 @@
  */
 import type { McpToolDefinition } from "../tool";
 import { addMembersTool } from "./add-members";
+import { applyAgendaTemplateTool } from "./apply-agenda-template";
 import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
@@ -77,6 +78,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	editAgendaTool,
 	listAgendaTemplatesTool,
 	saveAgendaAsTemplateTool,
+	applyAgendaTemplateTool,
 	editMeetingTool,
 	editRoleSlotsTool,
 	editSpeakerSlotsTool,

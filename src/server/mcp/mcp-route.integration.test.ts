@@ -192,6 +192,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		};
 		expect(listed.result.tools.map((t) => t.name).sort()).toEqual([
 			"add_members",
+			"apply_agenda_template",
 			"assign_roles",
 			"cancel_meeting",
 			"claim_open_role",
@@ -616,6 +617,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			toolsCall("save_agenda_as_template", {
 				meetingId: seed.meetingId,
 				target: { mode: "new", name: "Sweep template" },
+			}),
+			// #1629. A PREVIEW (no planHash) back to the standard agenda: it names
+			// the people it would release, so the sweep watches for a guest row.
+			toolsCall("apply_agenda_template", {
+				meetingId: seed.meetingId,
+				templateId: null,
 			}),
 			// #1057. LAST, after `assign_roles` has put the contact-bearing guest on
 			// a slot: the cancel's result carries a drafted notice that names every
