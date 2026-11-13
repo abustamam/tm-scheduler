@@ -1179,28 +1179,82 @@ describe.skipIf(!hasTestDb)(
 			expect((await slotRows()).filter((r) => r.member !== null)).toEqual([]);
 		});
 
-		// protects=a writer that locks two of the meeting's slots in ascending id order and the conversion both commit, with no deadlock;
-		// fails_when=the conversion locks slots in a different order than ascending id, or before the meeting lock;
-		// no_claim=attachSpeechToOpenSlot's non-ascending source order is not exercised.
-		it("a two-slot ascending writer and the conversion both commit", async () => {
-			await testDb.insert(roleSlots).values({
-				meetingId: seed.meetingId,
-				roleDefinitionId: seed.roleDefinitionId,
-				slotIndex: 1,
-				status: "open",
+		// protects=a claim on a slot the target template KEEPS waits on the slot lock, and after both commit the claimant holds that kept slot;
+		// fails_when=the slot lock is removed (the claim commits at once, so the wait times out) or the kept slot is cleared by the conversion;
+		// no_claim=a template matching the slot by key rather than by the seed's name-only match.
+		it("a claim on a kept slot waits on the slot lock and survives", async () => {
+			const [kept] = await testDb
+				.insert(meetingTemplates)
+				.values({
+					clubId: seed.clubId,
+					key: `keep-${crypto.randomUUID().slice(0, 8)}`,
+					name: "Keeps Timer",
+				})
+				.returning({ id: meetingTemplates.id });
+			const keptId = kept?.id ?? "";
+			await testDb.insert(meetingTemplateRoles).values({
+				templateId: keptId,
+				key: "timer",
+				name: "Timer",
+				category: "functionary",
+				defaultCount: 1,
+				sortOrder: 10,
 			});
-			const writer = await openBlockingTx(async (tx) => {
-				await tx
+			let claim: Promise<unknown[]> | undefined;
+			await applyTemplateConversion({
+				...base(),
+				templateId: keptId,
+				expectPlan: async (final, tx) => {
+					expect(final.removedRoleNames).toEqual([]);
+					const res = await tx.execute(sql`select pg_backend_pid() as pid`);
+					const applyPid = Number((res.rows[0] as { pid: number }).pid);
+					claim = claimSeedSlot().returning({ id: roleSlots.id });
+					claim.catch(() => {});
+					await waitForLockWait("update", applyPid);
+				},
+			});
+			expect(await claim).toEqual([{ id: seed.slotId }]);
+			const rows = await slotRows();
+			expect(rows.map((r) => [r.id, r.member])).toEqual([
+				[seed.slotId, seed.memberId],
+			]);
+		});
+
+		// protects=a writer holding the LOWER slot id, then (after the conversion has started and is blocked behind it) taking the HIGHER one, and the conversion both commit with no deadlock;
+		// fails_when=the conversion locks slots in descending order or any order but ascending id (it would hold the higher id and the writer's second lock would deadlock);
+		// no_claim=attachSpeechToOpenSlot's non-ascending source order is not exercised.
+		it("a two-slot ascending writer interleaved with the conversion both commit", async () => {
+			const [second] = await testDb
+				.insert(roleSlots)
+				.values({
+					meetingId: seed.meetingId,
+					roleDefinitionId: seed.roleDefinitionId,
+					slotIndex: 1,
+					status: "open",
+				})
+				.returning({ id: roleSlots.id });
+			const ids = [seed.slotId, second?.id ?? ""].sort();
+			const [lower, higher] = [ids[0] ?? "", ids[1] ?? ""];
+			let writerTx:
+				| Parameters<Parameters<typeof openBlockingTx>[0]>[0]
+				| undefined;
+			const lockSlot = (tx: NonNullable<typeof writerTx>, id: string) =>
+				tx
 					.select({ id: roleSlots.id })
 					.from(roleSlots)
-					.where(eq(roleSlots.meetingId, seed.meetingId))
-					.orderBy(roleSlots.id)
+					.where(eq(roleSlots.id, id))
 					.for("update");
+			const writer = await openBlockingTx(async (tx) => {
+				writerTx = tx;
+				await lockSlot(tx, lower);
 			});
 			const converting = applyTemplateConversion(base());
 			converting.catch(() => {});
 			try {
 				await waitForLockWait("for update", writer.pid);
+				// The conversion is parked on the lower id; the writer now takes the higher.
+				if (!writerTx) throw new Error("writer transaction missing");
+				await lockSlot(writerTx, higher);
 			} finally {
 				await writer.commit();
 			}

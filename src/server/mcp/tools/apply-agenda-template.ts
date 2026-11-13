@@ -12,7 +12,10 @@
  * waits on the slot locks.
  *
  * `buildApplyPlan` is the ONE builder, run with `db` for the preview and with
- * the transaction for the hook, so the two cannot serialise differently.
+ * the transaction for the hook. The outgoing agenda is read BEFORE the seam's
+ * first write (`beforeWrites`), because the seam's own writes (role bank rows,
+ * the re-keyed private copy, the new copy) change what that read returns; the
+ * preview reads it on the pool, before any write, so the two agree.
  */
 
 import { eq } from "drizzle-orm";
@@ -86,6 +89,10 @@ export type ApplyPlan = {
 	removedRoleNames: string[];
 };
 
+function failMissingSnapshot(): never {
+	throw new Error("apply_agenda_template: beforeWrites did not run");
+}
+
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Holders in a total order: role, then name, then the member or guest id. */
@@ -106,40 +113,52 @@ export function sortHolders(holders: ReleasedHolder[]): ReleasedHolder[] {
 }
 
 /**
- * The plan, on one connection. Everything the plan says is read on `conn`
- * except `detail`, which the caller computed on the same connection.
+ * The outgoing agenda's hash, built exactly as save_agenda_as_template's
+ * source hash: the stored copy, or what opening the meeting would store.
+ * Must be read before the conversion writes anything.
  */
-export async function buildApplyPlan(
+export async function outgoingAgendaHash(
 	conn: DbOrTx,
 	meetingId: string,
-	templateId: string | null,
-	detail: ConversionPlanDetail,
-): Promise<ApplyPlan> {
-	const target =
-		templateId === null ? null : await templateContentForHash(conn, templateId);
-	if (templateId !== null && !target) {
-		throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
-	}
+): Promise<string> {
 	const [meeting] = await conn
 		.select({ templateId: meetings.templateId })
 		.from(meetings)
 		.where(eq(meetings.id, meetingId))
 		.limit(1);
 	if (!meeting) throw new McpError("NOT_FOUND", "Meeting not found.");
-	// The outgoing agenda, built exactly as save_agenda_as_template's source
-	// hash: the stored copy, or what opening the meeting would store.
 	const outgoing =
 		meeting.templateId !== null
 			? await templateContentForHash(conn, meeting.templateId)
 			: await plannedMaterialisation(conn, meetingId);
 	if (!outgoing) throw new McpError("NOT_FOUND", "Meeting not found.");
+	return digest(outgoing);
+}
+
+/**
+ * The plan. The target template is read on `conn`; `detail` is the caller's
+ * (the preview's on the pool, the hook's on the transaction); the outgoing
+ * hash is the caller's too, captured before any write on its own connection.
+ */
+export async function buildApplyPlan(
+	conn: DbOrTx,
+	meetingId: string,
+	templateId: string | null,
+	detail: ConversionPlanDetail,
+	outgoingHash: string,
+): Promise<ApplyPlan> {
+	const target =
+		templateId === null ? null : await templateContentForHash(conn, templateId);
+	if (templateId !== null && !target) {
+		throw new Error(CONVERT_TEMPLATE_GONE_MESSAGE);
+	}
 	return {
 		meetingId,
 		templateId,
 		templateName: target?.name ?? null,
 		templateRows: target ? target.beats.map(toTemplateRow) : null,
 		templateContentHash: target ? digest(target) : null,
-		outgoingAgendaHash: digest(outgoing),
+		outgoingAgendaHash: outgoingHash,
 		openSlotsRemoved: detail.openSlotsRemoved,
 		claimedSlotsReleased: detail.claimedSlotsReleased,
 		slotsWithSpeeches: detail.slotsWithSpeeches,
@@ -272,6 +291,7 @@ export const applyAgendaTemplateTool: McpToolDefinition = {
 					meetingId,
 					args.templateId,
 					detail,
+					await outgoingAgendaHash(db, meetingId),
 				);
 				return {
 					applied: false,
@@ -283,18 +303,23 @@ export const applyAgendaTemplateTool: McpToolDefinition = {
 			}
 
 			let locked: ApplyPlan | null = null;
+			let outgoingHash: string | null = null;
 			try {
 				await applyTemplateConversion({
 					meetingId,
 					clubId: club.clubId,
 					templateId: args.templateId,
 					actorMemberId: club.membershipId,
+					beforeWrites: async (tx) => {
+						outgoingHash = await outgoingAgendaHash(tx, meetingId);
+					},
 					expectPlan: async (final, tx) => {
 						const plan = await buildApplyPlan(
 							tx,
 							meetingId,
 							args.templateId,
 							final,
+							outgoingHash ?? failMissingSnapshot(),
 						);
 						const hash = hashOf(plan);
 						if (hash !== args.planHash) throw new PlanStaleError(plan, hash);

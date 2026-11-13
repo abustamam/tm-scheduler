@@ -22,6 +22,7 @@ import {
 	roleDefinitions,
 	roleSlots,
 } from "#/db/schema";
+import { MAX_TEMPLATE_BEATS } from "#/lib/meeting-template-limits";
 import {
 	cleanup,
 	hasTestDb,
@@ -412,6 +413,24 @@ describe.skipIf(!hasTestDb)("apply_agenda_template (#1629)", () => {
 		expect((await slotState()).map((s) => s.name)).toEqual(["Time Keeper"]);
 	});
 
+	// protects=a meeting with no private agenda copy, applying a template that declares a named standard role (Table Topics Master) the club's bank lacks (the seam mints it), applies on the FIRST call with the preview's hash: the outgoing agenda is hashed before the seam's writes;
+	// fails_when=the outgoing hash is read after the seam minted the bank row or detached/copied templates (the apply's hash then differs from the preview's and the first apply is PLAN_STALE);
+	// no_claim=a meeting that already has a private copy (the copy is re-keyed, but its content hash is unchanged).
+	it("a template declaring a role the bank lacks applies on the first call", async () => {
+		const tpl = await makeTemplate(seed.clubId, {
+			roleKey: "table_topics_master",
+			roleName: "Table Topics Master",
+		});
+		expect((await meetingState())?.t).toBeNull();
+		const p = (await run(tpl)) as Preview;
+		const out = (await run(tpl, { planHash: p.planHash })) as Applied;
+		expect(out.applied).toBe(true);
+		expect(out.plan).toEqual(p.plan);
+		expect((await slotState()).map((s) => s.name)).toEqual([
+			"Table Topics Master",
+		]);
+	});
+
 	// protects=templateId null restores the club's standard shape: the standard Timer slot is back and the template's role is gone;
 	// fails_when=null is treated as a no-op or leaves the template's slots;
 	// no_claim=a standard shape with more than one role.
@@ -543,13 +562,67 @@ describe.skipIf(!hasTestDb)("apply_agenda_template (#1629)", () => {
 			seed.meetingId,
 			templateId,
 			detail([a, b], ["Timer", "Ah-Counter"]),
+			"outgoing",
 		);
 		const two = await buildApplyPlan(
 			testDb,
 			seed.meetingId,
 			templateId,
 			detail([b, a], ["Ah-Counter", "Timer"]),
+			"outgoing",
 		);
 		expect(digest(one)).toBe(digest(two));
+	});
+
+	// protects=a Postgres deadlock from the seam is LOCKED with reason deadlock and retryable true, not INTERNAL;
+	// fails_when=isDeadlock is dropped from mapError or the detail is wrong;
+	// no_claim=a real deadlock victim; the error is injected at the seam's entry with SQLSTATE 40P01.
+	it("a deadlock from the seam is LOCKED and retryable", async () => {
+		const p = (await run(templateId)) as Preview;
+		hook.beforeSeam = async () => {
+			throw Object.assign(new Error("deadlock detected"), { code: "40P01" });
+		};
+		await expect(
+			run(templateId, { planHash: p.planHash }),
+		).rejects.toMatchObject({
+			code: "LOCKED",
+			detail: { reason: "deadlock", retryable: true },
+		});
+		expect((await meetingState())?.t).toBeNull();
+	});
+
+	// protects=a template over the row cap is VALIDATION on the preview, not INTERNAL;
+	// fails_when=TemplateTooLargeError is unmapped;
+	// no_claim=the cap on roles (same class, same arm).
+	it("a template over the row cap is VALIDATION", async () => {
+		await testDb.insert(meetingTemplateBeats).values(
+			Array.from({ length: MAX_TEMPLATE_BEATS }, (_, i) => ({
+				templateId,
+				sortOrder: 1000 + i,
+				kind: "event" as const,
+				label: `Filler ${i}`,
+				minutes: 1,
+			})),
+		);
+		await expect(run(templateId)).rejects.toMatchObject({
+			code: "VALIDATION",
+			message: expect.stringContaining("too large"),
+		});
+	});
+
+	// protects=a meetingId that is not a uuid and a templateId that is neither a uuid nor null are VALIDATION naming the field, before any lookup;
+	// fails_when=the schema parse is skipped or its issues are not surfaced;
+	// no_claim=none.
+	it("malformed ids are VALIDATION", async () => {
+		await expect(call({ meetingId: "nope", templateId })).rejects.toMatchObject(
+			{
+				code: "VALIDATION",
+				message: expect.stringContaining("meetingId"),
+			},
+		);
+		await expect(run("not-a-uuid")).rejects.toMatchObject({
+			code: "VALIDATION",
+			message: expect.stringContaining("templateId"),
+		});
 	});
 });

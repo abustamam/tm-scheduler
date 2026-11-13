@@ -66,9 +66,10 @@ import {
 import { lockMeetingForSlotEdit } from "./meeting-slot-lock";
 import { isDeadlock } from "./pg-errors";
 
-export type DbOrTx =
-	| typeof db
-	| Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+/** A Drizzle transaction handle. */
+export type DbTx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+export type DbOrTx = typeof db | DbTx;
 
 /** The stock roles by key — what `materializeTemplateRoles` seeds a minted
  *  standard role's guide from. */
@@ -976,10 +977,6 @@ export const CONVERT_TEMPLATE_GONE_MESSAGE =
 export const CONVERT_CANCELLED_MESSAGE =
 	"A cancelled meeting cannot change its template.";
 
-type ConversionTransaction = Parameters<
-	Parameters<(typeof database)["transaction"]>[0]
->[0];
-
 /** A member or guest whose slot the conversion released. */
 export type ReleasedHolder = {
 	memberId: string | null;
@@ -1455,14 +1452,20 @@ export async function applyTemplateConversion(input: {
 		standard: ComparableAgenda;
 	};
 	/**
+	 * Called once, under the meeting, source-template and slot locks and BEFORE
+	 * this transaction's first write (before the private copy is detached, the
+	 * new copy inserted or any role definition minted), so a caller can capture
+	 * what the meeting looked like as the officer's preview saw it (#1629).
+	 */
+	beforeWrites?: (tx: DbTx) => Promise<void>;
+	/**
 	 * Called once with the FINAL plan (the one computed against the installed
 	 * role definitions) and the transaction, after the repeated refusals and
-	 * before the first destructive write. Throwing rolls back (#1629).
+	 * before slots are re-pointed, released or deleted. By then the private
+	 * copy is re-keyed and bank rows may be minted; a throw rolls back
+	 * everything the transaction has done (#1629).
 	 */
-	expectPlan?: (
-		final: ConversionPlanDetail,
-		tx: ConversionTransaction,
-	) => Promise<void>;
+	expectPlan?: (final: ConversionPlanDetail, tx: DbTx) => Promise<void>;
 }): Promise<ConversionPlan> {
 	const { meetingId, clubId, templateId, actorMemberId } = input;
 
@@ -1562,6 +1565,8 @@ export async function applyTemplateConversion(input: {
 				throw new WouldRemoveError(lockedPlan);
 			}
 		}
+
+		if (input.beforeWrites) await input.beforeWrites(tx);
 
 		// The meeting's CURRENT private template, if it has one — captured before
 		// we repoint, because that is what we must retire afterwards.
