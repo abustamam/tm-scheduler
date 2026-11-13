@@ -8,18 +8,20 @@
  * carries `upcomingMeetingCount` beside the plan, not inside it, so a meeting
  * created in between does not make the plan stale.
  */
-import { and, count, eq, gte } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
 import {
 	ADOPTED_TEMPLATE_NAME,
 	adoptStandardAgenda,
+	upcomingScheduledMeetings,
 } from "#/server/club-agendas-logic";
 import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 import {
+	ALREADY_ADOPTED_REFUSAL,
 	inputOrValidation,
 	planFlow,
 	planHashField,
@@ -74,10 +76,7 @@ export const adoptStandardAgendaTool: McpToolDefinition = {
 					.where(eq(clubs.id, club.clubId))
 					.limit(1);
 				if (row?.defaultTemplateId) {
-					throw new McpError(
-						"VALIDATION",
-						"The club already has a default agenda; use set_default_agenda_template.",
-					);
+					throw new McpError("VALIDATION", ALREADY_ADOPTED_REFUSAL);
 				}
 				return { clubId: club.clubId, templateName: ADOPTED_TEMPLATE_NAME };
 			},
@@ -85,13 +84,7 @@ export const adoptStandardAgendaTool: McpToolDefinition = {
 				const [n] = await db
 					.select({ n: count() })
 					.from(meetings)
-					.where(
-						and(
-							eq(meetings.clubId, club.clubId),
-							eq(meetings.status, "scheduled"),
-							gte(meetings.scheduledAt, new Date()),
-						),
-					);
+					.where(upcomingScheduledMeetings(club.clubId));
 				return { upcomingMeetingCount: n?.n ?? 0 };
 			},
 			apply: async () =>

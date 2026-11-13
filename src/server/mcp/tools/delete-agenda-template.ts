@@ -100,6 +100,7 @@ export const deleteAgendaTemplateTool: McpToolDefinition = {
 					clubId: club.clubId,
 					templateId: plan.templateId,
 					expectContentHash: plan.contentHash,
+					expectIsDefault: plan.isDefault,
 				}),
 		});
 	},

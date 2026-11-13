@@ -26,7 +26,7 @@ import {
 	TemplateTooLargeError,
 } from "#/server/meeting-templates-logic";
 import { isDeadlock } from "#/server/pg-errors";
-import { McpError } from "../errors";
+import { INTERNAL_MESSAGE, McpError } from "../errors";
 import { REPLACE_TARGET_NOT_LISTED_MESSAGE } from "./list-agenda-templates";
 
 export const TEMPLATE_MANAGE_STALE_MESSAGE =
@@ -113,13 +113,41 @@ export function disabledTemplateError(): McpError {
 	);
 }
 
-/** Map what the logic functions throw. `partiallyApplied` rides on any mapped error. */
+/** The refusal for disabling the club's default; said by the preview and by the logic's own check. */
+export const DISABLE_DEFAULT_REFUSAL =
+	"enabled: this template is the club's default, so it cannot be disabled. Clear the default first with set_default_agenda_template (templateId null).";
+
+/** The refusal for adopting when the club has a default; likewise said twice. */
+export const ALREADY_ADOPTED_REFUSAL =
+	"The club already has a default agenda; use set_default_agenda_template.";
+
+/**
+ * Map what the logic functions throw. `partiallyApplied` rides on any mapped
+ * error, and on an UNMAPPED one too: an earlier write already committed, so a
+ * bare `INTERNAL` saying nothing changed would be false.
+ */
 export function mapLogicError(
+	err: unknown,
+	partiallyApplied?: string[],
+): unknown {
+	const mapped = mapKnownLogicError(err, partiallyApplied);
+	if (!partiallyApplied || mapped instanceof McpError) return mapped;
+	if (mapped instanceof TemplateChangedError) return mapped;
+	console.error("[mcp:agenda-template] unhandled error:", err);
+	return new McpError("INTERNAL", INTERNAL_MESSAGE, { partiallyApplied });
+}
+
+function mapKnownLogicError(
 	err: unknown,
 	partiallyApplied?: string[],
 ): unknown {
 	const detail = partiallyApplied ? { partiallyApplied } : undefined;
 	if (err instanceof McpError) return err;
+	if (err instanceof TemplateChangedError) {
+		// `planFlow` turns this into PLAN_STALE; it carries what already landed.
+		if (partiallyApplied) err.partiallyApplied = partiallyApplied;
+		return err;
+	}
 	if (err instanceof TemplateTooLargeError) {
 		return new McpError("VALIDATION", err.message, detail);
 	}
@@ -138,21 +166,13 @@ export function mapLogicError(
 		return new McpError("NOT_FOUND", REPLACE_TARGET_NOT_LISTED_MESSAGE, detail);
 	}
 	if (err.message === DISABLE_DEFAULT_MESSAGE) {
-		return new McpError(
-			"VALIDATION",
-			"enabled: this template is the club's default, so it cannot be disabled. Clear the default first with set_default_agenda_template (templateId null).",
-			detail,
-		);
+		return new McpError("VALIDATION", DISABLE_DEFAULT_REFUSAL, detail);
 	}
 	if (err.message === CLUB_TEMPLATE_DISABLED_MESSAGE) {
 		return disabledTemplateError();
 	}
 	if (err.message === ALREADY_ADOPTED_MESSAGE) {
-		return new McpError(
-			"VALIDATION",
-			"The club already has a default agenda; use set_default_agenda_template.",
-			detail,
-		);
+		return new McpError("VALIDATION", ALREADY_ADOPTED_REFUSAL, detail);
 	}
 	return err;
 }
@@ -183,10 +203,11 @@ export async function planFlow<P extends { noop?: boolean }, R>(o: {
 			userId: o.userId,
 			plan,
 		});
-	const stale = (plan: P) =>
+	const stale = (plan: P, partiallyApplied?: string[]) =>
 		new McpError("PLAN_STALE", TEMPLATE_MANAGE_STALE_MESSAGE, {
 			plan,
 			planHash: hashOf(plan),
+			...(partiallyApplied ? { partiallyApplied } : {}),
 		});
 
 	try {
@@ -209,7 +230,9 @@ export async function planFlow<P extends { noop?: boolean }, R>(o: {
 			const result = await o.apply(plan);
 			return { applied: true, clubId: o.clubId, plan, result };
 		} catch (err) {
-			if (err instanceof TemplateChangedError) throw stale(await o.build());
+			if (err instanceof TemplateChangedError) {
+				throw stale(await o.build(), err.partiallyApplied);
+			}
 			throw err;
 		}
 	} catch (err) {

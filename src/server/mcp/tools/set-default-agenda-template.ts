@@ -61,7 +61,7 @@ type SetPlan = {
 	keptEdited: PlanMeeting[];
 	keptSignups: PlanMeeting[];
 	keptRoles: PlanMeeting[];
-	noop?: undefined;
+	noop?: true;
 };
 
 type ClearPlan = {
@@ -170,6 +170,10 @@ export const setDefaultAgendaTemplateTool: McpToolDefinition = {
 					scheduledAt: Date;
 					roles: string[];
 				}): PlanMeeting => ({ ...entry(m), roles: [...m.roles].sort() });
+				// Already the default and nothing would convert: the kept lists
+				// are reports, not writes, so there is nothing to apply.
+				const noop =
+					defaultTemplateId === own.id && preview.applied.length === 0;
 				return {
 					clubId: club.clubId,
 					templateId: own.id,
@@ -180,6 +184,7 @@ export const setDefaultAgendaTemplateTool: McpToolDefinition = {
 					keptEdited: preview.keptEdited.map(entry),
 					keptSignups: preview.keptSignups.map(withRoles),
 					keptRoles: preview.keptRoles.map(withRoles),
+					...(noop ? { noop: true as const } : {}),
 				};
 			},
 			apply: async () =>

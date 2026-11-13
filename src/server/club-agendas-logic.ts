@@ -81,8 +81,14 @@ export const ALREADY_ADOPTED_MESSAGE =
 export const ADOPTED_TEMPLATE_NAME = "Our standard agenda";
 const ADOPTED_TEMPLATE_KEY = "standard";
 
-/** `deleteClubTemplate`'s `expectContentHash` no longer matches the stored content. */
+/**
+ * A check under the club lock found the template other than the caller's plan
+ * said: `expectContentHash`, `expectIsDefault` or `expectStored` no longer
+ * matches. Nothing was written by the call that threw it.
+ */
 export class TemplateChangedError extends Error {
+	/** Set by a caller whose EARLIER write already committed. */
+	partiallyApplied?: string[];
 	constructor() {
 		super("That template changed since it was read.");
 		this.name = "TemplateChangedError";
@@ -237,6 +243,25 @@ export async function assertGeChangeAllowed(
 // Template management
 // ---------------------------------------------------------------------------
 
+/** Under the club lock: the stored content still digests to `expected`, if given. */
+async function assertContentHash(
+	tx: Tx,
+	templateId: string,
+	expected: string | undefined,
+): Promise<void> {
+	if (expected === undefined) return;
+	const content = await templateContentForHash(tx, templateId);
+	if (!content || digest(content) !== expected)
+		throw new TemplateChangedError();
+}
+
+/** The columns `renameClubTemplate`'s `expectStored` compares. */
+export type StoredTemplateFields = {
+	name: string;
+	description: string | null;
+	enabled: boolean;
+};
+
 /** Rename a club template. Name 1–80 characters after trimming; the `key` is
  *  untouched, so a copy made from the old name still traces back to it. */
 export async function renameClubTemplate(input: {
@@ -244,11 +269,39 @@ export async function renameClubTemplate(input: {
 	templateId: string;
 	name: string;
 	description: string | null;
+	/**
+	 * Optional. The name, description and enabled the caller showed a person
+	 * before asking for the write, compared under the club lock after the
+	 * ownership check: a mismatch writes nothing (`TemplateChangedError`), so a
+	 * name-only caller cannot write back a description someone else just
+	 * changed. No app caller passes it.
+	 */
+	expectStored?: StoredTemplateFields;
 }): Promise<void> {
 	const parsed = parseClubTemplateFields(input.name, input.description);
 	if ("error" in parsed) throw new Error(parsed.error);
 	await database.transaction(async (tx) => {
 		await lockClubRow(tx, input.clubId);
+		if (input.expectStored) {
+			const [stored] = await tx
+				.select({
+					name: meetingTemplates.name,
+					description: meetingTemplates.description,
+					enabled: meetingTemplates.enabled,
+				})
+				.from(meetingTemplates)
+				.where(ownedBy(input.clubId, input.templateId))
+				.limit(1);
+			if (!stored) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+			const want = input.expectStored;
+			if (
+				stored.name !== want.name ||
+				stored.description !== want.description ||
+				stored.enabled !== want.enabled
+			) {
+				throw new TemplateChangedError();
+			}
+		}
 		const [updated] = await tx
 			.update(meetingTemplates)
 			.set({ name: parsed.name, description: parsed.description })
@@ -271,6 +324,12 @@ export function duplicateName(name: string): string {
 export async function duplicateClubTemplate(input: {
 	clubId: string;
 	templateId: string;
+	/**
+	 * Optional. The `digest` of the template's `templateContentForHash` the
+	 * caller showed a person, compared under the club lock: a mismatch copies
+	 * nothing (`TemplateChangedError`). No app caller passes it.
+	 */
+	expectContentHash?: string;
 }): Promise<{ templateId: string }> {
 	return database.transaction(async (tx) => {
 		await lockClubRow(tx, input.clubId);
@@ -286,6 +345,7 @@ export async function duplicateClubTemplate(input: {
 			.for("share")
 			.limit(1);
 		if (!source) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+		await assertContentHash(tx, input.templateId, input.expectContentHash);
 		const name = duplicateName(source.name);
 		const key = await nextClubTemplateKey(tx, input.clubId, name);
 		const [created] = await tx
@@ -362,6 +422,12 @@ export async function deleteClubTemplate(input: {
 	 * (`TemplateChangedError`). No app caller passes it.
 	 */
 	expectContentHash?: string;
+	/**
+	 * Optional. Whether the caller's plan said this is the club's default,
+	 * compared under the club lock beside the content hash: a template made the
+	 * default after the plan is not deleted (`TemplateChangedError`).
+	 */
+	expectIsDefault?: boolean;
 }): Promise<{ wasDefault: boolean }> {
 	return database.transaction(async (tx) => {
 		const club = await lockClubRow(tx, input.clubId);
@@ -371,11 +437,12 @@ export async function deleteClubTemplate(input: {
 			.where(ownedBy(input.clubId, input.templateId))
 			.limit(1);
 		if (!owned) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
-		if (input.expectContentHash !== undefined) {
-			const content = await templateContentForHash(tx, owned.id);
-			if (!content || digest(content) !== input.expectContentHash) {
-				throw new TemplateChangedError();
-			}
+		await assertContentHash(tx, owned.id, input.expectContentHash);
+		if (
+			input.expectIsDefault !== undefined &&
+			(club.defaultTemplateId === owned.id) !== input.expectIsDefault
+		) {
+			throw new TemplateChangedError();
 		}
 		await forkLegacyPointers(tx, owned.id);
 		const [deleted] = await tx
@@ -576,6 +643,29 @@ type Verdict =
 	| { kind: "keptSignups"; roles: string[] }
 	| { kind: "keptRoles"; roles: string[] };
 
+/** The WHERE for a club's upcoming scheduled meetings: what the default applies to. */
+export function upcomingScheduledMeetings(clubId: string) {
+	return and(
+		eq(meetings.clubId, clubId),
+		eq(meetings.status, "scheduled"),
+		gte(meetings.scheduledAt, new Date()),
+	);
+}
+
+/** Put one meeting's verdict into the matching list of `result`. */
+function recordVerdict(
+	result: SetDefaultResult,
+	ref: MeetingRef,
+	verdict: Verdict,
+): void {
+	if (verdict.kind === "convert") result.applied.push(ref);
+	else if (verdict.kind === "keptEdited") {
+		result.keptEdited.push({ ...ref, onDefaultCopy: verdict.onDefaultCopy });
+	} else if (verdict.kind === "keptSignups") {
+		result.keptSignups.push({ ...ref, roles: verdict.roles });
+	} else result.keptRoles.push({ ...ref, roles: verdict.roles });
+}
+
 /**
  * The club's upcoming scheduled meetings, soonest first (`scheduledAt`, then
  * `id`, so two meetings at the same instant have ONE order), and the classifier
@@ -596,13 +686,7 @@ async function loadUpcoming(clubId: string, templateId: string) {
 				templateId: meetings.templateId,
 			})
 			.from(meetings)
-			.where(
-				and(
-					eq(meetings.clubId, clubId),
-					eq(meetings.status, "scheduled"),
-					gte(meetings.scheduledAt, new Date()),
-				),
-			)
+			.where(upcomingScheduledMeetings(clubId))
 			.orderBy(asc(meetings.scheduledAt), asc(meetings.id)),
 	]);
 	if (!standard) return null;
@@ -680,13 +764,7 @@ export async function previewDefaultForUpcoming(
 	if (!upcoming) return result;
 	for (const meeting of upcoming.candidates) {
 		const ref = upcoming.refOf(meeting);
-		const verdict = await upcoming.classify(meeting);
-		if (verdict.kind === "convert") result.applied.push(ref);
-		else if (verdict.kind === "keptEdited") {
-			result.keptEdited.push({ ...ref, onDefaultCopy: verdict.onDefaultCopy });
-		} else if (verdict.kind === "keptSignups") {
-			result.keptSignups.push({ ...ref, roles: verdict.roles });
-		} else result.keptRoles.push({ ...ref, roles: verdict.roles });
+		recordVerdict(result, ref, await upcoming.classify(meeting));
 	}
 	return result;
 }
@@ -722,19 +800,8 @@ async function applyDefaultToUpcoming(
 		const ref = refOf(meeting);
 		try {
 			const verdict = await upcoming.classify(meeting);
-			if (verdict.kind === "keptEdited") {
-				result.keptEdited.push({
-					...ref,
-					onDefaultCopy: verdict.onDefaultCopy,
-				});
-				continue;
-			}
-			if (verdict.kind === "keptSignups") {
-				result.keptSignups.push({ ...ref, roles: verdict.roles });
-				continue;
-			}
-			if (verdict.kind === "keptRoles") {
-				result.keptRoles.push({ ...ref, roles: verdict.roles });
+			if (verdict.kind !== "convert") {
+				recordVerdict(result, ref, verdict);
 				continue;
 			}
 			await applyTemplateConversion({

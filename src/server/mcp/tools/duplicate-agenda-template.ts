@@ -90,6 +90,7 @@ export const duplicateAgendaTemplateTool: McpToolDefinition = {
 				duplicateClubTemplate({
 					clubId: club.clubId,
 					templateId: plan.templateId,
+					expectContentHash: plan.contentHash,
 				}),
 		});
 	},

@@ -36,6 +36,8 @@ const hooks = vi.hoisted(() => ({
 	afterEnable: null as null | (() => Promise<void>),
 	beforeDuplicate: null as null | (() => Promise<void>),
 	beforeDelete: null as null | (() => Promise<void>),
+	beforeRename: null as null | (() => Promise<void>),
+	beforeAdopt: null as null | (() => Promise<void>),
 }));
 vi.mock("#/server/club-agendas-logic", async (importOriginal) => {
 	const real =
@@ -48,6 +50,18 @@ vi.mock("#/server/club-agendas-logic", async (importOriginal) => {
 			const out = await real.setClubTemplateEnabled(...a);
 			await hooks.afterEnable?.();
 			return out;
+		},
+		renameClubTemplate: async (
+			...a: Parameters<typeof real.renameClubTemplate>
+		) => {
+			await hooks.beforeRename?.();
+			return real.renameClubTemplate(...a);
+		},
+		adoptStandardAgenda: async (
+			...a: Parameters<typeof real.adoptStandardAgenda>
+		) => {
+			await hooks.beforeAdopt?.();
+			return real.adoptStandardAgenda(...a);
 		},
 		duplicateClubTemplate: async (
 			...a: Parameters<typeof real.duplicateClubTemplate>
@@ -175,7 +189,12 @@ describe.skipIf(!hasTestDb)("agenda template management tools (#1630)", () => {
 		adminToken = await mint(club.adminUserId);
 	});
 	afterEach(async () => {
-		hooks.afterEnable = hooks.beforeDuplicate = hooks.beforeDelete = null;
+		hooks.afterEnable =
+			hooks.beforeDuplicate =
+			hooks.beforeDelete =
+			hooks.beforeRename =
+			hooks.beforeAdopt =
+				null;
 		for (const id of globals.splice(0)) {
 			await testDb.delete(meetingTemplates).where(eq(meetingTemplates.id, id));
 		}
@@ -316,6 +335,105 @@ describe.skipIf(!hasTestDb)("agenda template management tools (#1630)", () => {
 		});
 	});
 
+	// protects=a description changed after the tool's re-plan and before the rename's lock makes a name-only edit PLAN_STALE, and the other officer's description survives;
+	// fails_when=the rename writes back the description read at re-plan, or the answer is not PLAN_STALE with a fresh plan;
+	// no_claim=a change before the re-plan (the ordinary stale hash).
+	it("edit: a description changed between the re-plan and the rename lock is PLAN_STALE and is not overwritten", async () => {
+		const id = await leanTemplate(club.clubId, { name: "Old name" });
+		await testDb
+			.update(meetingTemplates)
+			.set({ description: "Old" })
+			.where(eq(meetingTemplates.id, id));
+		const input = { clubId: club.clubId, templateId: id, name: "New name" };
+		const preview = await run("edit_agenda_template", input);
+		hooks.beforeRename = async () => {
+			hooks.beforeRename = null;
+			await testDb
+				.update(meetingTemplates)
+				.set({ description: "Written by someone else" })
+				.where(eq(meetingTemplates.id, id));
+		};
+		const err = await run("edit_agenda_template", {
+			...input,
+			planHash: preview.planHash,
+		}).catch((e) => e);
+		expect(err).toMatchObject({ code: "PLAN_STALE" });
+		expect(err.detail.planHash).not.toBe(preview.planHash);
+		expect(err.detail.plan.from.description).toBe("Written by someone else");
+		expect(await templateRow(id)).toMatchObject({
+			name: "Old name",
+			description: "Written by someone else",
+		});
+	});
+
+	// protects=a stale rename after a committed enable still names the enable in PLAN_STALE's detail;
+	// fails_when=detail.partiallyApplied is missing, or the rename landed;
+	// no_claim=the fresh plan's contents (the test above).
+	it("edit: a stale rename after the enable keeps partiallyApplied", async () => {
+		const id = await leanTemplate(club.clubId, {
+			name: "Old name",
+			enabled: false,
+		});
+		const input = {
+			clubId: club.clubId,
+			templateId: id,
+			name: "New name",
+			enabled: true,
+		};
+		const preview = await run("edit_agenda_template", input);
+		hooks.beforeRename = async () => {
+			hooks.beforeRename = null;
+			await testDb
+				.update(meetingTemplates)
+				.set({ description: "Concurrent" })
+				.where(eq(meetingTemplates.id, id));
+		};
+		await expect(
+			run("edit_agenda_template", { ...input, planHash: preview.planHash }),
+		).rejects.toMatchObject({
+			code: "PLAN_STALE",
+			detail: { partiallyApplied: ["enabled"] },
+		});
+		expect(await templateRow(id)).toMatchObject({
+			name: "Old name",
+			enabled: true,
+			description: "Concurrent",
+		});
+	});
+
+	// protects=an unexpected error from the rename after the enable committed is INTERNAL that still names the enable;
+	// fails_when=detail.partiallyApplied is lost, or the message echoes the cause;
+	// no_claim=an unexpected error before any write (a bare INTERNAL, as everywhere).
+	it("edit: an unexpected error after the enable keeps partiallyApplied", async () => {
+		const id = await leanTemplate(club.clubId, {
+			name: "Stays",
+			enabled: false,
+		});
+		const input = {
+			clubId: club.clubId,
+			templateId: id,
+			name: "Never lands",
+			enabled: true,
+		};
+		const preview = await run("edit_agenda_template", input);
+		hooks.beforeRename = async () => {
+			throw new Error("connection reset by peer");
+		};
+		const err = await run("edit_agenda_template", {
+			...input,
+			planHash: preview.planHash,
+		}).catch((e) => e);
+		expect(err).toMatchObject({
+			code: "INTERNAL",
+			detail: { partiallyApplied: ["enabled"] },
+		});
+		expect(err.message).not.toContain("connection reset");
+		expect(await templateRow(id)).toMatchObject({
+			name: "Stays",
+			enabled: true,
+		});
+	});
+
 	// protects=an edit that changes nothing is a noop and writes nothing on apply;
 	// fails_when=the apply reports applied:true, or rewrites the row;
 	// no_claim=that the preview of a changing edit differs (the first edit test).
@@ -382,10 +500,12 @@ describe.skipIf(!hasTestDb)("agenda template management tools (#1630)", () => {
 	it("delete: the preview lists the stored rows and writes nothing", async () => {
 		const id = await leanTemplate(club.clubId, { name: "Doomed" });
 		const stored = await content(id);
+		const snap = await clubAgendaSnapshot(club.clubId);
 		const preview = await run("delete_agenda_template", {
 			clubId: club.clubId,
 			templateId: id,
 		});
+		expect(await clubAgendaSnapshot(club.clubId)).toEqual(snap);
 		expect(preview.plan.rows).toEqual(
 			stored.beats.map((b) => ({
 				kind: b.kind,
@@ -476,6 +596,68 @@ describe.skipIf(!hasTestDb)("agenda template management tools (#1630)", () => {
 			(err.detail.plan.rows as { label: string }[]).map((r) => r.label),
 		).toContain("Our own opening");
 		expect(await templateRow(id)).toBeDefined();
+	});
+
+	// protects=a template made the default after the re-plan and before the delete's lock is PLAN_STALE and is not deleted;
+	// fails_when=the template is gone, or the club's default pointer is cleared;
+	// no_claim=a default set before the re-plan (a different plan hash).
+	it("delete: a default set between the re-plan and the lock is PLAN_STALE and deletes nothing", async () => {
+		const id = await leanTemplate(club.clubId, { name: "Target" });
+		const input = { clubId: club.clubId, templateId: id };
+		const preview = await run("delete_agenda_template", input);
+		expect(preview.plan.isDefault).toBe(false);
+		hooks.beforeDelete = async () => {
+			hooks.beforeDelete = null;
+			await setDefaultDirect(id);
+		};
+		const err = await run("delete_agenda_template", {
+			...input,
+			planHash: preview.planHash,
+		}).catch((e) => e);
+		expect(err).toMatchObject({ code: "PLAN_STALE" });
+		expect(err.detail.plan.isDefault).toBe(true);
+		expect(await templateRow(id)).toBeDefined();
+		expect(await defaultOf()).toBe(id);
+	});
+
+	// protects=a replace landing after the re-plan and before the duplicate's lock makes the duplicate PLAN_STALE and copies nothing;
+	// fails_when=a copy of the changed content exists;
+	// no_claim=a replace before the re-plan (the ordinary stale hash).
+	it("duplicate: a replace between the re-plan and the lock is PLAN_STALE and copies nothing", async () => {
+		const id = await leanTemplate(club.clubId, { name: "Source" });
+		const source = await newMeeting(club.clubId, 7);
+		await editFirstBeat(source);
+		const input = { clubId: club.clubId, templateId: id };
+		const idsBefore = (
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.clubId, club.clubId))
+		)
+			.map((r) => r.id)
+			.sort();
+		const preview = await run("duplicate_agenda_template", input);
+		hooks.beforeDuplicate = async () => {
+			hooks.beforeDuplicate = null;
+			await saveMeetingAgendaAsClubTemplate({
+				meetingId: source,
+				clubId: club.clubId,
+				actorMemberId: null,
+				mode: "replace",
+				templateId: id,
+			});
+		};
+		const err = await run("duplicate_agenda_template", {
+			...input,
+			planHash: preview.planHash,
+		}).catch((e) => e);
+		expect(err).toMatchObject({ code: "PLAN_STALE" });
+		expect(err.detail.planHash).not.toBe(preview.planHash);
+		const rows = await testDb
+			.select({ id: meetingTemplates.id })
+			.from(meetingTemplates)
+			.where(eq(meetingTemplates.clubId, club.clubId));
+		expect(rows.map((r) => r.id).sort()).toEqual(idsBefore);
 	});
 
 	// -------------------------------------------------------------- adopt
@@ -670,6 +852,30 @@ describe.skipIf(!hasTestDb)("agenda template management tools (#1630)", () => {
 			.from(meetingTemplates)
 			.where(eq(meetingTemplates.clubId, club.clubId));
 		expect(templates).toHaveLength(1);
+	});
+
+	// protects=a club archived between authorization and adopt's lock is ARCHIVED, and no template or default is written;
+	// fails_when=the plain Error becomes INTERNAL, or the adopt lands;
+	// no_claim=the archived check authorizeToken makes before any of this.
+	it("adopt_standard_agenda: an archive before the lock is ARCHIVED", async () => {
+		const input = { clubId: club.clubId };
+		const preview = await run("adopt_standard_agenda", input);
+		hooks.beforeAdopt = async () => {
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, club.clubId));
+		};
+		await expect(
+			run("adopt_standard_agenda", { ...input, planHash: preview.planHash }),
+		).rejects.toMatchObject({ code: "ARCHIVED" });
+		expect(await defaultOf()).toBeNull();
+		expect(
+			await testDb
+				.select({ id: meetingTemplates.id })
+				.from(meetingTemplates)
+				.where(eq(meetingTemplates.clubId, club.clubId)),
+		).toHaveLength(0);
 	});
 
 	// protects=input is validated before the hash is compared, so a bad field is VALIDATION and never reported as stale;

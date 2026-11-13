@@ -29,7 +29,23 @@ import { cleanup, hasTestDb, type SeededClub, testDb } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 
-const hooks = vi.hoisted(() => ({ failMeeting: null as string | null }));
+const hooks = vi.hoisted(() => ({
+	failMeeting: null as string | null,
+	beforeSetDefault: null as null | (() => Promise<void>),
+}));
+vi.mock("#/server/club-agendas-logic", async (importOriginal) => {
+	const real =
+		await importOriginal<typeof import("#/server/club-agendas-logic")>();
+	return {
+		...real,
+		setClubDefaultTemplate: async (
+			...a: Parameters<typeof real.setClubDefaultTemplate>
+		) => {
+			await hooks.beforeSetDefault?.();
+			return real.setClubDefaultTemplate(...a);
+		},
+	};
+});
 vi.mock("#/server/meeting-templates-logic", async (importOriginal) => {
 	const real =
 		await importOriginal<typeof import("#/server/meeting-templates-logic")>();
@@ -104,6 +120,7 @@ describe.skipIf(!hasTestDb)("set_default_agenda_template (#1630)", () => {
 	});
 	afterEach(async () => {
 		hooks.failMeeting = null;
+		hooks.beforeSetDefault = null;
 		await cleanup(club.clubId, [club.adminUserId, club.memberUserId]);
 	});
 
@@ -114,6 +131,16 @@ describe.skipIf(!hasTestDb)("set_default_agenda_template (#1630)", () => {
 		const m = await fourBucketMeetings(club);
 		const target = await leanTemplate(club.clubId);
 		const snap = await clubAgendaSnapshot(club.clubId);
+		const templateIdOf = async (id: string) =>
+			(
+				await testDb
+					.select({ t: meetings.templateId })
+					.from(meetings)
+					.where(eq(meetings.id, id))
+			)[0]?.t ?? null;
+		const pointersBefore = await Promise.all(
+			[m.standard, m.edited, m.signups, m.roles].map(templateIdOf),
+		);
 		const input = { clubId: club.clubId, templateId: target };
 		const preview = await run(input);
 		expect(ids(preview.plan.wouldApply)).toEqual([m.standard]);
@@ -137,6 +164,14 @@ describe.skipIf(!hasTestDb)("set_default_agenda_template (#1630)", () => {
 		expect(result.failed).toEqual([]);
 		expect(result.partial).toBe(false);
 		expect(await defaultOf()).toBe(target);
+		// The result lists are the tool's word; the meetings' own pointers are
+		// the record. Only the converted meeting's pointer moved, and it moved
+		// off the standard agenda (a private copy of the target, not the target).
+		const pointersAfter = await Promise.all(
+			[m.standard, m.edited, m.signups, m.roles].map(templateIdOf),
+		);
+		expect(pointersAfter[0]).not.toEqual(pointersBefore[0]);
+		expect(pointersAfter.slice(1)).toEqual(pointersBefore.slice(1));
 	});
 
 	// protects=no role slot that existed before is gone and no assignment is cleared by setting a default;
@@ -154,6 +189,19 @@ describe.skipIf(!hasTestDb)("set_default_agenda_template (#1630)", () => {
 			.from(roleSlots)
 			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 			.where(eq(meetings.clubId, club.clubId));
+		// The check below is only as strong as its "before": it must hold the
+		// claimed Joke Master slot (kept for sign-ups) and the unclaimed Quiz
+		// Master one (kept for a role the target lacks).
+		expect(
+			slotsBefore.some(
+				(s) => s.member === club.memberId && s.status === "claimed",
+			),
+			"the member's claimed slot exists before",
+		).toBe(true);
+		expect(
+			slotsBefore.some((s) => s.member === null),
+			"an unclaimed slot exists before",
+		).toBe(true);
 		const input = { clubId: club.clubId, templateId: target };
 		const preview = await run(input);
 		await run({ ...input, planHash: preview.planHash });
@@ -258,6 +306,62 @@ describe.skipIf(!hasTestDb)("set_default_agenda_template (#1630)", () => {
 		expect(again.plan.noop).toBe(true);
 		const noop = await run({ ...input, planHash: again.planHash });
 		expect(noop).toMatchObject({ applied: false, noop: true });
+	});
+
+	// protects=setting the template that is already the default, with no meeting to convert, is a noop on apply and writes nothing;
+	// fails_when=the apply reports applied:true, or any row changes;
+	// no_claim=an already-default template WITH a meeting that would convert (that is a real apply).
+	it("setting the template that is already the default, with nothing to convert, is a noop", async () => {
+		await newMeeting(club.clubId, 7);
+		const target = await leanTemplate(club.clubId);
+		const input = { clubId: club.clubId, templateId: target };
+		const first = await run(input);
+		await run({ ...input, planHash: first.planHash });
+		expect(await defaultOf()).toBe(target);
+		const snap = await clubAgendaSnapshot(club.clubId);
+		const again = await run(input);
+		expect(again.plan.noop).toBe(true);
+		expect(again.plan.wouldApply).toEqual([]);
+		const noop = await run({ ...input, planHash: again.planHash });
+		expect(noop).toMatchObject({ applied: false, noop: true });
+		expect(await clubAgendaSnapshot(club.clubId)).toEqual(snap);
+	});
+
+	// protects=an already-default template with an upcoming meeting still on the standard agenda is NOT a noop;
+	// fails_when=the plan is marked noop and the meeting is never converted;
+	// no_claim=the conversion's content.
+	it("an already-default template with a meeting to convert is not a noop", async () => {
+		const m = await newMeeting(club.clubId, 7);
+		const target = await leanTemplate(club.clubId);
+		await testDb
+			.update(clubs)
+			.set({ defaultTemplateId: target })
+			.where(eq(clubs.id, club.clubId));
+		const input = { clubId: club.clubId, templateId: target };
+		const preview = await run(input);
+		expect(preview.plan.noop).toBeUndefined();
+		expect(ids(preview.plan.wouldApply)).toEqual([m]);
+		const applied = await run({ ...input, planHash: preview.planHash });
+		expect(applied.applied).toBe(true);
+	});
+
+	// protects=a club archived between authorization and the logic's lock is ARCHIVED and the default is not set;
+	// fails_when=the plain Error becomes INTERNAL, or the default lands;
+	// no_claim=the archived check authorizeToken makes before any of this.
+	it("an archive before the lock is ARCHIVED and sets nothing", async () => {
+		const target = await leanTemplate(club.clubId);
+		const input = { clubId: club.clubId, templateId: target };
+		const preview = await run(input);
+		hooks.beforeSetDefault = async () => {
+			await testDb
+				.update(clubs)
+				.set({ archivedAt: new Date() })
+				.where(eq(clubs.id, club.clubId));
+		};
+		await expect(
+			run({ ...input, planHash: preview.planHash }),
+		).rejects.toMatchObject({ code: "ARCHIVED" });
+		expect(await defaultOf()).toBeNull();
 	});
 
 	// protects=a clear is not made stale by a template rename;

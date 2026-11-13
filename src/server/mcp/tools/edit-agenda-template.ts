@@ -17,6 +17,7 @@ import { authorizeToken } from "../authz-logic";
 import { McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
 import {
+	DISABLE_DEFAULT_REFUSAL,
 	inputOrValidation,
 	loadOwnTemplate,
 	mapLogicError,
@@ -117,10 +118,7 @@ export const editAgendaTemplateTool: McpToolDefinition = {
 			build: async () => {
 				const current = await loadOwnTemplate(club.clubId, args.templateId);
 				if (args.enabled === false && current.isDefault) {
-					throw new McpError(
-						"VALIDATION",
-						"enabled: this template is the club's default, so it cannot be disabled. Clear the default first with set_default_agenda_template (templateId null).",
-					);
+					throw new McpError("VALIDATION", DISABLE_DEFAULT_REFUSAL);
 				}
 				const parsed = parseClubTemplateFields(
 					args.name ?? current.name,
@@ -171,6 +169,12 @@ export const editAgendaTemplateTool: McpToolDefinition = {
 							templateId: plan.templateId,
 							name: plan.to.name,
 							description: plan.to.description,
+							// What the plan read; the enable above (if any) has landed.
+							expectStored: {
+								name: plan.from.name,
+								description: plan.from.description,
+								enabled: plan.to.enabled,
+							},
 						});
 					}
 				} catch (err) {
