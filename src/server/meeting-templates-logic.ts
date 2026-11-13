@@ -40,6 +40,7 @@ import {
 	parseClubTemplateFields,
 	retiredTemplateKey,
 } from "#/lib/club-template-key";
+import { digest } from "#/lib/mcp-plan";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
 import {
 	MAX_TEMPLATE_BEATS,
@@ -1843,13 +1844,31 @@ export async function forkLegacyPointers(
 export const SAVE_CANCELLED_MESSAGE =
 	"A cancelled meeting's agenda cannot be saved as a template.";
 
+/** What a replace is refused with when the target's content is no longer the
+ *  content its caller's `expectedTargetContentHash` was taken from. Exported so
+ *  a caller compares against THIS (`mcp/tools/save-agenda-as-template.ts`). */
+export const CLUB_TEMPLATE_CHANGED_MESSAGE =
+	"That club template changed since it was read.";
+
 export type SaveClubTemplateInput = {
 	meetingId: string;
 	clubId: string;
 	actorMemberId: string | null;
 } & (
 	| { mode: "new"; name: string; description: string | null }
-	| { mode: "replace"; templateId: string }
+	| {
+			mode: "replace";
+			templateId: string;
+			/**
+			 * Optional. The `digest` (`#/lib/mcp-plan`) of the target's
+			 * `templateContentForHash` the caller showed a person before asking
+			 * for the overwrite. Compared INSIDE the transaction, after the
+			 * target's FOR UPDATE, so a change between the caller's read and this
+			 * lock refuses (`CLUB_TEMPLATE_CHANGED_MESSAGE`) before anything is
+			 * written. Omitted: no comparison (the app's dialog passes none).
+			 */
+			expectedTargetContentHash?: string;
+	  }
 );
 
 /**
@@ -1887,7 +1906,11 @@ export async function saveMeetingAgendaAsClubTemplate(
 		if ("error" in parsed) throw new Error(parsed.error);
 		plan = { mode: "new", fields: parsed };
 	} else {
-		plan = { mode: "replace", templateId: input.templateId };
+		plan = {
+			mode: "replace",
+			templateId: input.templateId,
+			expectedTargetContentHash: input.expectedTargetContentHash,
+		};
 	}
 
 	try {
@@ -1912,7 +1935,11 @@ export async function saveMeetingAgendaAsClubTemplate(
 
 type SavePlan =
 	| { mode: "new"; fields: ClubTemplateFields }
-	| { mode: "replace"; templateId: string };
+	| {
+			mode: "replace";
+			templateId: string;
+			expectedTargetContentHash: string | undefined;
+	  };
 
 async function saveInTransaction(
 	input: SaveClubTemplateInput,
@@ -2046,6 +2073,17 @@ async function saveInTransaction(
 				.from(meetingTemplates)
 				.where(ownedTarget)
 				.for("update");
+
+			// The caller's expected content, checked HERE: under the club write
+			// lock and the target's row lock, so nothing that writes a club
+			// template can change it between this read and the swap below.
+			if (plan.expectedTargetContentHash !== undefined) {
+				const content = await templateContentForHash(tx, templateId);
+				if (!content) throw new Error(CLUB_TEMPLATE_GONE_MESSAGE);
+				if (digest(content) !== plan.expectedTargetContentHash) {
+					throw new Error(CLUB_TEMPLATE_CHANGED_MESSAGE);
+				}
+			}
 
 			// A source that IS the target (old data: the meeting pointed straight
 			// at the club template) has nothing to swap in — deleting the target's

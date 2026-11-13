@@ -18,7 +18,7 @@
  *   TEST_DATABASE_URL=postgresql://dev:dev@localhost:5433/tm_test \
  *     bunx vitest run src/server/meeting-templates-logic.integration.test.ts
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	meetings,
@@ -27,6 +27,7 @@ import {
 	meetingTemplates,
 	roleDefinitions,
 } from "#/db/schema";
+import { digest } from "#/lib/mcp-plan";
 import {
 	MAX_TEMPLATE_BEATS,
 	MAX_TEMPLATE_ROLES,
@@ -34,9 +35,11 @@ import {
 import {
 	cleanup,
 	hasTestDb,
+	openBlockingTx,
 	type SeededClub,
 	seedClub,
 	testDb,
+	waitForLockWait,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -50,11 +53,13 @@ const mine = (names: string[]) => names.filter((n) => n.includes(RUN));
 const { listRoleDefinitions } = await import("./role-definitions-logic");
 
 const {
+	CLUB_TEMPLATE_CHANGED_MESSAGE,
 	copyTemplateForMeeting,
 	listAvailableTemplates,
 	loadTemplateContent,
 	materializeTemplateRoles,
 	resolveMeetingRoleDefs,
+	saveMeetingAgendaAsClubTemplate,
 	TemplateTooLargeError,
 	templateContentForHash,
 } = await import("./meeting-templates-logic");
@@ -877,3 +882,150 @@ describe.skipIf(!hasTestDb)("templateContentForHash (#1628)", () => {
 		);
 	});
 });
+
+describe.skipIf(!hasTestDb)(
+	"saveMeetingAgendaAsClubTemplate expectedTargetContentHash (#1628)",
+	() => {
+		let seed: SeededClub;
+		beforeEach(async () => {
+			seed = await seedClub();
+		});
+		afterEach(async () => {
+			await cleanup(seed.clubId, [seed.adminUserId, seed.memberUserId]);
+		});
+
+		const base = () => ({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			actorMemberId: null,
+		});
+
+		/** A club template saved from the meeting, and its content digest now. */
+		async function target() {
+			const { templateId } = await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "new",
+				name: "Target",
+				description: null,
+			});
+			const hash = async () => {
+				const c = await templateContentForHash(testDb, templateId);
+				return digest(c);
+			};
+			return { templateId, hash };
+		}
+		async function stored(templateId: string) {
+			const beats = await testDb
+				.select()
+				.from(meetingTemplateBeats)
+				.where(eq(meetingTemplateBeats.templateId, templateId))
+				.orderBy(
+					asc(meetingTemplateBeats.sortOrder),
+					asc(meetingTemplateBeats.id),
+				);
+			return beats.map(({ id: _i, ...rest }) => rest);
+		}
+		/** Change what the visible rows do not show, and the target's content. */
+		const flipHandoff = (templateId: string) =>
+			testDb
+				.update(meetingTemplateBeats)
+				.set({ handoff: true })
+				.where(eq(meetingTemplateBeats.templateId, templateId));
+		/** Make the target differ from the meeting's agenda so a swap is visible. */
+		const markTarget = (templateId: string) =>
+			testDb
+				.update(meetingTemplateBeats)
+				.set({ label: "Marked by someone else" })
+				.where(eq(meetingTemplateBeats.templateId, templateId));
+
+		// protects=a replace whose expected hash matches the target's content swaps it for the meeting's agenda;
+		// fails_when=a matching hash is refused, or the replace does not happen;
+		// no_claim=says nothing about a mismatch or about concurrency.
+		it("a matching hash replaces", async () => {
+			const t = await target();
+			await markTarget(t.templateId);
+			const expected = await t.hash();
+			await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+				expectedTargetContentHash: expected,
+			});
+			const rows = await stored(t.templateId);
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.some((r) => r.label === "Marked by someone else")).toBe(
+				false,
+			);
+		});
+
+		// protects=a mismatching hash (a change the visible rows do not show: handoff) refuses and leaves the target's rows as they were;
+		// fails_when=the comparison is missing or inverted, so the overwrite happens anyway;
+		// no_claim=the refusal's mapping to PLAN_STALE is the tool's test, not this one.
+		it("a stale hash refuses and the target is untouched", async () => {
+			const t = await target();
+			const stale = await t.hash();
+			await flipHandoff(t.templateId);
+			const before = await stored(t.templateId);
+			expect(before.every((r) => r.handoff === true)).toBe(true);
+			await expect(
+				saveMeetingAgendaAsClubTemplate({
+					...base(),
+					mode: "replace",
+					templateId: t.templateId,
+					expectedTargetContentHash: stale,
+				}),
+			).rejects.toThrow(CLUB_TEMPLATE_CHANGED_MESSAGE);
+			expect(await stored(t.templateId)).toEqual(before);
+		});
+
+		// protects=with the parameter omitted a replace overwrites whatever is there, as before;
+		// fails_when=the omitted parameter is treated as a hash that must match;
+		// no_claim=none.
+		it("omitted: replaces as before", async () => {
+			const t = await target();
+			await markTarget(t.templateId);
+			await saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+			});
+			expect(
+				(await stored(t.templateId)).some(
+					(r) => r.label === "Marked by someone else",
+				),
+			).toBe(false);
+		});
+
+		// protects=a writer that commits WHILE the replace waits for the club lock is seen: the replace compares after it acquires the lock, refuses, and the writer's rows survive;
+		// fails_when=the comparison runs before the lock is held (or not at all), so the writer's committed change is overwritten;
+		// no_claim=only the club write lock is contended here; the target row's own FOR UPDATE is not separately raced.
+		it("a writer committing while the replace waits on the lock is seen", async () => {
+			const t = await target();
+			const expected = await t.hash();
+			const writer = await openBlockingTx(async (tx) => {
+				const { lockClubForWrite } = await import("./club-write-lock");
+				await lockClubForWrite(tx, seed.clubId);
+				await tx
+					.update(meetingTemplateBeats)
+					.set({ handoff: true })
+					.where(eq(meetingTemplateBeats.templateId, t.templateId));
+			});
+			const replacing = saveMeetingAgendaAsClubTemplate({
+				...base(),
+				mode: "replace",
+				templateId: t.templateId,
+				expectedTargetContentHash: expected,
+			});
+			replacing.catch(() => {});
+			try {
+				await waitForLockWait("pg_advisory_xact_lock", writer.pid);
+			} finally {
+				await writer.commit();
+			}
+			await expect(replacing).rejects.toThrow(CLUB_TEMPLATE_CHANGED_MESSAGE);
+			expect(
+				(await stored(t.templateId)).every((r) => r.handoff === true),
+			).toBe(true);
+		});
+	},
+);

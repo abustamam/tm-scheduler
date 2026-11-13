@@ -533,6 +533,43 @@ describe.skipIf(!hasTestDb)("save_agenda_as_template (#1628)", () => {
 		).toBe(true);
 	});
 
+	// protects=a target changed AFTER the tool's re-plan and before the seam is PLAN_STALE with a fresh plan showing the new content, and the concurrent writer's rows are what is stored;
+	// fails_when=the tool does not pass the target's hash to the seam (the overwrite happens) or the refusal is unmapped or carries no fresh plan;
+	// no_claim=the interleaving is made by the beforeSeam hook, not a second connection; the seam's own locking is covered in meeting-templates-logic.integration.test.ts.
+	it("a target changed after the tool's re-plan is PLAN_STALE with a fresh plan", async () => {
+		const p1 = (await save(newTarget)) as Preview;
+		const first = (await save(newTarget, { planHash: p1.planHash })) as Applied;
+		const target = { mode: "replace", templateId: first.templateId };
+		const p2 = (await save(target)) as Preview;
+		hook.beforeSeam = async () => {
+			await testDb
+				.update(meetingTemplateBeats)
+				.set({ label: "Concurrent officer's row" })
+				.where(eq(meetingTemplateBeats.templateId, first.templateId));
+		};
+		const err = await save(target, { planHash: p2.planHash }).then(
+			() => null,
+			(e: unknown) => e as { code: string; detail: Preview },
+		);
+		expect(err?.code).toBe("PLAN_STALE");
+		const fresh = err?.detail;
+		expect(fresh?.plan.target.currentRows?.length).toBeGreaterThan(0);
+		expect(
+			fresh?.plan.target.currentRows?.every(
+				(r) => r.label === "Concurrent officer's row",
+			),
+		).toBe(true);
+		expect(fresh?.planHash).not.toBe(p2.planHash);
+		const stored = await templateRows(first.templateId);
+		expect(stored.every((r) => r.label === "Concurrent officer's row")).toBe(
+			true,
+		);
+		// The fresh plan is applicable as it stands.
+		await expect(
+			save(target, { planHash: fresh?.planHash }),
+		).resolves.toMatchObject({ applied: true });
+	});
+
 	// protects=a cancel landing AFTER the tool's own check, caught by the seam's own sentence, is LOCKED meeting_cancelled and writes no template;
 	// fails_when=SAVE_CANCELLED_MESSAGE from the seam is unmapped (INTERNAL);
 	// no_claim=the tool's own pre-check, covered by the cancelled test above.

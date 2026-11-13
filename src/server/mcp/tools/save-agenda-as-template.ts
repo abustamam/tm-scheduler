@@ -14,6 +14,8 @@
  * reads, makes the plan stale. The apply re-plans, compares, then calls the
  * seam. The re-plan runs outside the seam's transaction: an agenda edit landing
  * between them is saved as it then stands, the same window the app's dialog has.
+ * A replace's TARGET is not in that window: the seam compares the target's
+ * content hash under its own locks and refuses a changed target (PLAN_STALE).
  */
 
 import { and, eq, isNull } from "drizzle-orm";
@@ -31,6 +33,7 @@ import {
 	readAgendaSnapshot,
 } from "#/server/meeting-agenda-edit-logic";
 import {
+	CLUB_TEMPLATE_CHANGED_MESSAGE,
 	CLUB_TEMPLATE_GONE_MESSAGE,
 	SAVE_CANCELLED_MESSAGE,
 	saveMeetingAgendaAsClubTemplate,
@@ -88,6 +91,11 @@ type SavePlan = {
 				currentContentHash: string;
 		  };
 };
+
+type TargetReplace = Extract<
+	SavePlan["target"],
+	{ currentContentHash: string }
+>;
 
 type Target = z.infer<typeof inputSchema.target>;
 
@@ -312,7 +320,14 @@ export const saveAgendaAsTemplateTool: McpToolDefinition = {
 							name: args.target.name,
 							description: args.target.description ?? null,
 						}
-					: { mode: "replace" as const, templateId: args.target.templateId }),
+					: {
+							mode: "replace" as const,
+							templateId: args.target.templateId,
+							// Checked by the seam under its own locks: the tool's
+							// comparison above is outside them.
+							expectedTargetContentHash: (plan.target as TargetReplace)
+								.currentContentHash,
+						}),
 			});
 			return {
 				applied: true,
@@ -322,6 +337,21 @@ export const saveAgendaAsTemplateTool: McpToolDefinition = {
 				plan,
 			};
 		} catch (err) {
+			if (
+				err instanceof Error &&
+				err.message === CLUB_TEMPLATE_CHANGED_MESSAGE
+			) {
+				// The target changed after the re-plan: show what it is now.
+				const latest = await buildPlan(
+					args.meetingId,
+					club.clubId,
+					args.target,
+				);
+				throw new McpError("PLAN_STALE", TEMPLATE_PLAN_STALE_MESSAGE, {
+					plan: latest,
+					planHash: hashOf(latest),
+				});
+			}
 			throw seamError(err);
 		}
 	},
