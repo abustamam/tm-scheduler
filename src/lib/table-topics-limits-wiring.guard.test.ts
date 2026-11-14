@@ -509,6 +509,8 @@ describe("table topics limits wiring (#443)", () => {
 		expect(outsideDb.sort()).toEqual([
 			// The layout list behind the `agenda_print_layout` enum (#1069).
 			"../lib/agenda-layouts",
+			// The category list behind the `award_category` enum (#1635).
+			"../lib/award-categories",
 			// The method list behind the `contact_method` enum (#1093).
 			"../lib/preferred-contact",
 			"../lib/table-topics-limits",
