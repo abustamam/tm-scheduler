@@ -5,13 +5,14 @@
  */
 import { describe, expect, it } from "vitest";
 import { awardCategoryEnum } from "#/db/schema";
-import { withBeatIds } from "../test/template-beat-ids";
-import { materialiseRunOfShow } from "./agenda-materialise";
-import type { AgendaSlot, BeatAwardCategory } from "./agenda-runsheet";
-import { resolveAgendaRows } from "./agenda-runsheet";
-import type { ClubForDeck, MeetingForDeck, Slide } from "./agenda-slides";
-import { buildTemplateSlideDeck } from "./agenda-template-slides";
-import { CONTEST_TEMPLATE } from "./contest-template";
+import { materialiseRunOfShow } from "#/lib/agenda-materialise";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import { resolveAgendaRows } from "#/lib/agenda-runsheet";
+import type { ClubForDeck, MeetingForDeck, Slide } from "#/lib/agenda-slides";
+import { buildTemplateSlideDeck } from "#/lib/agenda-template-slides";
+import { AWARD_CATEGORIES } from "#/lib/award-categories";
+import { CONTEST_TEMPLATE } from "#/lib/contest-template";
+import { withBeatIds } from "#/test/template-beat-ids";
 
 const meeting: MeetingForDeck = {
 	scheduledAt: new Date("2026-09-10T01:00:00Z"),
@@ -84,7 +85,12 @@ const roles = [
 }));
 
 function standardDeck(
-	over: { ballotUrl?: string | null; stripCategory?: boolean } = {},
+	over: {
+		ballotUrl?: string | null;
+		stripCategory?: boolean;
+		/** The slots the DECK sees; the rows are always resolved from the full set. */
+		deckSlots?: AgendaSlot[];
+	} = {},
 ): Slide[] {
 	const seeds = materialiseRunOfShow(false, null).map((s) =>
 		over.stripCategory ? { ...s, awardCategory: null } : s,
@@ -99,23 +105,14 @@ function standardDeck(
 		meeting,
 		club,
 		rows,
-		slots,
+		slots: over.deckSlots ?? slots,
 		ballotUrl: over.ballotUrl === undefined ? BALLOT : over.ballotUrl,
 	});
 }
 
-describe("BeatAwardCategory", () => {
-	it("is exactly the award_category enum's values", () => {
-		// A compile-time exhaustive map: adding an enum value without updating the
-		// union (or the reverse) fails typecheck here.
-		const all: Record<BeatAwardCategory, true> = {
-			best_speaker: true,
-			best_evaluator: true,
-			best_table_topics: true,
-		};
-		expect(Object.keys(all).sort()).toEqual(
-			[...awardCategoryEnum.enumValues].sort(),
-		);
+describe("AWARD_CATEGORIES", () => {
+	it("is exactly the award_category enum's values, in order", () => {
+		expect([...awardCategoryEnum.enumValues]).toEqual([...AWARD_CATEGORIES]);
 	});
 });
 
@@ -188,6 +185,50 @@ describe("buildTemplateSlideDeck vote slides (#1635)", () => {
 	it("an unmarked template (today's saved rows) projects no vote slides", () => {
 		const kinds = standardDeck({ stripCategory: true }).map((s) => s.kind);
 		expect(kinds.some((k) => k.startsWith("vote"))).toBe(false);
+	});
+
+	it("projects no vote slide for a segment that did not happen", () => {
+		// Only the leaders and the Timer: no live speaker, no evaluator.
+		const leaders = slots.filter(
+			(s) => s.roleKey !== "speaker" && s.roleKey !== "evaluator",
+		);
+		expect(
+			standardDeck({ deckSlots: leaders })
+				.map((s) => s.kind)
+				.filter((k) => k.startsWith("vote")),
+		).toEqual(["voteTableTopics"]);
+		// An open speech slot is not a live speaker (#1484).
+		const openSpeaker = slots.map((s) =>
+			s.roleKey === "speaker" ? { ...s, assigneeName: null } : s,
+		);
+		expect(
+			standardDeck({ deckSlots: openSpeaker })
+				.map((s) => s.kind)
+				.filter((k) => k.startsWith("vote")),
+		).not.toContain("voteSpeaker");
+		// No Table Topics Master: no Table Topics vote.
+		const noTt = slots.filter((s) => s.roleKey !== "table_topics_master");
+		expect(
+			standardDeck({ deckSlots: noTt })
+				.map((s) => s.kind)
+				.filter((k) => k.startsWith("vote")),
+		).toEqual(["voteSpeaker", "voteEvaluator"]);
+		expect(
+			standardDeck({ deckSlots: [] })
+				.map((s) => s.kind)
+				.filter((k) => k.startsWith("vote")),
+		).toEqual([]);
+	});
+
+	it("names the caller from a legacy slot with a null roleKey, by role name", () => {
+		const legacy = slots.map((s) =>
+			s.roleKey === "toastmaster_of_the_day" ? { ...s, roleKey: null } : s,
+		);
+		const speaker = standardDeck({ deckSlots: legacy }).find(
+			(s) => s.kind === "voteSpeaker",
+		);
+		if (speaker?.kind !== "voteSpeaker") throw new Error("speaker");
+		expect(speaker.caller?.name).toBe("Tess");
 	});
 
 	it("a contest projects no vote slide even when a ballot URL is passed", () => {

@@ -7,6 +7,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { AWARD_CATEGORIES } from "#/lib/award-categories";
 import {
 	MAX_BEAT_MINUTES,
 	MAX_ROLE_REPEAT_SLOTS,
@@ -264,6 +265,10 @@ const patchInput = rowInput.extend({
 			// depends on the row's stored `kind` and `role_key` and a validator sees
 			// only the patch.
 			clubGoverned: z.boolean().optional(),
+			// Which award the row calls the vote for (#1635). Patchable so the
+			// editor's Undo of a delete can restore it (the placeholder
+			// `addAgendaRow` inserts carries none). No control sets it.
+			awardCategory: z.enum(AWARD_CATEGORIES).nullable().optional(),
 		})
 		.refine((p) => Object.keys(p).length > 0, {
 			message: "Patch must set at least one field.",

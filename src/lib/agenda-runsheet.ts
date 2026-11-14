@@ -10,6 +10,7 @@ import {
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
+import type { BeatAwardCategory } from "./award-categories";
 import { TIMER_ROLE_KEY } from "./meeting-roles";
 import {
 	DEFAULT_SPEAKER_MINUTES,
@@ -21,14 +22,6 @@ import {
 	TABLE_TOPICS_MARKS,
 	type TableTopicsLimits,
 } from "./table-topics-limits";
-
-/** The award a vote beat calls for (#1635). A literal union rather than the DB
- *  enum's type: this module reaches the client-only /timer route, which must not
- *  import `#/db`. `agenda-template-vote-slides.test.ts` pins it to the enum. */
-export type BeatAwardCategory =
-	| "best_speaker"
-	| "best_evaluator"
-	| "best_table_topics";
 
 /** The default lives with the booked-duration rule it belongs to (#394); it is
  *  re-exported here because this is where every call site already reads it. */

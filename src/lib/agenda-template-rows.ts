@@ -26,7 +26,6 @@ import {
 	type AgendaRow,
 	type AgendaSlot,
 	assigneeDisplay,
-	type BeatAwardCategory,
 	detailTokenSlots,
 	evaluatedSpeakerLabel,
 	introducedSuffix,
@@ -39,6 +38,7 @@ import {
 	type TimingMarks,
 	visitingFlag,
 } from "./agenda-runsheet";
+import type { BeatAwardCategory } from "./award-categories";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_DETAIL_CHARS,
@@ -88,12 +88,13 @@ export type TemplateBeatSeed = {
 	 */
 	clubGoverned: boolean;
 	/**
-	 * Which award this beat calls the vote for (#1635); null or absent is "not a
-	 * vote". Optional so a seed built by hand (a contest fixture, a test) need not
-	 * name it: absent reads as NOT a vote, the safe direction (no club ballot on a
-	 * contest). Every loader and every copy path DOES name it.
+	 * Which award this beat calls the vote for (#1635); null is "not a vote".
+	 * REQUIRED, for the reason `clubGoverned` is: an optional marker lets a select
+	 * or a copy path forget it and read as "not a vote" with nothing throwing,
+	 * which silently drops the vote slide and the ballot QR. Required means
+	 * typecheck names each select and each seed.
 	 */
-	awardCategory?: BeatAwardCategory | null;
+	awardCategory: BeatAwardCategory | null;
 };
 
 /**

@@ -59,21 +59,22 @@
 import {
 	type AgendaRow,
 	type AgendaSlot,
-	assigneeDisplay,
-	type BeatAwardCategory,
-	type LegendEntry,
-	matchesRole,
 	openSpeechView,
 	orderEvaluators,
 	visitingFlag,
 } from "./agenda-runsheet";
 import {
+	assignedNames,
+	byRole,
 	type ClubForDeck,
+	holder,
 	type MeetingForDeck,
 	nextMeetingSlide,
+	ROLE,
 	type Slide,
 	tableTopicsNoteLines,
 } from "./agenda-slides";
+import type { BeatAwardCategory } from "./award-categories";
 import type { NextMeetingSummary } from "./next-meeting-summary";
 import {
 	formatTimingClock,
@@ -114,33 +115,6 @@ export type TemplateDeckInput = {
 	slots?: AgendaSlot[];
 };
 
-const SPEAKER = { key: "speaker", name: "Speaker" } as const;
-const EVALUATOR = { key: "evaluator", name: "Evaluator" } as const;
-const TIMER = { key: "timer", name: "Timer" } as const;
-const TOASTMASTER = {
-	key: "toastmaster_of_the_day",
-	name: "Toastmaster of the Day",
-} as const;
-const GENERAL_EVALUATOR = {
-	key: "general_evaluator",
-	name: "General Evaluator",
-} as const;
-
-type RoleRef = { key: string; name: string };
-
-const byRole = (slots: AgendaSlot[], role: RoleRef) =>
-	slots.filter((s) => matchesRole(s, role.key, role.name));
-
-function holderOf(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
-	const [s] = byRole(slots, role);
-	return s
-		? { role: s.roleName, name: assigneeDisplay(s), ...visitingFlag(s) }
-		: null;
-}
-
-const assignedNames = (slots: AgendaSlot[]): string[] =>
-	slots.filter((s) => s.assigneeName != null).map((s) => assigneeDisplay(s));
-
 /**
  * The vote slide for a row that calls for an award's vote (#1635), built as
  * `buildSlideDeck` builds the standard deck's: nominees from the slots, the
@@ -153,18 +127,22 @@ function voteSlide(
 	row: AgendaRow,
 	slots: AgendaSlot[],
 	ballotUrl: string | null,
-): Slide {
+): Slide | null {
 	const { liveSlots } = openSpeechView(slots, "omit");
-	const hasTimer = byRole(slots, TIMER).length > 0;
-	const owner = row.roleKey
-		? holderOf(slots, { key: row.roleKey, name: row.roleKey })
-		: null;
+	const hasTimer = byRole(slots, ROLE.timer).length > 0;
+	// The role's real name, so a legacy slot with a null `roleKey` still matches
+	// by name (as `matchesRole` does everywhere else).
+	const ownerRole = Object.values(ROLE).find((r) => r.key === row.roleKey);
+	const owner = row.roleKey && ownerRole ? holder(slots, ownerRole) : null;
 	const caller =
 		owner ??
-		(row.roleKey === GENERAL_EVALUATOR.key
-			? holderOf(slots, TOASTMASTER)
+		(row.roleKey === ROLE.generalEvaluator.key
+			? holder(slots, ROLE.toastmaster)
 			: null);
+	// Gated as `buildSlideDeck` gates them: no vote for a segment that did not
+	// happen (nobody to vote for, no ballot QR on the wall).
 	if (category === "best_table_topics") {
+		if (byRole(slots, ROLE.tableTopicsMaster).length === 0) return null;
 		return {
 			kind: "voteTableTopics",
 			hasTimer,
@@ -174,9 +152,10 @@ function voteSlide(
 		};
 	}
 	if (category === "best_speaker") {
-		const nominees = byRole(liveSlots, SPEAKER).sort(
+		const nominees = byRole(liveSlots, ROLE.speaker).sort(
 			(a, b) => a.slotIndex - b.slotIndex,
 		);
+		if (nominees.length === 0) return null;
 		return {
 			kind: "voteSpeaker",
 			names: assignedNames(nominees),
@@ -186,7 +165,11 @@ function voteSlide(
 			...visitingFlag(caller, ...nominees),
 		};
 	}
-	const nominees = orderEvaluators(byRole(liveSlots, EVALUATOR), liveSlots);
+	const nominees = orderEvaluators(
+		byRole(liveSlots, ROLE.evaluator),
+		liveSlots,
+	);
+	if (nominees.length === 0) return null;
 	return {
 		kind: "voteEvaluator",
 		names: assignedNames(nominees),
@@ -293,7 +276,8 @@ export function buildTemplateSlideDeck({
 			continue;
 		}
 		if (row.awardCategory) {
-			deck.push(voteSlide(row.awardCategory, row, slots, ballotUrl));
+			const vote = voteSlide(row.awardCategory, row, slots, ballotUrl);
+			if (vote) deck.push(vote);
 			continue;
 		}
 		deck.push({

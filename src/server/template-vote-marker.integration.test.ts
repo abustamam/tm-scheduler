@@ -21,7 +21,9 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { adoptStandardAgenda, duplicateClubTemplate } = await import(
 	"./club-agendas-logic"
 );
-const { loadAgendaDraft } = await import("./meeting-agenda-edit-logic");
+const { addAgendaRow, loadAgendaDraft, updateAgendaRow } = await import(
+	"./meeting-agenda-edit-logic"
+);
 const {
 	copyTemplateForMeeting,
 	loadTemplateContent,
@@ -34,8 +36,8 @@ const VOTES = [
 	["general_evaluator", "best_evaluator"],
 ] as const;
 
-async function marked(templateId: string) {
-	const rows = await testDb
+async function marked(conn: typeof testDb, templateId: string) {
+	const rows = await conn
 		.select({
 			roleKey: meetingTemplateBeats.roleKey,
 			cat: meetingTemplateBeats.awardCategory,
@@ -91,6 +93,45 @@ describe.skipIf(!hasTestDb)("award_category backfill (#1635)", () => {
 				};
 				const club = await mk(`club-${randomUUID().slice(0, 8)}`);
 				const contest = await mk(CONTEST_TEMPLATE_KEY);
+				// Rows as saved BEFORE #1503 reworded the beat ("opens voting for"),
+				// typed by hand: the six strings the old materialiser wrote.
+				const OLD_WORDING: [string, string][] = [
+					[
+						"toastmaster_of_the_day",
+						"Calls for the {role:timer}'s report · opens voting for Best Speaker",
+					],
+					["toastmaster_of_the_day", "Opens voting for Best Speaker"],
+					[
+						"table_topics_master",
+						"Calls for the {role:timer}'s report · opens voting for Best Table Topics",
+					],
+					["table_topics_master", "Opens voting for Best Table Topics"],
+					[
+						"general_evaluator",
+						"Calls for the {role:timer}'s report · opens voting for Best Evaluator",
+					],
+					["general_evaluator", "Opens voting for Best Evaluator"],
+				];
+				const [oldT] = await tx
+					.insert(meetingTemplates)
+					.values({
+						clubId: null,
+						key: `club-${randomUUID().slice(0, 8)}`,
+						name: "old",
+					})
+					.returning({ id: meetingTemplates.id });
+				if (!oldT) throw new Error("insert failed");
+				const skeleton = oldSeeds.find((s) => s.kind === "role");
+				if (!skeleton) throw new Error("no role seed");
+				await tx.insert(meetingTemplateBeats).values(
+					OLD_WORDING.map(([roleKey, detail], i) => ({
+						...skeleton,
+						templateId: oldT.id,
+						roleKey,
+						detail,
+						sortOrder: i,
+					})),
+				);
 				const edited = await mk(`club-${randomUUID().slice(0, 8)}`);
 				await tx
 					.update(meetingTemplateBeats)
@@ -105,24 +146,17 @@ describe.skipIf(!hasTestDb)("award_category backfill (#1635)", () => {
 
 				await tx.execute(sql.raw(backfillStatement()));
 
-				const read = async (id: string) =>
-					(
-						await tx
-							.select({
-								roleKey: meetingTemplateBeats.roleKey,
-								cat: meetingTemplateBeats.awardCategory,
-							})
-							.from(meetingTemplateBeats)
-							.where(
-								and(
-									eq(meetingTemplateBeats.templateId, id),
-									isNotNull(meetingTemplateBeats.awardCategory),
-								),
-							)
-							.orderBy(asc(meetingTemplateBeats.sortOrder))
-					).map((r) => [r.roleKey, r.cat]);
+				const read = (id: string) => marked(tx as unknown as typeof testDb, id);
 				expect(await read(club)).toEqual(VOTES.map((v) => [...v]));
 				expect(await read(contest)).toEqual([]);
+				expect(await read(oldT.id)).toEqual([
+					["toastmaster_of_the_day", "best_speaker"],
+					["toastmaster_of_the_day", "best_speaker"],
+					["table_topics_master", "best_table_topics"],
+					["table_topics_master", "best_table_topics"],
+					["general_evaluator", "best_evaluator"],
+					["general_evaluator", "best_evaluator"],
+				]);
 				expect(await read(edited)).toEqual([
 					["table_topics_master", "best_table_topics"],
 					["general_evaluator", "best_evaluator"],
@@ -148,7 +182,7 @@ describe.skipIf(!hasTestDb)(
 
 		it("a template written from materialiseRunOfShow carries it, and the render read returns it", async () => {
 			const id = await leanTemplate(club.clubId);
-			expect(await marked(id)).toEqual(expected);
+			expect(await marked(testDb, id)).toEqual(expected);
 			const content = await loadTemplateContent(id);
 			expect(
 				content?.beats
@@ -163,7 +197,7 @@ describe.skipIf(!hasTestDb)(
 				clubId: club.clubId,
 				templateId: id,
 			});
-			expect(await marked(templateId)).toEqual(expected);
+			expect(await marked(testDb, templateId)).toEqual(expected);
 		});
 
 		it("a private copy for a meeting (apply) keeps it", async () => {
@@ -176,7 +210,7 @@ describe.skipIf(!hasTestDb)(
 					meetingId,
 				}),
 			);
-			expect(await marked(copyId)).toEqual(expected);
+			expect(await marked(testDb, copyId)).toEqual(expected);
 		});
 
 		it("save as a new club template, and replace, keep it", async () => {
@@ -186,7 +220,7 @@ describe.skipIf(!hasTestDb)(
 				.select({ templateId: meetings.templateId })
 				.from(meetings)
 				.where(eq(meetings.id, meetingId));
-			expect(await marked(m?.templateId as string)).toEqual(expected);
+			expect(await marked(testDb, m?.templateId as string)).toEqual(expected);
 
 			const created = await saveMeetingAgendaAsClubTemplate({
 				meetingId,
@@ -196,14 +230,14 @@ describe.skipIf(!hasTestDb)(
 				name: "Saved",
 				description: null,
 			});
-			expect(await marked(created.templateId)).toEqual(expected);
+			expect(await marked(testDb, created.templateId)).toEqual(expected);
 
 			const target = await leanTemplate(club.clubId, { name: "Target" });
 			await testDb
 				.update(meetingTemplateBeats)
 				.set({ awardCategory: null })
 				.where(eq(meetingTemplateBeats.templateId, target));
-			expect(await marked(target)).toEqual([]);
+			expect(await marked(testDb, target)).toEqual([]);
 			await saveMeetingAgendaAsClubTemplate({
 				meetingId,
 				clubId: club.clubId,
@@ -211,7 +245,29 @@ describe.skipIf(!hasTestDb)(
 				mode: "replace",
 				templateId: target,
 			});
-			expect(await marked(target)).toEqual(expected);
+			expect(await marked(testDb, target)).toEqual(expected);
+		});
+
+		it("a row's marker can be patched back on after a delete (the Undo path)", async () => {
+			const meetingId = await newMeeting(club.clubId, 7);
+			const draft = await loadAgendaDraft(meetingId);
+			const vote = draft?.rows.find((r) => r.awardCategory === "best_speaker");
+			if (!vote) throw new Error("no marked row");
+			const created = await addAgendaRow({
+				meetingId,
+				afterRowId: null,
+				kind: vote.kind,
+			});
+			expect(created.awardCategory).toBeNull();
+			await updateAgendaRow({
+				meetingId,
+				rowId: created.id,
+				patch: { label: vote.label, awardCategory: vote.awardCategory },
+			});
+			const after = await loadAgendaDraft(meetingId);
+			expect(after?.rows.find((r) => r.id === created.id)?.awardCategory).toBe(
+				"best_speaker",
+			);
 		});
 
 		it("adopting the standard agenda keeps it", async () => {
@@ -219,7 +275,7 @@ describe.skipIf(!hasTestDb)(
 				clubId: club.clubId,
 				actorMemberId: null,
 			})) as { templateId: string };
-			expect(await marked(templateId)).toEqual(expected);
+			expect(await marked(testDb, templateId)).toEqual(expected);
 		});
 	},
 );

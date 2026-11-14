@@ -361,8 +361,6 @@ function sameValue(field: string, a: unknown, b: unknown): boolean {
 		typeof b === "number"
 	)
 		return Math.fround(a) === Math.fround(b);
-	// An absent marker and a null one both mean "not a vote" (#1635).
-	if (field === "awardCategory") return (a ?? null) === (b ?? null);
 	return a === b;
 }
 

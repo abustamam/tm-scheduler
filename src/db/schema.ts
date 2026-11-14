@@ -67,6 +67,7 @@ export {
 // `preferred-contact.ts` imports nothing, and `preferred-contact-reads.guard.test.ts`
 // holds it to that.
 import { AGENDA_LAYOUTS } from "../lib/agenda-layouts";
+import { AWARD_CATEGORIES } from "../lib/award-categories";
 import type { McpPendingTool } from "../lib/pending-plan";
 import { CONTACT_METHODS } from "../lib/preferred-contact";
 import { MAX_TABLE_TOPICS_SECONDS } from "../lib/table-topics-limits";
@@ -343,11 +344,7 @@ export const attendancePlanStatusEnum = pgEnum("attendance_plan_status", [
 
 // The three award/ribbon categories captured in the minutes (ADR-0014 / #152).
 // One winner (a member XOR a guest) per category per meeting; all optional.
-export const awardCategoryEnum = pgEnum("award_category", [
-	"best_speaker",
-	"best_evaluator",
-	"best_table_topics",
-]);
+export const awardCategoryEnum = pgEnum("award_category", AWARD_CATEGORIES);
 
 // WHICH arm of the timing actor ladder admitted a write (#730) — a club
 // officer, this meeting's Toastmaster, or the member holding this meeting's

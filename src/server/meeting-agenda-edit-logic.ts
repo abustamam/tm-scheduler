@@ -26,11 +26,12 @@ import {
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { materialiseRunOfShow, privateCopyKey } from "#/lib/agenda-materialise";
-import type { AgendaSlot, BeatAwardCategory } from "#/lib/agenda-runsheet";
+import type { AgendaSlot } from "#/lib/agenda-runsheet";
 import {
 	isClubGovernable,
 	refreshTableTopicsMarks,
 } from "#/lib/agenda-template-rows";
+import type { BeatAwardCategory } from "#/lib/award-categories";
 import {
 	assertMeetingAccepts,
 	type MeetingWriteOptions,
@@ -100,11 +101,12 @@ export type AgendaDraftRow = {
 	 */
 	clubGoverned: boolean;
 	/**
-	 * Which award this row calls the vote for (#1635), or null. The editor has no
-	 * control for it yet; it is carried so the draft's preview derives the same
-	 * rows as the stored template, and so a row read here keeps it.
+	 * Which award this row calls the vote for (#1635), or null. REQUIRED, like
+	 * `clubGoverned` above: typecheck names every select and seed that forgets it.
+	 * The editor has no control for it; Undo of a delete restores it (the
+	 * placeholder `addAgendaRow` inserts carries none).
 	 */
-	awardCategory?: BeatAwardCategory | null;
+	awardCategory: BeatAwardCategory | null;
 };
 
 export type AgendaDraftRole = {
@@ -1895,6 +1897,9 @@ export async function updateAgendaRow(
 				// club's Table Topics window could actually govern, so this cannot be
 				// used to make an arbitrary beat claim the club's window.
 				| "clubGoverned"
+				// The vote marker (#1635), patchable only so Undo of a delete can put
+				// it back; nothing in the editor sets it.
+				| "awardCategory"
 			>
 		>;
 	},

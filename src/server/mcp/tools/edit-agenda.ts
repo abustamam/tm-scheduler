@@ -291,6 +291,7 @@ function buildPlan(
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 	}));
 	if (!result.ok) {
 		throw new McpError(
