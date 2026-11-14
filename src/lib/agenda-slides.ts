@@ -396,8 +396,8 @@ type SlideShape =
  *  keeps finding its slots after a club renames the role — the same binding
  *  rule the run sheet uses (`matchesRole`), which is what keeps print and deck
  *  from disagreeing about which sections exist. */
-type RoleRef = { key: string; name: string };
-const ROLE = {
+export type RoleRef = { key: string; name: string };
+export const ROLE = {
 	toastmaster: {
 		key: "toastmaster_of_the_day",
 		name: "Toastmaster of the Day",
@@ -433,17 +433,17 @@ function speechTime(slot: SpeechWindowInput): string {
 }
 
 // Assigned names for the vote slides, each with the "· Guest" marker (#151).
-const assignedNames = (slots: AgendaSlot[]): string[] =>
+export const assignedNames = (slots: AgendaSlot[]): string[] =>
 	slots.filter((s) => s.assigneeName != null).map((s) => assigneeDisplay(s));
 
-const byRole = (slots: AgendaSlot[], role: RoleRef) =>
+export const byRole = (slots: AgendaSlot[], role: RoleRef) =>
 	slots.filter((s) => matchesRole(s, role.key, role.name));
 
 /** The role's holder as a `LegendEntry`, or null when the club runs no such
  *  role — the deck's equivalent of the run sheet's owner resolution. The role
  *  is named as the CLUB names it (`roleName`, not `role.name`), so a rename
  *  follows through to the slide the way it follows through to the printed row. */
-function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
+export function holder(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
 	const [s] = byRole(slots, role);
 	return s
 		? { role: s.roleName, name: assigneeDisplay(s), ...visitingFlag(s) }

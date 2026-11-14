@@ -202,6 +202,7 @@ function preambleSeed(
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 	};
 }
 
@@ -220,6 +221,7 @@ function sectionSeed(label: string, sortOrder: number): TemplateBeatSeed {
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 	};
 }
 
@@ -255,6 +257,8 @@ function beatSeed(
 	const marks = isRole ? beat.marks : null;
 	return {
 		clubGoverned,
+		// The vote beats name their award; every other beat is NOT a vote (#1635).
+		awardCategory: isRole ? (beat.awardCategory ?? null) : null,
 		sortOrder,
 		kind: beat.kind,
 		label: isRole ? beat.roleName : beat.who,
@@ -322,6 +326,7 @@ export const COMPARED_BEAT_FIELDS = [
 	"flex",
 	"handoff",
 	"clubGoverned",
+	"awardCategory",
 	"markGreen",
 	"markYellow",
 	"markRed",

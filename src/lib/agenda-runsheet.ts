@@ -10,6 +10,7 @@ import {
 	type TemplateBeatRow,
 	type TemplateRoleRow,
 } from "./agenda-template-rows";
+import type { BeatAwardCategory } from "./award-categories";
 import { TIMER_ROLE_KEY } from "./meeting-roles";
 import {
 	DEFAULT_SPEAKER_MINUTES,
@@ -263,6 +264,13 @@ export type AgendaRow = {
 	 * every gate green.
 	 */
 	clubGoverned?: true;
+	/**
+	 * The award this row calls the vote for (#1635), carried from
+	 * `meeting_template_beats.award_category`. Read by `buildTemplateSlideDeck`
+	 * to project the matching vote slide. TEMPLATE path only, and absent unless
+	 * set, so an ordinary row is unchanged and a contest row never carries one.
+	 */
+	awardCategory?: BeatAwardCategory;
 };
 
 /** A functionary/uncovered role shown in the header legend. */
@@ -338,6 +346,12 @@ export type Beat = (
 			 *  would lose the Best-Speaker vote from the printed agenda while
 			 *  `buildSlideDeck` still projected the slide. */
 			renderUnowned?: true;
+			/**
+			 * Marks this beat as the vote for an award (#1635), so a TEMPLATED deck can
+			 * project the matching vote slide. Persisted as
+			 * `meeting_template_beats.award_category` by `materialiseRunOfShow`.
+			 */
+			awardCategory?: BeatAwardCategory;
 			/**
 			 * Timer-card marks for a beat timed by convention (#507) — the
 			 * evaluation and Table Topics segments.
@@ -1277,6 +1291,7 @@ export function buildRunOfShow({
 			role: "plain",
 			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · calls for votes for Best Speaker`,
 			minutes: 1,
+			awardCategory: "best_speaker",
 			renderUnowned: true,
 			fallbacks: [
 				{ unless: TIMER_ROLE, detail: "Calls for votes for Best Speaker" },
@@ -1326,6 +1341,7 @@ export function buildRunOfShow({
 			role: "plain",
 			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · calls for votes for Best Table Topics`,
 			minutes: 1,
+			awardCategory: "best_table_topics",
 			renderUnowned: true,
 			fallbacks: [
 				{ unless: TIMER_ROLE, detail: "Calls for votes for Best Table Topics" },
@@ -1420,6 +1436,7 @@ export function buildRunOfShow({
 			role: "plain",
 			detail: `Calls for the ${roleNameToken(TIMER_ROLE)}'s report · calls for votes for Best Evaluator`,
 			minutes: 1,
+			awardCategory: "best_evaluator",
 			renderUnowned: true,
 			fallbacks: [
 				{ unless: TIMER_ROLE, detail: "Calls for votes for Best Evaluator" },

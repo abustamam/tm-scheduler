@@ -58,6 +58,7 @@ function row(over: Partial<AgendaDraftRow> & { id: string }): AgendaDraftRow {
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 		...over,
 	};
 }

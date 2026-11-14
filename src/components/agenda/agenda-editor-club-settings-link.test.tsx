@@ -61,6 +61,7 @@ const TT_ROW: AgendaDraftRow = {
 	markRed: 2.75,
 	// The stored marker, not the marks, is what puts the link there (#683).
 	clubGoverned: true,
+	awardCategory: null,
 };
 
 const DRAFT: AgendaDraft = {

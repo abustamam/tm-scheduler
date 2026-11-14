@@ -107,6 +107,9 @@ const beat = (
 	// A contest states its own windows on its own beats; nothing here is the
 	// club's Table Topics segment, so no seed carries the marker (#683).
 	clubGoverned: false,
+	// A contest is judged on paper: no beat is a club vote, so no ballot QR is
+	// projected at the audience (#1635). Null on purpose, not by omission.
+	awardCategory: null,
 	...over,
 });
 

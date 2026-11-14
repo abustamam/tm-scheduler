@@ -31,6 +31,7 @@ import {
 	isClubGovernable,
 	refreshTableTopicsMarks,
 } from "#/lib/agenda-template-rows";
+import type { BeatAwardCategory } from "#/lib/award-categories";
 import {
 	assertMeetingAccepts,
 	type MeetingWriteOptions,
@@ -99,6 +100,13 @@ export type AgendaDraftRow = {
 	 * inputs back without deleting the row.
 	 */
 	clubGoverned: boolean;
+	/**
+	 * Which award this row calls the vote for (#1635), or null. REQUIRED, like
+	 * `clubGoverned` above: typecheck names every select and seed that forgets it.
+	 * The editor has no control for it; Undo of a delete restores it (the
+	 * placeholder `addAgendaRow` inserts carries none).
+	 */
+	awardCategory: BeatAwardCategory | null;
 };
 
 export type AgendaDraftRole = {
@@ -628,6 +636,7 @@ function templateBeatsQuery(conn: DbOrTx, templateId: string) {
 			// nothing, and the editor shows the frozen snapshot as an editable
 			// window while every print surface shows the club's.
 			clubGoverned: meetingTemplateBeats.clubGoverned,
+			awardCategory: meetingTemplateBeats.awardCategory,
 		})
 		.from(meetingTemplateBeats)
 		.where(eq(meetingTemplateBeats.templateId, templateId))
@@ -1856,6 +1865,7 @@ export async function addAgendaRow(
 			// insert names no beat the club's window governs. Stated rather than
 			// assumed because the editor decides what controls to offer from it.
 			clubGoverned: row.clubGoverned,
+			awardCategory: row.awardCategory,
 		};
 	});
 }
@@ -1887,6 +1897,9 @@ export async function updateAgendaRow(
 				// club's Table Topics window could actually govern, so this cannot be
 				// used to make an arbitrary beat claim the club's window.
 				| "clubGoverned"
+				// The vote marker (#1635), patchable only so Undo of a delete can put
+				// it back; nothing in the editor sets it.
+				| "awardCategory"
 			>
 		>;
 	},

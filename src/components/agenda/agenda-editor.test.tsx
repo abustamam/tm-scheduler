@@ -45,6 +45,7 @@ const draft: AgendaDraft = {
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		},
 		{
 			id: "r2",
@@ -61,6 +62,7 @@ const draft: AgendaDraft = {
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		},
 	],
 	roles: [
@@ -584,6 +586,7 @@ describe("AgendaEditor repeat blocks", () => {
 					markYellow: null,
 					markRed: null,
 					clubGoverned: false,
+					awardCategory: null,
 				},
 				{
 					id: "b-silence",
@@ -600,6 +603,7 @@ describe("AgendaEditor repeat blocks", () => {
 					markYellow: null,
 					markRed: null,
 					clubGoverned: false,
+					awardCategory: null,
 				},
 			],
 		};
@@ -951,6 +955,9 @@ describe("AgendaEditor delete undo", () => {
 					// the club’s window on every surface at once.
 					handoff: true,
 					clubGoverned: true,
+					// The vote marker (#1635): a placeholder carries none, so a dropped
+					// restore is silent too (the row loses its vote slide and QR).
+					awardCategory: "best_speaker" as const,
 				},
 			],
 		};
@@ -990,6 +997,7 @@ describe("AgendaEditor delete undo", () => {
 			markYellow: 6,
 			markRed: 7,
 			clubGoverned: true,
+			awardCategory: "best_speaker",
 		});
 	});
 
@@ -1037,6 +1045,7 @@ describe("AgendaEditor delete undo", () => {
 								markYellow: null,
 								markRed: null,
 								clubGoverned: false,
+								awardCategory: null,
 							};
 							const at =
 								afterRowId === null
@@ -1096,6 +1105,7 @@ describe("AgendaEditor delete undo", () => {
 					markYellow: 6,
 					markRed: 7,
 					clubGoverned: false,
+					awardCategory: null,
 				},
 			],
 		};
@@ -1131,6 +1141,7 @@ describe("AgendaEditor delete undo", () => {
 								markYellow: null,
 								markRed: null,
 								clubGoverned: false,
+								awardCategory: null,
 							};
 							const at =
 								afterRowId === null
@@ -1235,6 +1246,7 @@ describe("AgendaEditor delete undo", () => {
 								markYellow: null,
 								markRed: null,
 								clubGoverned: false,
+								awardCategory: null,
 							};
 							const at =
 								afterRowId === null
