@@ -2372,6 +2372,17 @@ export const meetingTemplateBeats = pgTable(
 		 * migration marks the pre-existing materialised rows, one per template.
 		 */
 		clubGoverned: boolean("club_governed").notNull().default(false),
+		/**
+		 * Which award this beat calls the vote for (#1635), or NULL for "not a vote".
+		 *
+		 * STORED, because the projected deck has to tell a club's Best Speaker vote
+		 * from a contest step and nothing about a beat says so: wording and position
+		 * are what an officer edits. NULL is the safe default (a contest never
+		 * projects a club ballot); `materialiseRunOfShow` sets it on the three vote
+		 * beats, and every path that copies a beat carries it. Hand-added vote steps
+		 * stay NULL until the agenda editor has a control for it.
+		 */
+		awardCategory: awardCategoryEnum("award_category"),
 	},
 	(t) => [
 		uniqueIndex("meeting_template_beats_order_unique").on(

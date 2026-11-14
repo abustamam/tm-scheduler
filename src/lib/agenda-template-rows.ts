@@ -26,6 +26,7 @@ import {
 	type AgendaRow,
 	type AgendaSlot,
 	assigneeDisplay,
+	type BeatAwardCategory,
 	detailTokenSlots,
 	evaluatedSpeakerLabel,
 	introducedSuffix,
@@ -86,6 +87,13 @@ export type TemplateBeatSeed = {
 	 * means typecheck names each select and each seed.
 	 */
 	clubGoverned: boolean;
+	/**
+	 * Which award this beat calls the vote for (#1635); null or absent is "not a
+	 * vote". Optional so a seed built by hand (a contest fixture, a test) need not
+	 * name it: absent reads as NOT a vote, the safe direction (no club ballot on a
+	 * contest). Every loader and every copy path DOES name it.
+	 */
+	awardCategory?: BeatAwardCategory | null;
 };
 
 /**
@@ -449,6 +457,8 @@ function toRow(
 		// row is byte-identical to what it was before #683 and the agenda/deck
 		// parity fixtures that compare whole rows keep comparing the same object.
 		...(row.clubGoverned ? { clubGoverned: true as const } : {}),
+		// Same only-when-set rule, for the same fixture-comparison reason (#1635).
+		...(row.awardCategory ? { awardCategory: row.awardCategory } : {}),
 	};
 
 	if (row.kind === "section") {

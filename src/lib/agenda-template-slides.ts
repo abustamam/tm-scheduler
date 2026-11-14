@@ -56,7 +56,17 @@
  * — they are meeting-level text the club typed, not a beat, so they would
  * otherwise be silently dropped from a contest.
  */
-import { type AgendaRow, visitingFlag } from "./agenda-runsheet";
+import {
+	type AgendaRow,
+	type AgendaSlot,
+	assigneeDisplay,
+	type BeatAwardCategory,
+	type LegendEntry,
+	matchesRole,
+	openSpeechView,
+	orderEvaluators,
+	visitingFlag,
+} from "./agenda-runsheet";
 import {
 	type ClubForDeck,
 	type MeetingForDeck,
@@ -88,7 +98,104 @@ export type TemplateDeckInput = {
 	/** The anonymous feedback page's absolute URL (#1282). A templated meeting
 	 *  has no General Evaluation slide, so the Thank-You slide carries the QR. */
 	feedbackUrl?: string | null;
+	/**
+	 * The meeting's public ballot URL (#510), carried onto the vote slides a
+	 * marked row (`AgendaRow.awardCategory`, #1635) becomes. `null` or absent is
+	 * "no digital vote" (#770): the slide still shows, with no QR and no count.
+	 * A contest's rows carry no category, so it never projects a ballot whatever
+	 * is passed here.
+	 */
+	ballotUrl?: string | null;
+	/**
+	 * The meeting's slots, for the vote slides' nominee names and the caller
+	 * (#1635). Rows carry only the label and holder of THEIR beat, not who is up
+	 * for the award. Absent reads as no nominees and no Timer.
+	 */
+	slots?: AgendaSlot[];
 };
+
+const SPEAKER = { key: "speaker", name: "Speaker" } as const;
+const EVALUATOR = { key: "evaluator", name: "Evaluator" } as const;
+const TIMER = { key: "timer", name: "Timer" } as const;
+const TOASTMASTER = {
+	key: "toastmaster_of_the_day",
+	name: "Toastmaster of the Day",
+} as const;
+const GENERAL_EVALUATOR = {
+	key: "general_evaluator",
+	name: "General Evaluator",
+} as const;
+
+type RoleRef = { key: string; name: string };
+
+const byRole = (slots: AgendaSlot[], role: RoleRef) =>
+	slots.filter((s) => matchesRole(s, role.key, role.name));
+
+function holderOf(slots: AgendaSlot[], role: RoleRef): LegendEntry | null {
+	const [s] = byRole(slots, role);
+	return s
+		? { role: s.roleName, name: assigneeDisplay(s), ...visitingFlag(s) }
+		: null;
+}
+
+const assignedNames = (slots: AgendaSlot[]): string[] =>
+	slots.filter((s) => s.assigneeName != null).map((s) => assigneeDisplay(s));
+
+/**
+ * The vote slide for a row that calls for an award's vote (#1635), built as
+ * `buildSlideDeck` builds the standard deck's: nominees from the slots, the
+ * caller from the row's own role (the General Evaluator's vote falls back to the
+ * Toastmaster, as the standard deck's `geOwner` does), `hasTimer` from whether
+ * the club runs a Timer.
+ */
+function voteSlide(
+	category: BeatAwardCategory,
+	row: AgendaRow,
+	slots: AgendaSlot[],
+	ballotUrl: string | null,
+): Slide {
+	const { liveSlots } = openSpeechView(slots, "omit");
+	const hasTimer = byRole(slots, TIMER).length > 0;
+	const owner = row.roleKey
+		? holderOf(slots, { key: row.roleKey, name: row.roleKey })
+		: null;
+	const caller =
+		owner ??
+		(row.roleKey === GENERAL_EVALUATOR.key
+			? holderOf(slots, TOASTMASTER)
+			: null);
+	if (category === "best_table_topics") {
+		return {
+			kind: "voteTableTopics",
+			hasTimer,
+			caller,
+			ballotUrl,
+			...visitingFlag(caller),
+		};
+	}
+	if (category === "best_speaker") {
+		const nominees = byRole(liveSlots, SPEAKER).sort(
+			(a, b) => a.slotIndex - b.slotIndex,
+		);
+		return {
+			kind: "voteSpeaker",
+			names: assignedNames(nominees),
+			hasTimer,
+			caller,
+			ballotUrl,
+			...visitingFlag(caller, ...nominees),
+		};
+	}
+	const nominees = orderEvaluators(byRole(liveSlots, EVALUATOR), liveSlots);
+	return {
+		kind: "voteEvaluator",
+		names: assignedNames(nominees),
+		hasTimer,
+		caller,
+		ballotUrl,
+		...visitingFlag(caller, ...nominees),
+	};
+}
 
 /**
  * The timing a beat's marks imply, as display-ready clock text.
@@ -144,6 +251,8 @@ export function buildTemplateSlideDeck({
 	nextMeeting = null,
 	nextMeetingSignupUrl = null,
 	feedbackUrl = null,
+	ballotUrl = null,
+	slots = [],
 }: TemplateDeckInput): Slide[] {
 	const deck: Slide[] = [
 		{
@@ -168,7 +277,11 @@ export function buildTemplateSlideDeck({
 	// The role is matched through `segmentFor`, the one place a role key decides
 	// "is this the Table Topics segment", as `beatTimingText` below does.
 	const notesRow = rows.find(
-		(r) => !r.section && segmentFor(r.roleKey) === "tableTopics",
+		(r) =>
+			!r.section &&
+			// A vote row is a slide of its own now (#1635), not the segment.
+			!r.awardCategory &&
+			segmentFor(r.roleKey) === "tableTopics",
 	);
 
 	for (const row of rows) {
@@ -177,6 +290,10 @@ export function buildTemplateSlideDeck({
 			// `toRow` in agenda-template-rows.ts, which puts the label there and
 			// nulls the role key precisely so both renderers read one field.
 			deck.push({ kind: "templateSection", title: row.who });
+			continue;
+		}
+		if (row.awardCategory) {
+			deck.push(voteSlide(row.awardCategory, row, slots, ballotUrl));
 			continue;
 		}
 		deck.push({

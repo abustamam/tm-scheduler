@@ -474,6 +474,9 @@ function MeetingView() {
 				rows: flex.rows,
 				nextMeetingAt,
 				meetingNumber,
+				// A marked vote row (#1635) projects the ballot; a contest has none.
+				ballotUrl,
+				slots,
 			})
 		: buildSlideDeck({
 				meeting,

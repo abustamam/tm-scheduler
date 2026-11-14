@@ -26,7 +26,7 @@ import {
 } from "#/db/schema";
 import { generateSlotRows } from "#/lib/agenda";
 import { materialiseRunOfShow, privateCopyKey } from "#/lib/agenda-materialise";
-import type { AgendaSlot } from "#/lib/agenda-runsheet";
+import type { AgendaSlot, BeatAwardCategory } from "#/lib/agenda-runsheet";
 import {
 	isClubGovernable,
 	refreshTableTopicsMarks,
@@ -99,6 +99,12 @@ export type AgendaDraftRow = {
 	 * inputs back without deleting the row.
 	 */
 	clubGoverned: boolean;
+	/**
+	 * Which award this row calls the vote for (#1635), or null. The editor has no
+	 * control for it yet; it is carried so the draft's preview derives the same
+	 * rows as the stored template, and so a row read here keeps it.
+	 */
+	awardCategory?: BeatAwardCategory | null;
 };
 
 export type AgendaDraftRole = {
@@ -628,6 +634,7 @@ function templateBeatsQuery(conn: DbOrTx, templateId: string) {
 			// nothing, and the editor shows the frozen snapshot as an editable
 			// window while every print surface shows the club's.
 			clubGoverned: meetingTemplateBeats.clubGoverned,
+			awardCategory: meetingTemplateBeats.awardCategory,
 		})
 		.from(meetingTemplateBeats)
 		.where(eq(meetingTemplateBeats.templateId, templateId))
@@ -1856,6 +1863,7 @@ export async function addAgendaRow(
 			// insert names no beat the club's window governs. Stated rather than
 			// assumed because the editor decides what controls to offer from it.
 			clubGoverned: row.clubGoverned,
+			awardCategory: row.awardCategory,
 		};
 	});
 }

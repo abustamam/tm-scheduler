@@ -150,6 +150,9 @@ function PresentPage() {
 				nextMeeting,
 				nextMeetingSignupUrl,
 				feedbackUrl,
+				// A marked vote row (#1635) projects the ballot; a contest has none.
+				ballotUrl,
+				slots: data.slots,
 			})
 		: buildSlideDeck({
 				meeting: data.meeting,
