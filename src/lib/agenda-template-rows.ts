@@ -38,6 +38,7 @@ import {
 	type TimingMarks,
 	visitingFlag,
 } from "./agenda-runsheet";
+import type { BeatAwardCategory } from "./award-categories";
 import {
 	MAX_ROLE_REPEAT_SLOTS,
 	MAX_TEMPLATE_DETAIL_CHARS,
@@ -86,6 +87,14 @@ export type TemplateBeatSeed = {
 	 * means typecheck names each select and each seed.
 	 */
 	clubGoverned: boolean;
+	/**
+	 * Which award this beat calls the vote for (#1635); null is "not a vote".
+	 * REQUIRED, for the reason `clubGoverned` is: an optional marker lets a select
+	 * or a copy path forget it and read as "not a vote" with nothing throwing,
+	 * which silently drops the vote slide and the ballot QR. Required means
+	 * typecheck names each select and each seed.
+	 */
+	awardCategory: BeatAwardCategory | null;
 };
 
 /**
@@ -449,6 +458,8 @@ function toRow(
 		// row is byte-identical to what it was before #683 and the agenda/deck
 		// parity fixtures that compare whole rows keep comparing the same object.
 		...(row.clubGoverned ? { clubGoverned: true as const } : {}),
+		// Same only-when-set rule, for the same fixture-comparison reason (#1635).
+		...(row.awardCategory ? { awardCategory: row.awardCategory } : {}),
 	};
 
 	if (row.kind === "section") {

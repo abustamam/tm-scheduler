@@ -40,6 +40,7 @@ function beat(
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 		...over,
 	};
 }

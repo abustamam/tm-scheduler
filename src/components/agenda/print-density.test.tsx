@@ -881,6 +881,7 @@ function hostileTemplateRows(
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		}),
 	);
 	// Assignee names LONG (the axis the two-page-layout suite below also uses

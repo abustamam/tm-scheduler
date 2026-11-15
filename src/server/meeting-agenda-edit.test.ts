@@ -150,6 +150,18 @@ describe("updateAgendaRowFn's patch validator rejects with a human message", () 
 		);
 	});
 
+	it("ACCEPTS awardCategory (or null) and refuses an unknown one (#1635)", async () => {
+		// A key the validator does not name is STRIPPED, which would leave the patch
+		// empty and refuse it, so acceptance proves it survives (Undo restores it).
+		expect(
+			(await patchOutcome({ awardCategory: "best_speaker" })).error,
+		).toBeFalsy();
+		expect((await patchOutcome({ awardCategory: null })).error).toBeFalsy();
+		expect(
+			(await patchOutcome({ awardCategory: "best_nonsense" })).error,
+		).toBeTruthy();
+	});
+
 	it("still refuses a NON-numeric mark, readably", async () => {
 		// Dropping `.int()` must not drop the type check with it.
 		const message = await rejectionMessage({ markRed: "soon" });

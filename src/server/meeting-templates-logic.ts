@@ -213,6 +213,8 @@ async function loadTemplateBeats(
 				// snapshot. `TemplateBeatRow.clubGoverned` is required for exactly
 				// that reason — the omission is invisible at runtime.
 				clubGoverned: meetingTemplateBeats.clubGoverned,
+				// #1635: omitting it drops the vote slides from every templated deck.
+				awardCategory: meetingTemplateBeats.awardCategory,
 			})
 			.from(meetingTemplateBeats)
 			.where(eq(meetingTemplateBeats.templateId, templateId))
@@ -315,6 +317,7 @@ export async function templateContentForHash(conn: DbOrTx, templateId: string) {
 			markYellow: meetingTemplateBeats.markYellow,
 			markRed: meetingTemplateBeats.markRed,
 			clubGoverned: meetingTemplateBeats.clubGoverned,
+			awardCategory: meetingTemplateBeats.awardCategory,
 		})
 		.from(meetingTemplateBeats)
 		.where(eq(meetingTemplateBeats.templateId, templateId))
@@ -718,6 +721,7 @@ export async function copyTemplateContent(
 				markYellow: b.markYellow,
 				markRed: b.markRed,
 				clubGoverned: b.clubGoverned,
+				awardCategory: b.awardCategory,
 			})),
 		);
 	}

@@ -196,6 +196,9 @@ describe("the projected deck quotes the club's rule on the governed row only (#6
 		vote.markGreen = 0.5;
 		vote.markYellow = 0.75;
 		vote.markRed = 1;
+		// An UNMARKED vote row: one that carries an award category projects a vote
+		// slide instead of a timed beat (#1635), which is not what this pins.
+		vote.awardCategory = null;
 		const seedRoles: TemplateRoleRow[] = [
 			...new Set(seeds.map((s) => s.roleKey).filter((k): k is string => !!k)),
 		].map((key) => ({ key, name: key, isSpeakerRole: key === "speaker" }));

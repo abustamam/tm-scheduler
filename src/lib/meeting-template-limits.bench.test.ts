@@ -147,6 +147,7 @@ function hostileBeats(
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		});
 	}
 	const remaining = beatCount - nonRepeatCount;
@@ -167,6 +168,7 @@ function hostileBeats(
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		});
 	}
 	return beats;
@@ -522,6 +524,7 @@ describe("buildTemplateRows render cost (#task-10)", () => {
 				markYellow: null,
 				markRed: null,
 				clubGoverned: false,
+				awardCategory: null,
 			},
 		];
 		const t0 = performance.now();

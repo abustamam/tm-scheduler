@@ -416,6 +416,7 @@ describe("the (V) legend and a section's hidden note", () => {
 					markYellow: null,
 					markRed: null,
 					clubGoverned: false,
+					awardCategory: null,
 				},
 			],
 			[

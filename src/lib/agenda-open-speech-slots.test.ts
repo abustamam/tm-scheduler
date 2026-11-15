@@ -366,6 +366,7 @@ describe("buildTemplateRows: open speech slot", () => {
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 			...over,
 		});
 		const roles = ROLES.filter((r) => r.isSpeakerRole);
@@ -494,6 +495,7 @@ describe("a non-repeating contest beat with every contestant open", () => {
 		markYellow: null,
 		markRed: null,
 		clubGoverned: false,
+		awardCategory: null,
 		...over,
 	});
 	const beats = [
@@ -605,6 +607,7 @@ describe("zero mode, non-repeating evaluator beat with mixed holders", () => {
 			markYellow: null,
 			markRed: null,
 			clubGoverned: false,
+			awardCategory: null,
 		};
 		const slots: AgendaSlot[] = [
 			speaker(0, "Ann"),

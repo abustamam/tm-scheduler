@@ -140,6 +140,7 @@ describe("editor / print clock parity", () => {
 				// marks below are the frozen snapshot it replaces, not the reason it
 				// fires.
 				clubGoverned: true,
+				awardCategory: null,
 			},
 		];
 		const roles: TemplateRoleRow[] = [

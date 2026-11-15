@@ -554,7 +554,12 @@ describe("Table Topics notes on a materialised meeting's deck (#880)", () => {
 		/** An officer's edit to the stored beats before render. */
 		edit: (seeds: Seeds) => Seeds = (s) => s,
 	) {
-		const fresh = materialiseRunOfShow(false, limits);
+		// Unmarked: a vote beat with an award category is a vote slide, not a
+		// `templateBeat` (#1635), and this pins where the NOTES land among beats.
+		const fresh = materialiseRunOfShow(false, limits).map((s) => ({
+			...s,
+			awardCategory: null,
+		}));
 		const toRows = (seeds: Seeds) =>
 			resolveAgendaRows({
 				geIntroducesFunctionaries: false,

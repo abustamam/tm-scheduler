@@ -114,6 +114,7 @@ export type RowPatch = Partial<
 		| "markYellow"
 		| "markRed"
 		| "clubGoverned"
+		| "awardCategory"
 	>
 >;
 
@@ -919,6 +920,10 @@ function AgendaTableRow({
 							// keeps printing the club's. Exactly the packet this feature
 							// exists to stop, reached by a misclick and an Undo.
 							clubGoverned: snapshot.clubGoverned,
+							// And the vote marker (#1635): the placeholder carries none, so
+							// without this Undo of a deleted Best Speaker row looks restored
+							// and has lost its vote slide and ballot QR for good.
+							awardCategory: snapshot.awardCategory,
 						});
 						// The restore is TWO calls and only `onAddRow` invalidates, so
 						// without this the officer is left looking at the placeholder
