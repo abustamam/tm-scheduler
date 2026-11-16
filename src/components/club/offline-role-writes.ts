@@ -122,7 +122,7 @@ export async function assignRoleViaQueue(
 				expectedHolderName: args.slot.assigneeName,
 			};
 		},
-		{ throwOnError: true },
+		{ throwOnError: true, slotId: args.slot.id },
 	);
 }
 
@@ -142,6 +142,6 @@ export async function releaseRoleViaQueue(
 			expectedHolder: holderKeyOf(args.slot),
 			expectedHolderName: args.slot.assigneeName,
 		}),
-		{ throwOnError: true },
+		{ throwOnError: true, slotId: args.slot.id },
 	);
 }

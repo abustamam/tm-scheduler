@@ -356,8 +356,10 @@ describe("useOfflineMinutes with role ops (#1638)", () => {
 		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
 		const direct = vi.fn(async () => {});
 		await act(async () => {
-			await result.current.mutate(direct, () =>
-				release({ opId: "r9", slotId: "s1", queuedBy: undefined }),
+			await result.current.mutate(
+				direct,
+				() => release({ opId: "r9", slotId: "s1", queuedBy: undefined }),
+				{ slotId: "s1" },
 			);
 		});
 		expect(direct).not.toHaveBeenCalled();
@@ -366,11 +368,72 @@ describe("useOfflineMinutes with role ops (#1638)", () => {
 			"r9",
 		]);
 		await act(async () => {
-			await result.current.mutate(direct, () =>
-				release({ opId: "r10", slotId: "s2", queuedBy: undefined }),
+			await result.current.mutate(
+				direct,
+				() => release({ opId: "r10", slotId: "s2", queuedBy: undefined }),
+				{ slotId: "s2" },
 			);
 		});
 		expect(direct).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=an online write on a slot with NO held op goes direct even when
+	//   its makeOp would throw (a claim with real speech details), while a held
+	//   op sits on another slot; nothing throws;
+	// fails_when=`mutate` probes `makeOp` while a held op exists, so the throw
+	//   escapes and the online write fails with the offline message;
+	// no_claim=the held slot itself (next test).
+	it("a held op on slot A does not make an unqueueable online write on slot B throw", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
+		const direct = vi.fn(async () => {});
+		await act(async () => {
+			await result.current.mutate(
+				direct,
+				() => {
+					throw new Error("speech details are online-only");
+				},
+				{ slotId: "s2" },
+			);
+		});
+		expect(direct).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=a role write on the HELD slot queues behind the held op, and when
+	//   its makeOp throws the error surfaces instead of going direct;
+	// fails_when=the held-slot check is dropped (it goes direct ahead of the op);
+	// no_claim=another slot (previous test).
+	it("a role write on the held slot queues, and an unqueueable one surfaces its error", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
+		const direct = vi.fn(async () => {});
+		await act(async () => {
+			await result.current.mutate(
+				direct,
+				() => release({ opId: "r7", slotId: "s1", queuedBy: undefined }),
+				{ slotId: "s1" },
+			);
+		});
+		expect(direct).not.toHaveBeenCalled();
+		expect(h.store).toHaveLength(2);
+		let thrown: unknown;
+		await act(async () => {
+			try {
+				await result.current.mutate(
+					direct,
+					() => {
+						throw new Error("speech details are online-only");
+					},
+					{ slotId: "s1" },
+				);
+			} catch (e) {
+				thrown = e;
+			}
+		});
+		expect(String(thrown)).toContain("online-only");
+		expect(direct).not.toHaveBeenCalled();
 	});
 
 	// protects=held ops are not re-dispatched in a loop: over a long window the

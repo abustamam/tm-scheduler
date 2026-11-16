@@ -679,7 +679,7 @@ export function useOfflineMinutes(input: {
 	async function mutate(
 		onlineFn: () => Promise<unknown>,
 		makeOp: () => QueuedOp,
-		options?: { throwOnError?: boolean },
+		options?: { throwOnError?: boolean; slotId?: string },
 	): Promise<void> {
 		// `draining` joins the guard so a reconnect drain isn't interleaved with a
 		// fresh edit (which could reorder ops).
@@ -735,12 +735,12 @@ export function useOfflineMinutes(input: {
 			await queueOp(makeOp());
 			return;
 		}
-		if (heldSlotIds.size > 0) {
-			const probe = makeOp();
-			if (isRoleSlotOp(probe) && heldSlotIds.has(probe.slotId)) {
-				await queueOp(probe);
-				return;
-			}
+		// The role writers name their slot, so no probe of `makeOp` is needed (it
+		// throws for writes that cannot be queued, which must still go direct on
+		// another slot). On a held slot a throw surfaces: it cannot go ahead.
+		if (options?.slotId !== undefined && heldSlotIds.has(options.slotId)) {
+			await queueOp(makeOp());
+			return;
 		}
 		// `navigator.onLine` is TRUE for a phone associated to an access point that
 		// routes nowhere — a captive portal, or the dead venue wifi this feature
