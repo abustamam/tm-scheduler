@@ -112,8 +112,8 @@ describe("useMeetingCover with the offline queue (#1638)", () => {
 		const { result } = setup({ offlineMinutes: h, myName: "Mia Manager" });
 		const open = { ...slot, assigneeId: null, assigneeName: null };
 		await result.current.actions.claim(open as never, undefined);
-		await result.current.actions.release(slot as never);
-		await result.current.actions.takeover(slot as never);
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.takeover?.(slot as never);
 		expect(mutate).toHaveBeenCalledTimes(3);
 		expect(s.claimSlot).not.toHaveBeenCalled();
 		expect(s.releaseSlot).not.toHaveBeenCalled();
@@ -140,8 +140,8 @@ describe("useMeetingCover with the offline queue (#1638)", () => {
 	it("without offlineMinutes they are the bare server calls", async () => {
 		const { result } = setup();
 		await result.current.actions.claim(slot as never, undefined);
-		await result.current.actions.release(slot as never);
-		await result.current.actions.takeover(slot as never);
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.takeover?.(slot as never);
 		expect(s.claimSlot).toHaveBeenCalledTimes(1);
 		expect(s.releaseSlot).toHaveBeenCalledWith({ data: { slotId: "slot1" } });
 		expect(s.reassignSlot).toHaveBeenCalledWith({
