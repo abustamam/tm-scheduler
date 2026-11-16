@@ -10,18 +10,33 @@ import { readSource } from "#/test/guard-source";
 
 const PRESENT = "src/routes/club.$clubId_.meeting.$meetingId.present.tsx";
 
+/** The text of the balanced parenthesised call whose "(" is at `open`. */
+function callBody(src: string, open: number): string {
+	let depth = 0;
+	for (let i = open; i < src.length; i++) {
+		if (src[i] === "(") depth++;
+		else if (src[i] === ")" && --depth === 0) return src.slice(open, i + 1);
+	}
+	return src.slice(open);
+}
+
+// protects=the Present deck is built from live data, not loader data;
+// fails_when=either deck builder is fed `loaded.` again (checked per call,
+// across nested braces); no_claim=nothing about the re-read or the render.
 describe("present route -> live meeting wiring", () => {
 	const src = readSource(PRESENT);
 
 	it("reads the loader into useLiveMeeting and builds from its result", () => {
 		expect(src).toMatch(/const loaded = Route\.useLoaderData\(\)/);
 		expect(src).toMatch(/const data = useLiveMeeting\(\s*loaded,/);
-		expect(
-			src,
-			"the deck must be built from the live `data`, never from `loaded`",
-		).not.toMatch(/buildSlideDeck\(\{[^}]*loaded\./);
-		expect(src).toMatch(/buildSlideDeck\(/);
-		expect(src).toMatch(/buildTemplateSlideDeck\(/);
+		for (const builder of ["buildSlideDeck", "buildTemplateSlideDeck"]) {
+			const at = src.indexOf(`${builder}(`);
+			expect(at, `${builder} is called`).toBeGreaterThan(-1);
+			expect(
+				callBody(src, at + builder.length),
+				`${builder} must be fed the live \`data\`, never \`loaded\``,
+			).not.toMatch(/\bloaded\b/);
+		}
 	});
 
 	it("re-reads through the same public projection as the loader", () => {

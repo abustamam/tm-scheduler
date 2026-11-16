@@ -6,27 +6,38 @@ export const AGENDA_CHANNEL = "gavelup-agenda";
 
 export type AgendaChangedMessage = { type: "agenda-changed"; at: number };
 
-/** Tell every other tab of this browser that something was saved. A no-op
- *  where there is no `BroadcastChannel` (SSR, old browsers). */
+const hasChannel = () =>
+	typeof window !== "undefined" && typeof BroadcastChannel !== "undefined";
+
+/** Tell every tab of this browser that something was saved. A no-op on the
+ *  server and where there is no `BroadcastChannel`, and it NEVER throws: the
+ *  save it follows has already succeeded, so a failing channel must not turn
+ *  it into an error. */
 export function postAgendaChanged(): void {
-	if (typeof BroadcastChannel === "undefined") return;
-	const channel = new BroadcastChannel(AGENDA_CHANNEL);
+	if (!hasChannel()) return;
 	try {
-		const message: AgendaChangedMessage = {
-			type: "agenda-changed",
-			at: Date.now(),
-		};
-		channel.postMessage(message);
-	} finally {
-		channel.close();
+		const channel = new BroadcastChannel(AGENDA_CHANNEL);
+		try {
+			const message: AgendaChangedMessage = {
+				type: "agenda-changed",
+				at: Date.now(),
+			};
+			channel.postMessage(message);
+		} finally {
+			channel.close();
+		}
+	} catch {
+		// Best effort only.
 	}
 }
 
-/** Run `cb` whenever ANOTHER tab posts `agenda-changed` (a channel never
- *  delivers to its own instance, and `postAgendaChanged` uses a throwaway one
- *  anyway). Returns the unsubscribe. A no-op where there is no channel. */
+/** Run `cb` whenever an `agenda-changed` message arrives on this channel. That
+ *  includes this tab's own posts (`postAgendaChanged` uses a throwaway channel
+ *  instance, and instances of one name all receive each other's messages).
+ *  Returns the unsubscribe. A no-op on the server and where there is no
+ *  channel. */
 export function subscribeAgendaChanged(cb: () => void): () => void {
-	if (typeof BroadcastChannel === "undefined") return () => {};
+	if (!hasChannel()) return () => {};
 	const channel = new BroadcastChannel(AGENDA_CHANNEL);
 	channel.onmessage = (e: MessageEvent<AgendaChangedMessage>) => {
 		if (e.data?.type === "agenda-changed") cb();

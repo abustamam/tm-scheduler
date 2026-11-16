@@ -477,11 +477,16 @@ function pushHandoff(
 	// slide that silently omits the people, which is the bug this closed. A `= []`
 	// here would have disarmed that from the one place it is constructed.
 	toSlots: AgendaSlot[],
+	// The STRUCTURAL position of this hand-off in the flow (#1637), never a member
+	// name: whether a hand-off exists depends on its introducer, so an
+	// order-based `#n` would renumber a later one when an earlier introducer is
+	// unassigned and send the presenter to the wrong slide.
+	anchor: string,
 ): void {
 	if (from != null && present)
 		deck.push({
 			kind: "handoff",
-			key: `handoff:${to}`,
+			key: `handoff:${to}@${anchor}`,
 			from,
 			to,
 			toLabel,
@@ -709,6 +714,8 @@ export function buildSlideDeck({
 	 * fall back to and both surfaces drop the section together.
 	 */
 	const geOwner = holder(slots, ROLE.generalEvaluator) ?? tmOwner;
+	// The slot behind `geOwner`, resolved with the same fallback, for slide keys.
+	const geOwnerSlot = generalEvaluator[0] ?? byRole(slots, ROLE.toastmaster)[0];
 	// The functionary intro. Gated exactly as the run sheet gates it: the owning
 	// role has a slot AND the club runs at least one functionary to introduce.
 	// Under MCF's variant the owner IS the General Evaluator, so it resolves
@@ -744,6 +751,7 @@ export function buildSlideDeck({
 			generalEvaluator.length > 0 && anyFunctionary,
 			`the ${geLabel}`,
 			introducedSlots(slots, HANDOFF_ROLES.generalEvaluator),
+			"earlyGeneralEvaluator",
 		);
 	}
 	if (introOwner != null && anyFunctionary) {
@@ -807,6 +815,7 @@ export function buildSlideDeck({
 		// name every one of these people, so listing them here duplicated the next
 		// slide. See the run sheet's speakers hand-off for the measurement.
 		[],
+		"speakers",
 	);
 	if (speakers.length > 0) {
 		const multi = speakers.length > 1;
@@ -841,6 +850,7 @@ export function buildSlideDeck({
 		ttOwner != null,
 		`the ${ttmLabel}`,
 		introducedSlots(slots, HANDOFF_ROLES.tableTopicsMaster),
+		"tableTopicsMaster",
 	);
 	if (ttOwner) {
 		deck.push({
@@ -892,6 +902,7 @@ export function buildSlideDeck({
 		generalEvaluator.length > 0,
 		`the ${geLabel}`,
 		introducedSlots(slots, HANDOFF_ROLES.generalEvaluator),
+		"generalEvaluator",
 	);
 
 	const evaluators = orderEvaluators(
@@ -908,6 +919,7 @@ export function buildSlideDeck({
 		"the speech evaluators",
 		// Empty for the same reason as the speakers hand-off above.
 		[],
+		"evaluators",
 	);
 	if (evaluators.length > 0) {
 		const multi = evaluators.length > 1;
@@ -948,12 +960,7 @@ export function buildSlideDeck({
 		deck.push({
 			kind: "evaluatorEvaluation",
 			// The owner's slot, so a change of person keeps the identity.
-			key: `evaluatorEvaluation:${
-				(
-					byRole(slots, ROLE.generalEvaluator)[0] ??
-						byRole(slots, ROLE.toastmaster)[0]
-				)?.id ?? ""
-			}`,
+			key: `evaluatorEvaluation:${geOwnerSlot?.id ?? ""}`,
 			owner: geOwner.role,
 			name: geOwner.name,
 			time: beatTiming(runOfShow, "evaluatorEvaluation"),

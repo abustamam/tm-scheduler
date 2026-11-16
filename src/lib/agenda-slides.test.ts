@@ -679,7 +679,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ geIntroducesFunctionaries: true })).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speakers",
+				key: "handoff:the speakers@speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -687,7 +687,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the Table Topics Master",
+				key: "handoff:the Table Topics Master@tableTopicsMaster",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the Table Topics Master",
 				toLabel: "the Table Topics Master",
@@ -695,7 +695,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the General Evaluator",
+				key: "handoff:the General Evaluator@generalEvaluator",
 				from: { role: "Table Topics Master", name: "Rasheed" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
@@ -703,7 +703,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the speech evaluators",
+				key: "handoff:the speech evaluators@evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -775,7 +775,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ slots: [totd, genEval, speaker, evaluator] })).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speakers",
+				key: "handoff:the speakers@speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -783,7 +783,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the General Evaluator",
+				key: "handoff:the General Evaluator@generalEvaluator",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
@@ -791,7 +791,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the speech evaluators",
+				key: "handoff:the speech evaluators@evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -822,7 +822,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ slots: [genEval, speaker, evaluator] })).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speech evaluators",
+				key: "handoff:the speech evaluators@evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -854,7 +854,7 @@ describe("hand-off slides (#363)", () => {
 		expect(open).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speakers",
+				key: "handoff:the speakers@speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -862,7 +862,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
-				key: "handoff:the speech evaluators",
+				key: "handoff:the speech evaluators@evaluators",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -882,7 +882,7 @@ describe("hand-off slides (#363)", () => {
 		expect(open).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speakers",
+				key: "handoff:the speakers@speakers",
 				from: { role: "Toastmaster of the Day", name: "— open —" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -926,7 +926,7 @@ describe("hand-off slides (#363)", () => {
 		expect(renamed).toEqual([
 			{
 				kind: "handoff",
-				key: "handoff:the speakers",
+				key: "handoff:the speakers@speakers",
 				from: { role: "Emcee", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -1720,7 +1720,7 @@ describe("buildSlideDeck full meeting ordering", () => {
 		const at = mcf.findIndex((s) => s.kind === "functionaryIntro");
 		expect(mcf[at - 1]).toEqual({
 			kind: "handoff",
-			key: "handoff:the General Evaluator",
+			key: "handoff:the General Evaluator@earlyGeneralEvaluator",
 			from: { role: "Toastmaster of the Day", name: "Schinthia" },
 			to: "the General Evaluator",
 			toLabel: "the General Evaluator",

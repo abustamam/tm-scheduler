@@ -9,6 +9,7 @@ import {
 } from "./agenda-slides";
 import { buildTemplateSlideDeck } from "./agenda-template-slides";
 import { CONTEST_TEMPLATE } from "./contest-template";
+import { remapSlideIndex } from "./slide-remap";
 
 const meeting: MeetingForDeck = {
 	scheduledAt: new Date("2026-06-25T23:45:00Z"),
@@ -184,6 +185,7 @@ describe("slide keys (#1637)", () => {
 		const deck = templated(contestSlots());
 		const keys = keysOf(deck);
 		const dupBases = keys.filter((k) => k?.includes("#"));
+		expect(dupBases.length).toBeGreaterThan(0);
 		for (const k of dupBases) {
 			const base = (k as string).split("#")[0];
 			expect(keys).toContain(base);
@@ -191,5 +193,83 @@ describe("slide keys (#1637)", () => {
 		// The contest's two contestants key by slot, not by a renumbering index.
 		expect(keys.some((k) => k?.endsWith("c0"))).toBe(true);
 		expect(keys.some((k) => k?.endsWith("c1"))).toBe(true);
+	});
+
+	// protects=a templated deck's per-slot beats are keyed by the slot's id;
+	// fails_when=the key falls back to the role key or label;
+	// no_claim=nothing about beats with no slot.
+	it("a templated per-slot beat key carries row.slotId", () => {
+		const keys = keysOf(templated(contestSlots()));
+		expect(keys).toContain("templateBeat:c0");
+		expect(keys).toContain("templateBeat:c1");
+	});
+
+	// protects=the presenter stays on the same person's slide when an earlier
+	// contestant is removed from a templated deck; fails_when=keys are index
+	// based or the remap is by position; no_claim=nothing about the UI.
+	it("a templated deck keeps the presenter on the same contestant after an earlier one is removed", () => {
+		const before = keysOf(templated(contestSlots())) as string[];
+		const at = before.indexOf("templateBeat:c1");
+		expect(at).toBeGreaterThan(-1);
+		const after = keysOf(
+			templated(contestSlots().filter((s) => s.id !== "c0")),
+		) as string[];
+		const landed = remapSlideIndex(before, after, at);
+		expect(after[landed]).toBe("templateBeat:c1");
+		expect(landed).not.toBe(at);
+	});
+
+	// protects=a hand-off key survives an earlier same-target hand-off dropping
+	// when its introducer is unassigned; fails_when=hand-off keys go back to
+	// `#n` order; no_claim=nothing about which hand-offs a club shows.
+	it("a later hand-off to the same target keeps its slide when an earlier introducer is unassigned", () => {
+		const slots = [
+			...STANDARD_SLOTS.map((s) =>
+				s.id === "tm" ? { ...s, roleKey: "toastmaster_of_the_day" } : s,
+			),
+			slot({
+				id: "ttm",
+				roleName: "Table Topics Master",
+				roleKey: "table_topics_master",
+				assigneeName: "Tam",
+			}),
+			slot({
+				id: "tmr",
+				roleName: "Timer",
+				roleKey: "timer",
+				assigneeName: "Tim",
+			}),
+		];
+		const build = (ss: AgendaSlot[]) =>
+			buildSlideDeck({
+				meeting,
+				club,
+				slots: ss,
+				geIntroducesFunctionaries: true,
+				ballotUrl: null,
+			});
+		const before = build(slots);
+		const geHandoffs = before.filter(
+			(s) => s.kind === "handoff" && s.to === "the General Evaluator",
+		);
+		expect(geHandoffs.length).toBe(2);
+		const lateKey = geHandoffs[1].key as string;
+		const prevKeys = keysOf(before) as string[];
+
+		// The Toastmaster's slot is removed: the early hand-off (from the TM) drops,
+		// the later one (from the Table Topics Master) stays.
+		const after = build(slots.filter((s) => s.id !== "tm"));
+		const nextKeys = keysOf(after) as string[];
+		expect(
+			after.filter(
+				(s) => s.kind === "handoff" && s.to === "the General Evaluator",
+			).length,
+		).toBe(1);
+		const landed = remapSlideIndex(
+			prevKeys,
+			nextKeys,
+			prevKeys.indexOf(lateKey),
+		);
+		expect(nextKeys[landed]).toBe(lateKey);
 	});
 });

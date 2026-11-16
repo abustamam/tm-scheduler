@@ -87,13 +87,9 @@ describe("MeetingPresent keeps its place on a live rebuild (#1637)", () => {
 		const view = mount([speech("1", "Wren"), speech("2", "Xavier"), awards()]);
 		fireEvent.keyDown(window, { key: "ArrowRight" });
 		fireEvent.keyDown(window, { key: "g" });
-		const current = () =>
-			document.querySelector('[aria-label^="Slide"][aria-current="true"]') ??
-			document.querySelector('[aria-label^="Slide"][data-cursor="true"]');
 		view.rerender([speech("2", "Xavier"), awards()]);
 		// Committing the highlighted card lands on the same speech.
 		fireEvent.keyDown(window, { key: "Enter" });
 		expect(screen.getAllByText(/Xavier/).length).toBeGreaterThan(0);
-		void current;
 	});
 });

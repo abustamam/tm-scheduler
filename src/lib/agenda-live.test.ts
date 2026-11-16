@@ -87,4 +87,34 @@ describe("agenda-live channel (#1637)", () => {
 		expect(cb).not.toHaveBeenCalled();
 		off();
 	});
+
+	// protects=the server never touches BroadcastChannel; fails_when=the window
+	// guard is dropped; no_claim=nothing about browsers.
+	it("is a no-op on the server (no window)", () => {
+		const ctor = vi.fn();
+		vi.stubGlobal("BroadcastChannel", ctor);
+		vi.stubGlobal("window", undefined);
+		expect(() => postAgendaChanged()).not.toThrow();
+		const off = subscribeAgendaChanged(() => {});
+		expect(() => off()).not.toThrow();
+		expect(ctor).not.toHaveBeenCalled();
+	});
+
+	// protects=a saved POST is never turned into an error by a broken channel;
+	// fails_when=the try/catch in postAgendaChanged is removed; no_claim=nothing
+	// about subscribing.
+	it("a throwing BroadcastChannel leaves the middleware result intact", async () => {
+		vi.stubGlobal(
+			"BroadcastChannel",
+			class {
+				constructor() {
+					throw new Error("blocked");
+				}
+			},
+		);
+		const result = { ok: true };
+		await expect(
+			clientFn()({ method: "POST", next: async () => result }),
+		).resolves.toBe(result);
+	});
 });

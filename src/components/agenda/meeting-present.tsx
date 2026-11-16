@@ -44,6 +44,7 @@ import {
 	NAVY_GRADIENT_BOTTOM,
 	NAVY_GRADIENT_TOP,
 } from "#/lib/slide-palette";
+import { remapSlideIndex } from "#/lib/slide-remap";
 import {
 	cqw,
 	SLIDE_BODY_BOTTOM_PCT,
@@ -95,28 +96,14 @@ function voteCategory(
 	return "best_table_topics";
 }
 
-/** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
+export { remapSlideIndex };
+
 /** A slide's identity for re-mapping; the builders always set `key`. */
 function slideKey(s: Slide): string {
 	return s.key ?? s.kind;
 }
 
-/**
- * Where the presenter should be after the deck's slides changed (#1637): the
- * index of the slide that has the same key, else the same index clamped to the
- * last slide. Pure, so the rule is testable without rendering.
- */
-export function remapSlideIndex(
-	prevKeys: readonly string[],
-	nextKeys: readonly string[],
-	i: number,
-): number {
-	const key = prevKeys[i];
-	const at = key === undefined ? -1 : nextKeys.indexOf(key);
-	if (at >= 0) return at;
-	return Math.max(0, Math.min(i, nextKeys.length - 1));
-}
-
+/** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
 export function MeetingPresent({
 	deck,
 	clubName,
