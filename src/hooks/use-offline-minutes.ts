@@ -109,6 +109,9 @@ export function useOfflineMinutes(input: {
 	 * member waits rather than replaying under a caller that cannot say who it is.
 	 */
 	sessionMemberId?: string | null;
+	/** The signed-in user (#1638): the identity an impersonating superadmin
+	 *  has instead of a member; stamped beside `sessionMemberId`. */
+	sessionUserId?: string | null;
 }) {
 	const online = useOnlineStatus();
 	const [busy, setBusy] = useState(false);
@@ -136,6 +139,8 @@ export function useOfflineMinutes(input: {
 	// Read at enqueue and at drain, not captured: the session can change between.
 	const sessionMemberIdRef = useRef(input.sessionMemberId ?? null);
 	sessionMemberIdRef.current = input.sessionMemberId ?? null;
+	const sessionUserIdRef = useRef(input.sessionUserId ?? null);
+	sessionUserIdRef.current = input.sessionUserId ?? null;
 
 	// The meeting an ASYNC CONTINUATION must re-check before it touches shared
 	// state, and the fix for the corruption the write deadline reopened.
@@ -395,6 +400,7 @@ export function useOfflineMinutes(input: {
 						dispatch: async (op) => {
 							const work = dispatchOp(op, meetingId, fns, {
 								memberId: sessionMemberIdRef.current,
+								userId: sessionUserIdRef.current,
 							});
 							const raced = await raceWithDeadline(
 								work,
@@ -537,7 +543,11 @@ export function useOfflineMinutes(input: {
 		// A role op remembers who queued it (#1638): the drain replays it only for
 		// that member. Stamped here, the one place every op passes, not by callers.
 		const op: QueuedOp = isRoleSlotOp(queued)
-			? { ...queued, queuedBy: sessionMemberIdRef.current }
+			? {
+					...queued,
+					queuedBy: sessionMemberIdRef.current,
+					queuedByUserId: sessionUserIdRef.current,
+				}
 			: queued;
 		// `enqueue` stays on the CAPTURED meeting and must: the op is that
 		// meeting's roll and has to persist under it, so it replays against it

@@ -199,6 +199,9 @@ export type RoleSlotOp =
 			expectedHolder: HolderKey;
 			expectedHolderName: string | null;
 			queuedBy?: string | null;
+			/** The signed-in USER when it was queued: an impersonating superadmin
+			 *  has no member, so this is the only identity the server can compare. */
+			queuedByUserId?: string | null;
 	  }
 	| {
 			/** Clear a role (#1638). A guest-held slot may be cleared offline. */
@@ -214,6 +217,9 @@ export type RoleSlotOp =
 			 *  the drain replays a role op only for this same member: under anyone
 			 *  else it would be a different actor's write (#1638). */
 			queuedBy?: string | null;
+			/** The signed-in USER when it was queued: an impersonating superadmin
+			 *  has no member, so this is the only identity the server can compare. */
+			queuedByUserId?: string | null;
 	  };
 
 /** Everything the offline queue can hold for a meeting. */

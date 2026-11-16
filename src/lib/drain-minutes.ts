@@ -43,6 +43,10 @@
 // server-fns (whose params carry the narrower unions) fail to assign to
 // `MinutesServerFns` by parameter contravariance.
 import { type AttendanceMode, withMode } from "#/lib/attendance-mode";
+import {
+	ROLE_OP_OTHER_USER_MESSAGE,
+	type RoleOpQueuedBy,
+} from "#/lib/role-op-owner";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import type { ExpectedHolderResult } from "#/server/slot-write-answers";
 import type {
@@ -141,13 +145,17 @@ export type RoleServerFns = {
 			actorMemberId: string;
 			speakerDetails?: { speechTitle?: string };
 			expectedHolder: HolderKey;
-		};
+		} & RoleOpQueuedBy;
 	}) => Promise<RoleWriteAnswer>;
 	reassignSlot: (args: {
-		data: { slotId: string; memberId: string; expectedHolder: HolderKey };
+		data: {
+			slotId: string;
+			memberId: string;
+			expectedHolder: HolderKey;
+		} & RoleOpQueuedBy;
 	}) => Promise<RoleWriteAnswer>;
 	releaseSlot: (args: {
-		data: { slotId: string; expectedHolder: HolderKey };
+		data: { slotId: string; expectedHolder: HolderKey } & RoleOpQueuedBy;
 	}) => Promise<RoleWriteAnswer>;
 };
 
@@ -201,7 +209,7 @@ export async function dispatchOp(
 	fns: MinutesServerFns & Partial<RoleServerFns>,
 	/** The member signed in NOW. A role op replays only for the member who
 	 *  queued it (see `ROLE_OP_OTHER_USER_MESSAGE`); a minutes op ignores it. */
-	session?: { memberId: string | null },
+	session?: { memberId: string | null; userId?: string | null },
 ): Promise<DispatchOutcome | undefined> {
 	switch (op.type) {
 		case "assignSlot":
@@ -335,14 +343,7 @@ export async function dispatchOp(
 	}
 }
 
-/** Thrown instead of replaying a role op under a different member (#1638). The
- *  queue is keyed by meeting, so without this an op queued by one officer would
- *  replay as whoever signs in next on the same laptop: `claimSlot` credits the
- *  session, so a "give the role to B" would become B claiming it for themselves
- *  (flipping their own decline, crediting them in the activity log). It stops
- *  the drain like any refusal: the op stays queued, `syncError` shows. */
-export const ROLE_OP_OTHER_USER_MESSAGE =
-	"Role changes queued on this device by another member are waiting. Sign in as them to sync.";
+export { ROLE_OP_OTHER_USER_MESSAGE };
 
 function assertQueuedByCurrentUser(
 	op: RoleSlotOp,
@@ -351,6 +352,17 @@ function assertQueuedByCurrentUser(
 	if ((op.queuedBy ?? null) !== (session?.memberId ?? null)) {
 		throw new Error(ROLE_OP_OTHER_USER_MESSAGE);
 	}
+}
+
+/** The stamp the server re-checks against its own session (#1638). Sent only
+ *  when the op carries one, so an op queued before it existed is not refused. */
+function queuedByOf(op: RoleSlotOp): RoleOpQueuedBy {
+	return {
+		...(op.queuedBy !== undefined ? { queuedBy: op.queuedBy } : {}),
+		...(op.queuedByUserId !== undefined
+			? { queuedByUserId: op.queuedByUserId }
+			: {}),
+	};
 }
 
 /** What replaying one op reports back, for the ops that report anything. */
@@ -380,7 +392,11 @@ async function dispatchRoleOp(
 	let answer: RoleWriteAnswer;
 	if (op.type === "releaseSlot") {
 		answer = await need("releaseSlot")({
-			data: { slotId: op.slotId, expectedHolder: op.expectedHolder },
+			data: {
+				slotId: op.slotId,
+				expectedHolder: op.expectedHolder,
+				...queuedByOf(op),
+			},
 		});
 	} else if (op.expectedHolder === null) {
 		// A claim needs its asserting actor; the queue refuses to hold an assign
@@ -395,6 +411,7 @@ async function dispatchRoleOp(
 				actorMemberId: op.actorMemberId,
 				...(op.speakerDetails ? { speakerDetails: op.speakerDetails } : {}),
 				expectedHolder: null,
+				...queuedByOf(op),
 			},
 		});
 	} else {
@@ -403,6 +420,7 @@ async function dispatchRoleOp(
 				slotId: op.slotId,
 				memberId: op.memberId,
 				expectedHolder: op.expectedHolder,
+				...queuedByOf(op),
 			},
 		});
 	}
