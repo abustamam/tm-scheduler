@@ -323,7 +323,7 @@ export function useOfflineMinutes(input: {
 				// The slot writers load only when the queue holds a role op: a pure
 				// minutes drain must not pull them in.
 				const roleFns: Partial<RoleServerFns> = ops.some(isRoleSlotOp)
-					? await import("#/server/slots").then(
+					? await import("#/lib/role-server-fns").then(
 							({ claimSlot, reassignSlot, releaseSlot }) => ({
 								claimSlot,
 								reassignSlot,

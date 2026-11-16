@@ -167,17 +167,8 @@ export function useMeetingCover(args: {
 		me: { id: string; name: string },
 		speakerDetails?: SpeakerDetails,
 	) {
-		const direct = () =>
-			claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId: me.id,
-					actorMemberId: me.id,
-					speakerDetails,
-				},
-			});
 		if (!offlineMinutes) {
-			await direct();
+			await claimAs(me, slot, speakerDetails);
 			return;
 		}
 		await assignRoleViaQueue(offlineMinutes, {
@@ -187,7 +178,7 @@ export function useMeetingCover(args: {
 			speakerDetails: hasSpeakerDetails(speakerDetails)
 				? speakerDetails
 				: undefined,
-			direct,
+			direct: () => claimAs(me, slot, speakerDetails),
 		});
 	}
 	async function reassignOrQueue(

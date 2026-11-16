@@ -2147,11 +2147,10 @@ export async function lockMemberForAssignment(
 }
 
 /**
- * The actor gates of a claim (#763, #1283), lifted out of `claimSlotCore` so the
+ * The actor gates of a claim (#763, #1283), copied from `claimSlotCore` (a guard test reads the gates there, so they stay inline in it) so the
  * expected-holder path (#1638) can run them BEFORE it compares holders: an
  * ineligible actor must hear its refusal even when the write would be skipped
- * as already applied. Same statements, same order, same locks as when they
- * lived inline.
+ * as already applied. KEEP THE TWO IN STEP.
  */
 async function assertClaimActorGates(
 	tx: Tx,
@@ -2289,7 +2288,52 @@ export async function claimSlotCore(
 	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
-	await assertClaimActorGates(tx, { ...args, meetingId: slot.meetingId });
+	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
+	// themselves, whatever the caller passed. Mirrors `connectorActor`.
+	if (
+		args.proof === "connector" &&
+		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
+	) {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
+	if (args.proof === "connector") {
+		// The connector arm takes the same attendance lock as the asserted arm and
+		// re-checks with the roll-aware `isMemberUnavailable`: a claim must not
+		// slip between this member's own decline (browser) and the flip below.
+		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		if (
+			await isMemberUnavailable(tx, {
+				memberId: args.memberId,
+				meetingId: slot.meetingId,
+			})
+		) {
+			throw new Error("You're marked as not coming to that meeting.");
+		}
+	}
+	if (args.proof === "asserted") {
+		// Through `tx`: this runs inside the caller's transaction, and a pooled
+		// read here holds one connection while waiting on a second.
+		if (
+			forSomeoneElse &&
+			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+		// Held to commit, so a releasing decline cannot slip between this read
+		// and the flip below and leave the role on a member who said no.
+		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
+		// PLAN only, never the roll: this caller holds no session and the roll is
+		// members-only, so the refusal depends on the plan answer alone. It runs
+		// before the conditional UPDATE below, so a refusal writes nothing.
+		if (
+			await isMemberNotComing(tx, {
+				memberId: args.memberId,
+				meetingId: slot.meetingId,
+			})
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+	}
 
 	// Conditional UPDATE is the race guard: only one claim can flip 'open'. The
 	// meeting's status rides in the SAME statement (#1057, #1107,
