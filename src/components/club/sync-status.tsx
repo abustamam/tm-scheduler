@@ -21,6 +21,7 @@
 // Topics, awards and action-item edits, which roll mode knows nothing about. What
 // sharing this component buys is narrower: one copy of the wording and one priority
 // order, so a fix is not made twice and cannot drift between the two.
+
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -28,6 +29,7 @@ import {
 	Loader2,
 	WifiOff,
 } from "lucide-react";
+import { useState } from "react";
 import { Button } from "#/components/ui/button";
 
 /**
@@ -43,7 +45,70 @@ export type SyncStatusProps = {
 	syncError: string | null;
 	justSynced: boolean;
 	onRetry: () => void;
+	/** Role changes queued on this device by another member (#1638), waiting
+	 *  for them to sign in. Not part of `queueCount`; shown as their own line. */
+	heldCount?: number;
+	/** Throws those held changes away. Omit to show the line without it. */
+	onDiscardHeld?: () => void;
 };
+
+/** The held-role-changes line (#1638). Discard is a two-step inline confirm,
+ *  not `window.confirm`: it is irreversible, and a native dialog is dismissed
+ *  by some embedded browsers. */
+function HeldRoleChanges({
+	count,
+	onDiscard,
+}: {
+	count: number;
+	onDiscard?: () => void;
+}) {
+	const [confirming, setConfirming] = useState(false);
+	const plural = count === 1 ? "" : "s";
+	return (
+		<output className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-sm">
+			<span>
+				{count} role change{plural} on this device {count === 1 ? "is" : "are"}{" "}
+				waiting for the member who made {count === 1 ? "it" : "them"}.
+			</span>
+			{onDiscard && !confirming ? (
+				<Button
+					type="button"
+					variant="link"
+					size="sm"
+					className="h-auto p-0 align-baseline"
+					onClick={() => setConfirming(true)}
+				>
+					Discard
+				</Button>
+			) : null}
+			{onDiscard && confirming ? (
+				<span className="flex items-center gap-2">
+					<Button
+						type="button"
+						variant="link"
+						size="sm"
+						className="h-auto p-0 align-baseline text-destructive"
+						onClick={() => {
+							setConfirming(false);
+							onDiscard();
+						}}
+					>
+						Discard {count} change{plural}?
+					</Button>
+					<Button
+						type="button"
+						variant="link"
+						size="sm"
+						className="h-auto p-0 align-baseline"
+						onClick={() => setConfirming(false)}
+					>
+						Keep
+					</Button>
+				</span>
+			) : null}
+		</output>
+	);
+}
 
 /**
  * One cohesive indicator for the offline write-queue's sync lifecycle. Purely
@@ -82,7 +147,19 @@ export type SyncStatusProps = {
  * An EMPTY queue with none of the above → renders nothing (the steady state is
  * invisible).
  */
-export function SyncStatus({
+export function SyncStatus(props: SyncStatusProps) {
+	const { heldCount = 0, onDiscardHeld } = props;
+	const main = <SyncStatusMain {...props} />;
+	if (heldCount === 0) return main;
+	return (
+		<div className="space-y-2">
+			{main}
+			<HeldRoleChanges count={heldCount} onDiscard={onDiscardHeld} />
+		</div>
+	);
+}
+
+function SyncStatusMain({
 	online,
 	queueCount,
 	draining,

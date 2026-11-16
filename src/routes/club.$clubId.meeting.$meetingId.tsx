@@ -1631,6 +1631,10 @@ function MeetingView() {
 								onRetry: () => {
 									void offlineMinutes.retryDrain();
 								},
+								heldCount: offlineMinutes.heldOps.length,
+								onDiscardHeld: () => {
+									void offlineMinutes.discardHeld();
+								},
 							}}
 						/>
 					),
@@ -1716,6 +1720,8 @@ function MeetingView() {
 												syncError={offlineMinutes.syncError}
 												justSynced={offlineMinutes.justSynced}
 												onRetry={() => void offlineMinutes.retryDrain()}
+												heldCount={offlineMinutes.heldOps.length}
+												onDiscardHeld={() => void offlineMinutes.discardHeld()}
 											/>
 											<AwardsSection
 												meetingId={meeting.id}
