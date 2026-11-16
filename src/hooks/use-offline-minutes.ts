@@ -7,7 +7,6 @@ import {
 	dispatchOp,
 	drainMinutesQueue,
 	type MinutesServerFns,
-	ROLE_OP_OTHER_USER_MESSAGE,
 	type RoleServerFns,
 	roleSkipMessage,
 } from "#/lib/drain-minutes";
@@ -121,6 +120,14 @@ export function useOfflineMinutes(input: {
 	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
 	const [draining, setDraining] = useState(false);
 	const [syncError, setSyncError] = useState<string | null>(null);
+	// Role ops the last drain held for another member (#1638), tagged with the
+	// session identity it held them under. A hold is NOT a `syncError`: that parks
+	// the whole auto-drain and, with the queue never empty, sends every later edit
+	// to the queue to wait for a Retry. A hold only sets these ops aside.
+	const [held, setHeld] = useState<{ identity: string; ops: RoleSlotOp[] }>({
+		identity: "",
+		ops: [],
+	});
 	// Transient "All changes synced" confirmation shown briefly after a drain
 	// fully lands, then auto-dismissed (the effect below clears it on a timer).
 	const [justSynced, setJustSynced] = useState(false);
@@ -143,6 +150,10 @@ export function useOfflineMinutes(input: {
 	sessionMemberIdRef.current = input.sessionMemberId ?? null;
 	const sessionUserIdRef = useRef(input.sessionUserId ?? null);
 	sessionUserIdRef.current = input.sessionUserId ?? null;
+	const identity = identityKey(
+		input.sessionMemberId ?? null,
+		input.sessionUserId ?? null,
+	);
 
 	// The meeting an ASYNC CONTINUATION must re-check before it touches shared
 	// state, and the fix for the corruption the write deadline reopened.
@@ -223,6 +234,7 @@ export function useOfflineMinutes(input: {
 		setQueue([]);
 		setSnapshot(null);
 		setSyncError(null);
+		setHeld({ identity: "", ops: [] });
 		setJustSynced(false);
 		// `busy` too, and it is not cosmetic. The route wires
 		// `busy={offlineMinutes.busy || offlineMinutes.draining}` into the panel's
@@ -314,6 +326,22 @@ export function useOfflineMinutes(input: {
 		setSnapshot(minutes);
 		void saveSnapshot(meetingId, minutes);
 	}, [online, minutes, meetingId]);
+
+	// The held ops that still exist, for the CURRENT session identity. A hold
+	// recorded under another identity is not remembered: signing in as the owner
+	// (or anyone else) makes the ops eligible again, and each identity dispatches
+	// them once, because the auto-drain skips them until the identity changes or
+	// the user presses Retry.
+	const heldOps = useMemo(() => {
+		if (held.identity !== identity) return [];
+		const queued = new Set(queue.map((o) => o.opId));
+		return held.ops.filter((o) => queued.has(o.opId));
+	}, [held, identity, queue]);
+	const heldIds = useMemo(() => new Set(heldOps.map((o) => o.opId)), [heldOps]);
+	const heldSlotIds = useMemo(
+		() => new Set(heldOps.map((o) => o.slotId)),
+		[heldOps],
+	);
 
 	// #176 slice 4: replay the queued ops to the server IN ORDER, removing each as
 	// it lands, then re-fetch authoritative state. Stops at the first failure and
@@ -454,6 +482,17 @@ export function useOfflineMinutes(input: {
 							)?.name ?? "this member";
 						toast.success(releasedToastMessage(name, r.labels));
 					}
+					// Recorded for every outcome, so a drain that held nothing clears an
+					// earlier hold (signed in as the owner, say).
+					if (meetingIdRef.current === meetingId) {
+						setHeld({
+							identity: identityKey(
+								sessionMemberIdRef.current,
+								sessionUserIdRef.current,
+							),
+							ops: (result.held ?? []).filter(isRoleSlotOp),
+						});
+					}
 					if (result.error) {
 						// The agenda must show the open slots even when a later op failed.
 						// Any applied op, not just a releasing one (#1600): an award that
@@ -476,14 +515,11 @@ export function useOfflineMinutes(input: {
 						}
 					} else if (result.held && result.held.length > 0) {
 						// Role ops held for another member (#1638): everything else drained,
-						// these stay queued. Not "all synced": the banner shows why and
-						// `syncError` parks the auto-drain so the held op is not retried in
-						// a loop. Retry (or signing in as the owner, then Retry) replays it.
+						// these stay queued. Not "all synced", and NOT a `syncError`: the
+						// hold is recorded above, the banner offers Discard, and the
+						// auto-drain keeps running for every other op.
 						if (result.drainedCount > 0 || result.released.length > 0) {
 							await onMutatedRef.current(meetingId);
-						}
-						if (meetingIdRef.current === meetingId) {
-							setSyncError(ROLE_OP_OTHER_USER_MESSAGE);
 						}
 					} else {
 						// Everything replayed — re-fetch authoritative state (the online
@@ -530,10 +566,15 @@ export function useOfflineMinutes(input: {
 	// anything about `draining`: each pass either shortens the queue (progress),
 	// empties it, or sets `syncError` and is gated out here. "stops a DRAIN the
 	// network never answers" holds that with a dispatch-count assertion.
+	//
+	// Held role ops (#1638) are not drainable for this identity, so a queue of
+	// only held ops does not re-fire it (that would re-dispatch them in a loop);
+	// any other op does, and the drain carries the held ones along in order.
 	useEffect(() => {
-		if (!online || queue.length === 0 || syncError || draining) return;
+		const drainable = queue.some((o) => !heldIds.has(o.opId));
+		if (!online || !drainable || syncError || draining) return;
 		void runDrain(queue);
-	}, [online, queue, syncError, runDrain, draining]);
+	}, [online, queue, syncError, runDrain, draining, heldIds]);
 
 	// Going offline clears a stale sync error so the next genuine reconnect
 	// auto-retries; while online, a persistent error stays set (see above).
@@ -685,9 +726,21 @@ export function useOfflineMinutes(input: {
 		// through `queueOp` below or the persisted load, both of which commit before
 		// the next user event can be dispatched — a tap during `writeOnline`'s
 		// in-flight window is already refused by `busy`.
-		if (!online || queue.length > 0) {
+		// Held role ops (#1638) are not in the way: they wait for another member,
+		// so they do not turn a direct write into a queued one. The exception is a
+		// ROLE write on the very slot a held op is waiting on, which queues behind
+		// it so the order on that slot holds.
+		const activeCount = queue.filter((o) => !heldIds.has(o.opId)).length;
+		if (!online || activeCount > 0) {
 			await queueOp(makeOp());
 			return;
+		}
+		if (heldSlotIds.size > 0) {
+			const probe = makeOp();
+			if (isRoleSlotOp(probe) && heldSlotIds.has(probe.slotId)) {
+				await queueOp(probe);
+				return;
+			}
 		}
 		// `navigator.onLine` is TRUE for a phone associated to an access point that
 		// routes nowhere — a captive portal, or the dead venue wifi this feature
@@ -725,6 +778,21 @@ export function useOfflineMinutes(input: {
 	// 8-key return (`mutate, opMeta, busy, queue, snapshot, draining, syncError,
 	// justSynced`): `meeting-minutes.tsx`'s existing Retry control needs a way to
 	// reach this, and the hook owns `runDrain` now.
+	// Throw away the role ops held for another member (#1638), and only those:
+	// minutes ops and every other queued op stay.
+	const discardHeld = async () => {
+		if (drainingRef.current || heldOps.length === 0) return;
+		const ids = new Set(heldOps.map((o) => o.opId));
+		for (const id of ids) await removeOp(meetingId, id);
+		if (meetingIdRef.current === meetingId) {
+			setQueue((q) => q.filter((o) => !ids.has(o.opId)));
+			setHeld({ identity: "", ops: [] });
+		}
+		// After the removal committed: a Present deck re-reads the queue and
+		// stops projecting them.
+		postAgendaChanged();
+	};
+
 	const retryDrain = async () => {
 		// Nothing queued, yet an error is showing. TWO ways into that state, not the
 		// one this comment used to claim: the persisted load rejected
@@ -762,11 +830,18 @@ export function useOfflineMinutes(input: {
 		roleOps,
 		/** Everything waiting to drain, minutes and role ops alike: what a
 		 *  "n changes pending" indicator counts. */
-		pendingCount: queue.length,
+		pendingCount: queue.length - heldOps.length,
+		/** Role ops held for another member on this device (#1638). */
+		heldOps,
+		discardHeld,
 		snapshot,
 		draining,
 		syncError,
 		justSynced,
 		retryDrain,
 	};
+}
+
+function identityKey(memberId: string | null, userId: string | null): string {
+	return `${memberId ?? ""}|${userId ?? ""}`;
 }

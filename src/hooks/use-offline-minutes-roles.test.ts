@@ -8,10 +8,7 @@
  */
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	ROLE_OP_OTHER_USER_MESSAGE,
-	roleSkipMessage,
-} from "#/lib/drain-minutes";
+import { roleSkipMessage } from "#/lib/drain-minutes";
 import type { QueuedOp, RoleSlotOp } from "#/lib/offline-minutes-queue";
 import { SIGN_IN_TO_QUEUE_ROLE_MESSAGE } from "#/lib/role-op-owner";
 import { useOfflineMinutes } from "./use-offline-minutes";
@@ -270,44 +267,197 @@ describe("useOfflineMinutes with role ops (#1638)", () => {
 	});
 
 	// protects=R2: op queued by officer A is held when member B is signed in:
-	//   nothing is dispatched, the op stays queued, and the sync error says why;
-	// fails_when=the hook drains under whoever is signed in, or passes no session
-	//   to the dispatch;
+	//   nothing is dispatched, the op stays queued, and it is reported as held
+	//   (not as a sync error, which would park the auto-drain);
+	// fails_when=the hook drains under whoever is signed in, passes no session
+	//   to the dispatch, or reports the hold as a `syncError`;
 	// no_claim=what B's attendance holds (no server call is made at all).
-	it("R2: holds another member's role op and shows the sync error", async () => {
+	it("R2: holds another member's role op and reports it as held", async () => {
 		h.store = [assign({ queuedBy: "officer-a" })];
 		const { result } = mount("member-b");
-		await waitFor(
-			() => expect(result.current.syncError).toBe(ROLE_OP_OTHER_USER_MESSAGE),
-			{ timeout: 5000 },
-		);
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1), {
+			timeout: 5000,
+		});
 		expect(h.claimSlot).not.toHaveBeenCalled();
 		expect(h.store).toHaveLength(1);
-		expect(result.current.pendingCount).toBe(1);
+		expect(result.current.syncError).toBeNull();
+		expect(result.current.pendingCount).toBe(0);
 	});
 
-	// protects=option A in the hook: a role op held for another member leaves the
-	//   attendance op behind it draining, stays queued, the indicator still
-	//   reports pending work (syncError set, pendingCount 1), and the drain does
-	//   not spin on it;
-	// fails_when=the hold stops the drain (attendance never dispatched), the
-	//   hold reads as "all synced", or the auto-drain retries the held op;
+	// protects=a hold is not a sync error: attendance queued behind a held role
+	//   op drains, the held op stays, and the drain is not re-run on it;
+	// fails_when=the hold stops the drain (attendance never dispatched), reads as
+	//   "all synced", or sets `syncError`;
 	// no_claim=a held MINUTES op (unchanged stop-the-drain, in drain-role-ops).
-	it("a held role op: later attendance drains, the indicator still waits, no spin", async () => {
+	it("a held role op: later attendance drains and no sync error shows", async () => {
 		h.store = [assign({ queuedBy: "officer-a" }), attendance()];
 		const { result } = mount("member-b");
-		await waitFor(
-			() => expect(result.current.syncError).toBe(ROLE_OP_OTHER_USER_MESSAGE),
-			{ timeout: 5000 },
-		);
-		expect(h.setAttendance).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(h.setAttendance).toHaveBeenCalledTimes(1), {
+			timeout: 5000,
+		});
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
 		expect(h.claimSlot).not.toHaveBeenCalled();
 		expect(h.store.map((o) => (o as { opId: string }).opId)).toEqual(["a1"]);
-		expect(result.current.pendingCount).toBe(1);
+		expect(result.current.syncError).toBeNull();
 		expect(result.current.justSynced).toBe(false);
-		await new Promise((r) => setTimeout(r, 100));
-		expect(h.setAttendance).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=after a hold, a newly queued attendance op auto-drains with no
+	//   Retry (the hold does not park the auto-drain);
+	// fails_when=the hold sets `syncError` or the auto-drain gates on the queue
+	//   holding only held ops, so the new op waits;
+	// no_claim=the order of that op against the held one (different keys).
+	it("after a hold, a newly queued attendance op auto-drains without Retry", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result, rerender } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
+		h.online = false;
+		rerender();
+		await act(async () => {
+			await result.current.mutate(
+				async () => {},
+				() => attendance(),
+			);
+		});
+		expect(h.setAttendance).not.toHaveBeenCalled();
+		h.online = true;
+		rerender();
+		await waitFor(() => expect(h.setAttendance).toHaveBeenCalledTimes(1), {
+			timeout: 5000,
+		});
+		expect(result.current.syncError).toBeNull();
+		expect(h.store.map((o) => (o as { opId: string }).opId)).toEqual(["a1"]);
+	});
+
+	// protects=an online write with only held ops in the queue goes straight to
+	//   the server, not into the queue;
+	// fails_when=`mutate` counts held ops toward "the queue is non-empty";
+	// no_claim=a role write on a held slot (next test).
+	it("an online write with only held ops queued goes direct", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
+		const direct = vi.fn(async () => {});
+		await act(async () => {
+			await result.current.mutate(direct, () => attendance());
+		});
+		expect(direct).toHaveBeenCalledTimes(1);
+		expect(h.store).toHaveLength(1);
+	});
+
+	// protects=a ROLE write on a slot that has a held op queues behind it (the
+	//   per-slot order holds); a role write on another slot still goes direct;
+	// fails_when=the held-slot exception is dropped (the write lands first and
+	//   the held op later replays over it);
+	// no_claim=a minutes write on that slot (not a role op).
+	it("a role write on a held slot queues; on another slot it goes direct", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
+		const direct = vi.fn(async () => {});
+		await act(async () => {
+			await result.current.mutate(direct, () =>
+				release({ opId: "r9", slotId: "s1", queuedBy: undefined }),
+			);
+		});
+		expect(direct).not.toHaveBeenCalled();
+		expect(h.store.map((o) => (o as { opId: string }).opId)).toEqual([
+			"a1",
+			"r9",
+		]);
+		await act(async () => {
+			await result.current.mutate(direct, () =>
+				release({ opId: "r10", slotId: "s2", queuedBy: undefined }),
+			);
+		});
+		expect(direct).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=held ops are not re-dispatched in a loop: over a long window the
+	//   drain runs once for them (counted at the cross-tab lock, which every
+	//   drain takes);
+	// fails_when=the auto-drain re-fires on a queue of held ops only;
+	// no_claim=that a drain made for an identity change or Retry also runs once.
+	it("does not re-dispatch held ops in a loop", async () => {
+		vi.useFakeTimers();
+		try {
+			const request = vi.fn((_n: string, cb: () => Promise<unknown>) => cb());
+			Object.defineProperty(navigator, "locks", {
+				configurable: true,
+				value: { request },
+			});
+			h.store = [assign({ queuedBy: "officer-a" })];
+			const { result } = mount("member-b");
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(result.current.heldOps).toHaveLength(1);
+			expect(request).toHaveBeenCalledTimes(1);
+			expect(h.claimSlot).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// protects=signing in as the owner makes the held ops eligible again and they
+	//   drain;
+	// fails_when=held ids are remembered across a session change;
+	// no_claim=a second non-owner identity (it holds them again, once).
+	it("signing in as the owner drains the held ops", async () => {
+		h.store = [assign({ queuedBy: "officer-a" })];
+		const { result, rerender } = renderHook(
+			({ m }: { m: string }) =>
+				useOfflineMinutes({
+					meetingId: "m1",
+					onMutated: async () => {},
+					sessionMemberId: m,
+				}),
+			{ initialProps: { m: "member-b" } },
+		);
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(1));
 		expect(h.claimSlot).not.toHaveBeenCalled();
+		rerender({ m: "officer-a" });
+		await waitFor(() => expect(h.claimSlot).toHaveBeenCalledTimes(1), {
+			timeout: 5000,
+		});
+		await waitFor(() => expect(h.store).toEqual([]));
+		expect(result.current.heldOps).toHaveLength(0);
+	});
+
+	// protects=Discard removes ONLY the held role ops, leaves a minutes op, and
+	//   tells the deck AFTER the removal (so the deck's re-read of the queue,
+	//   which is what stops it projecting them, no longer finds them);
+	// fails_when=Discard clears the whole queue, leaves a held op, or broadcasts
+	//   before the removal;
+	// no_claim=the confirm step (a SyncStatus concern).
+	it("Discard removes only the held ops and broadcasts after", async () => {
+		h.store = [
+			assign({ queuedBy: "officer-a" }),
+			release({ queuedBy: "officer-a" }),
+		];
+		const { result, rerender } = mount("member-b");
+		await waitFor(() => expect(result.current.heldOps).toHaveLength(2));
+		// A minutes op queued meanwhile, offline, and not drained yet.
+		h.online = false;
+		rerender();
+		await act(async () => {
+			await result.current.mutate(
+				async () => {},
+				() => attendance(),
+			);
+		});
+		let seenByDeck: string[] = [];
+		h.postChanged.mockImplementation(() => {
+			seenByDeck = h.store.map((o) => (o as { opId: string }).opId);
+		});
+		await act(async () => {
+			await result.current.discardHeld();
+		});
+		expect(seenByDeck).toEqual(["t1"]);
+		expect(h.postChanged).toHaveBeenCalled();
+		expect(h.store.map((o) => (o as { opId: string }).opId)).toEqual(["t1"]);
+		expect(result.current.heldOps).toHaveLength(0);
+		expect(result.current.queue).toHaveLength(1);
 	});
 
 	// protects=signed out, a clear or a reassign is refused at queue time with
