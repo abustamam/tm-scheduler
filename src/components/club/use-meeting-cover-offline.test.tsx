@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OfflineMinutesHandle } from "./offline-role-writes";
 import { useMeetingCover } from "./use-meeting-cover";
 
+const router = vi.hoisted(() => ({ invalidate: vi.fn(async () => {}) }));
 vi.mock("@tanstack/react-router", () => ({
-	useRouter: () => ({ invalidate: vi.fn(async () => {}) }),
+	useRouter: () => router,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 vi.mock("#/components/write-error-toast", () => ({ showWriteError: vi.fn() }));
@@ -147,5 +148,125 @@ describe("useMeetingCover with the offline queue (#1638)", () => {
 		expect(s.reassignSlot).toHaveBeenCalledWith({
 			data: { slotId: "slot1", memberId: "mgr" },
 		});
+	});
+
+	// #1648: a QUEUED role write must not re-run the route loader (offline it
+	// fails and the page is replaced by the route error screen).
+	it("a queued role write does not invalidate the route", async () => {
+		const { h } = handle();
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.onMutated();
+		expect(router.invalidate).not.toHaveBeenCalled();
+		// The skip is for that one write only: the next refresh goes through.
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	it("a role write that went direct still invalidates", async () => {
+		const mutate = vi.fn(async (direct: () => Promise<unknown>) => {
+			await direct();
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	it("a role write that threw queued nothing, so the next refresh invalidates", async () => {
+		const mutate = vi.fn(async () => {
+			throw new Error("still syncing");
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await expect(
+			result.current.actions.release?.(slot as never),
+		).rejects.toThrow();
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	// Every queue-capable action, manager and self-serve: queued skips the
+	// refresh, direct keeps it. `claim` and `takeover` are claimOrQueue and
+	// reassignOrQueue; `release` is releaseOrQueue.
+	const open = { ...slot, assigneeId: null, assigneeName: null };
+	const actionsUnderTest = [
+		[
+			"claim",
+			(a: never) => (a as never as Act).claim(open as never, undefined),
+		],
+		["release", (a: never) => (a as never as Act).release?.(slot as never)],
+		["takeover", (a: never) => (a as never as Act).takeover?.(slot as never)],
+	] as const;
+	type Act = {
+		claim: (s: never, d: undefined) => Promise<void>;
+		release?: (s: never) => Promise<void>;
+		takeover?: (s: never) => Promise<void>;
+	};
+	for (const manage of [true, false]) {
+		for (const [name, call] of actionsUnderTest) {
+			const who = manage ? "manager" : "self-serve";
+			it(`${who} ${name}: queued skips the refresh, direct invalidates (#1648)`, async () => {
+				const queuedHandle = handle().h;
+				const q = setup({
+					offlineMinutes: queuedHandle,
+					effectiveCanManage: manage,
+					myName: "Mia Manager",
+					requireIdentity: vi.fn(async () => ({ id: "mgr", name: "Mia" })),
+				});
+				await call(q.result.current.actions as never);
+				await q.result.current.actions.onMutated();
+				expect(router.invalidate).not.toHaveBeenCalled();
+				q.unmount();
+
+				const mutate = vi.fn(async (direct: () => Promise<unknown>) => {
+					await direct();
+				});
+				const d = setup({
+					offlineMinutes: { busy: false, draining: false, mutate } as never,
+					effectiveCanManage: manage,
+					myName: "Mia Manager",
+					requireIdentity: vi.fn(async () => ({ id: "mgr", name: "Mia" })),
+				});
+				await call(d.result.current.actions as never);
+				await d.result.current.actions.onMutated();
+				expect(router.invalidate).toHaveBeenCalledTimes(1);
+			});
+		}
+	}
+
+	// Race 1: a direct call abandoned at the write deadline resolves LATER. It
+	// must not clear the flag that now belongs to a second queued write.
+	it("a timed-out direct call resolving late does not clear a later queued write's flag", async () => {
+		const late: Array<() => Promise<unknown>> = [];
+		const mutate = vi.fn(async (direct: () => Promise<unknown>) => {
+			late.push(direct); // queued; the direct call is still "running"
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.onMutated(); // consumes write 1
+		await result.current.actions.release?.(slot as never); // write 2, queued
+		await late[0]?.(); // write 1's direct resolves late
+		await result.current.actions.onMutated();
+		expect(router.invalidate).not.toHaveBeenCalled();
+	});
+
+	// Race 2: a write refused with STILL_SYNCING must not wipe the flag of a
+	// queued write whose refresh has not run yet.
+	it("a refused write does not clear another write's pending flag", async () => {
+		let calls = 0;
+		const mutate = vi.fn(async () => {
+			if (++calls === 2) throw new Error("still syncing");
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never); // queued, flag set
+		await expect(
+			result.current.actions.release?.(slot as never),
+		).rejects.toThrow();
+		await result.current.actions.onMutated();
+		expect(router.invalidate).not.toHaveBeenCalled();
 	});
 });

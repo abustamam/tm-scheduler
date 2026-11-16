@@ -30,6 +30,7 @@ import {
 	type OfflineMinutesHandle,
 	releaseRoleViaQueue,
 } from "./offline-role-writes";
+import { useQueuedWriteFlag } from "./queued-write-flag";
 import type { MeetingDetail } from "./use-meeting-types";
 
 /**
@@ -161,6 +162,14 @@ export function useMeetingCover(args: {
 	// whether that call is made now or queued (see `offline-role-writes.ts`).
 	// Absent, they are the bare calls.
 	type RoleSlot = MeetingDetail["slots"][number];
+	// A QUEUED role write must not refresh the route (#1648); see
+	// `queued-write-flag.ts`. A direct write still refreshes through
+	// `refreshRoute`.
+	const queuedWrite = useQueuedWriteFlag();
+	function refreshRoute() {
+		if (queuedWrite.consume()) return;
+		return router.invalidate();
+	}
 	async function claimOrQueue(
 		slot: RoleSlot,
 		me: { id: string; name: string | null },
@@ -170,13 +179,15 @@ export function useMeetingCover(args: {
 			await claimAs(me, slot, speakerDetails);
 			return;
 		}
-		await assignRoleViaQueue(offlineMinutes, {
-			slot,
-			member: me,
-			actorMemberId: me.id,
-			speakerDetails,
-			direct: () => claimAs(me, slot, speakerDetails),
-		});
+		await queuedWrite.run((track) =>
+			assignRoleViaQueue(offlineMinutes, {
+				slot,
+				member: me,
+				actorMemberId: me.id,
+				speakerDetails,
+				direct: track(() => claimAs(me, slot, speakerDetails)),
+			}),
+		);
 	}
 	async function reassignOrQueue(
 		slot: RoleSlot,
@@ -188,14 +199,16 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await assignRoleViaQueue(offlineMinutes, {
-			slot,
-			member: me,
-			// Today's reassign carries no actor on the wire (#763), so the op
-			// carries none either.
-			actorMemberId: null,
-			direct,
-		});
+		await queuedWrite.run((track) =>
+			assignRoleViaQueue(offlineMinutes, {
+				slot,
+				member: me,
+				// Today's reassign carries no actor on the wire (#763), so the op
+				// carries none either.
+				actorMemberId: null,
+				direct: track(direct),
+			}),
+		);
 	}
 	async function releaseOrQueue(slot: RoleSlot) {
 		const direct = () => releaseSlot({ data: { slotId: slot.id } });
@@ -203,7 +216,12 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await releaseRoleViaQueue(offlineMinutes, { slot, direct });
+		await queuedWrite.run((track) =>
+			releaseRoleViaQueue(offlineMinutes, {
+				slot,
+				direct: track(direct),
+			}),
+		);
 	}
 
 	// Manager (admin) actions: act as the session member; exposes the manager-only
@@ -256,7 +274,7 @@ export function useMeetingCover(args: {
 				data: { meetingId: meeting.id, selfMemberId: managerActorId },
 			});
 		},
-		onMutated: () => router.invalidate(),
+		onMutated: refreshRoute,
 	};
 
 	// Self-serve (member / anon) actions: resolve identity first (a signed-in
@@ -307,7 +325,7 @@ export function useMeetingCover(args: {
 			});
 			toast.success("Speaker removed.");
 		},
-		onMutated: () => router.invalidate(),
+		onMutated: refreshRoute,
 	};
 
 	const actions = effectiveCanManage ? managerActions : selfActions;
