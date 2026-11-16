@@ -1,6 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { subscribeAgendaChanged } from "#/lib/agenda-live";
+import { subscribeRoleOpsDrained } from "#/lib/drained-roles";
+import { type QueuedOp, readQueue } from "#/lib/offline-minutes-queue";
+import {
+	type DrainedRoleOp,
+	type ProjectableSlot,
+	projectDrained,
+	projectSlots,
+} from "#/lib/project-slots";
 
 /** The poll for edits from another device. */
 export const LIVE_MEETING_REFRESH_MS = 30_000;
@@ -21,6 +29,16 @@ export const LIVE_MEETING_THROTTLE_MS = 1_000;
  * a same-browser broadcast, throttled leading and trailing at 1s so a stream of
  * saves cannot postpone the refetch.
  *
+ * Queued role edits show at once (#1638). A payload that carries `slots` and a
+ * `meeting.id` is returned with `projectSlots(payload.slots, queue)`, where the
+ * queue is this meeting's offline queue read straight from IndexedDB: on mount,
+ * on every broadcast and after every refetch settles. That read is its own
+ * state, NOT chained behind the throttled network refetch, so offline the deck
+ * follows the queue however long a refetch hangs. A drained op (the drain says
+ * so on the same channel) keeps projecting in an in-memory overlay until a
+ * server read that STARTED after the drain's removal succeeds, so the deck
+ * never flashes back to a stale name between the dequeue and the refetch.
+ *
  * `fetcher` is injected: the route passes the server fn plus its public
  * projection, a test passes a stub.
  */
@@ -29,9 +47,41 @@ export function useLiveMeeting<T>(
 	queryKey: readonly unknown[],
 	fetcher: () => Promise<T>,
 ): T {
+	const meetingId = (snapshot as { meeting?: { id?: unknown } } | null)?.meeting
+		?.id;
+	const queueMeetingId = typeof meetingId === "string" ? meetingId : null;
+	const [queue, setQueue] = useState<QueuedOp[]>([]);
+	// Drained ops still projected, each with the time its drain announced it.
+	const [overlay, setOverlay] = useState<
+		{ entry: DrainedRoleOp; at: number }[]
+	>([]);
+
+	const readQueueNow = useCallback(async () => {
+		if (!queueMeetingId) return;
+		try {
+			setQueue(await readQueue(queueMeetingId));
+		} catch {
+			// No IndexedDB (private window): there is no queue to show.
+		}
+	}, [queueMeetingId]);
+	const readQueueRef = useRef(readQueueNow);
+	readQueueRef.current = readQueueNow;
+
 	const query = useQuery({
 		queryKey: ["live-meeting", ...queryKey],
-		queryFn: fetcher,
+		queryFn: async () => {
+			const startedAt = Date.now();
+			try {
+				const fresh = await fetcher();
+				// A read that started after an op's removal has the op's effect:
+				// the overlay for it can go.
+				setOverlay((o) => o.filter((e) => e.at >= startedAt));
+				return fresh;
+			} finally {
+				// After every poll, success or not.
+				void readQueueRef.current();
+			}
+		},
 		initialData: snapshot,
 		staleTime: LIVE_MEETING_REFRESH_MS,
 		refetchInterval: LIVE_MEETING_REFRESH_MS,
@@ -68,6 +118,34 @@ export function useLiveMeeting<T>(
 		};
 	}, []);
 
+	// The queue, on mount and on every broadcast. Not throttled and not behind
+	// the refetch above.
+	useEffect(() => {
+		void readQueueRef.current();
+		const unsubscribe = subscribeAgendaChanged(() => {
+			void readQueueRef.current();
+		});
+		const unsubscribeDrained = subscribeRoleOpsDrained((drained, at) => {
+			setOverlay((o) => [...o, ...drained.map((entry) => ({ entry, at }))]);
+		});
+		return () => {
+			unsubscribe();
+			unsubscribeDrained();
+		};
+	}, []);
+
 	// `initialData` means `data` is never undefined here.
-	return query.data as T;
+	const data = query.data as T;
+	return useMemo(() => {
+		const slots = (data as { slots?: unknown } | null)?.slots;
+		if (!Array.isArray(slots)) return data;
+		const projected = projectSlots(
+			projectDrained(
+				slots as ProjectableSlot[],
+				overlay.map((o) => o.entry),
+			),
+			queue,
+		);
+		return projected === slots ? data : { ...data, slots: projected };
+	}, [data, queue, overlay]);
 }

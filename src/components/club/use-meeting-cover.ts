@@ -25,6 +25,11 @@ import { coverChipsFor, coverMeetingOver } from "./cover-chip";
 import { coverLandingView, takeCoveredSlot } from "./cover-landing-card";
 import type { CoverSlot } from "./cover-sheet";
 import type { useRequireIdentity } from "./identity-gate";
+import {
+	assignRoleViaQueue,
+	type OfflineMinutesHandle,
+	releaseRoleViaQueue,
+} from "./offline-role-writes";
 import type { MeetingDetail } from "./use-meeting-types";
 
 /**
@@ -56,6 +61,15 @@ export function useMeetingCover(args: {
 	/** The session member, null for an impersonating superadmin. */
 	managerActorId: string | null;
 	requireIdentity: ReturnType<typeof useRequireIdentity>["requireIdentity"];
+	/**
+	 * The route's ONE offline-write queue (#1638). With it, the agenda's claim,
+	 * release and takeover go through `offlineMinutes.mutate`: the same server
+	 * call as before while online with nothing queued, a queued op otherwise.
+	 * Without it every one of them calls the server directly, as it always did.
+	 */
+	offlineMinutes?: OfflineMinutesHandle;
+	/** The viewer's own display name, for a queued claim's optimistic row. */
+	myName?: string | null;
 }) {
 	const {
 		clubUuid,
@@ -76,6 +90,8 @@ export function useMeetingCover(args: {
 		myId,
 		managerActorId,
 		requireIdentity,
+		offlineMinutes,
+		myName = null,
 	} = args;
 	const router = useRouter();
 
@@ -140,6 +156,56 @@ export function useMeetingCover(args: {
 		return canManage || (isSignedIn && memberId === myId);
 	}
 
+	// The three role writes the meeting page sends through the offline queue
+	// (#1638). Each is today's exact server call; `offlineMinutes` only decides
+	// whether that call is made now or queued (see `offline-role-writes.ts`).
+	// Absent, they are the bare calls.
+	type RoleSlot = MeetingDetail["slots"][number];
+	async function claimOrQueue(
+		slot: RoleSlot,
+		me: { id: string; name: string | null },
+		speakerDetails?: SpeakerDetails,
+	) {
+		if (!offlineMinutes) {
+			await claimAs(me, slot, speakerDetails);
+			return;
+		}
+		await assignRoleViaQueue(offlineMinutes, {
+			slot,
+			member: me,
+			actorMemberId: me.id,
+			speakerDetails,
+			direct: () => claimAs(me, slot, speakerDetails),
+		});
+	}
+	async function reassignOrQueue(
+		slot: RoleSlot,
+		me: { id: string; name: string | null },
+	) {
+		const direct = () =>
+			reassignSlot({ data: { slotId: slot.id, memberId: me.id } });
+		if (!offlineMinutes) {
+			await direct();
+			return;
+		}
+		await assignRoleViaQueue(offlineMinutes, {
+			slot,
+			member: me,
+			// Today's reassign carries no actor on the wire (#763), so the op
+			// carries none either.
+			actorMemberId: null,
+			direct,
+		});
+	}
+	async function releaseOrQueue(slot: RoleSlot) {
+		const direct = () => releaseSlot({ data: { slotId: slot.id } });
+		if (!offlineMinutes) {
+			await direct();
+			return;
+		}
+		await releaseRoleViaQueue(offlineMinutes, { slot, direct });
+	}
+
 	// Manager (admin) actions: act as the session member; exposes the manager-only
 	// confirm/unconfirm/moveSpeaker/moveEvaluator/removeRole set.
 	const managerActions: MeetingAgendaActions = {
@@ -147,26 +213,22 @@ export function useMeetingCover(args: {
 			if (!managerActorId) {
 				throw new Error("Your account isn't linked to a club member yet.");
 			}
-			await claimSlot({
-				data: {
-					slotId: slot.id,
-					memberId: managerActorId,
-					actorMemberId: managerActorId,
-					speakerDetails,
-				},
-			});
+			await claimOrQueue(
+				slot,
+				{ id: managerActorId, name: myName },
+				speakerDetails,
+			);
 		},
 		// No actor on the wire for release / reassign (#763): both read the
 		// session, which is what lets an impersonating superadmin release.
-		release: async (slot) => {
-			await releaseSlot({ data: { slotId: slot.id } });
-		},
+		release: releaseOrQueue,
 		takeover: async (slot) => {
 			if (!managerActorId) {
 				throw new Error("Your account isn't linked to a club member yet.");
 			}
-			await reassignSlot({
-				data: { slotId: slot.id, memberId: managerActorId },
+			await reassignOrQueue(slot, {
+				id: managerActorId,
+				name: myName,
 			});
 		},
 		confirm: async (slot) => {
@@ -218,18 +280,16 @@ export function useMeetingCover(args: {
 		claim: async (slot, speakerDetails) => {
 			const me = await requireIdentity();
 			if (!me) return;
-			await claimAs(me, slot, speakerDetails);
+			await claimOrQueue(slot, me, speakerDetails);
 		},
 		// Rendered only for a signed-in holder (`canReleaseOwn`, #1003), so there
 		// is no identity to resolve: the server reads the session (#763), and a
 		// refusal reaches the agenda's `showWriteError` with its sign-in link.
-		release: async (slot) => {
-			await releaseSlot({ data: { slotId: slot.id } });
-		},
+		release: releaseOrQueue,
 		takeover: async (slot) => {
 			const me = await requireIdentity();
 			if (!me) return;
-			await reassignSlot({ data: { slotId: slot.id, memberId: me.id } });
+			await reassignOrQueue(slot, me);
 		},
 		addSpeaker: async () => {
 			const me = await requireIdentity();

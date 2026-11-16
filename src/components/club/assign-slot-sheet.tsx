@@ -16,6 +16,7 @@ import {
 	SheetTitle,
 } from "#/components/ui/sheet";
 import { showWriteError } from "#/components/write-error-toast";
+import { useOnlineStatus } from "#/hooks/use-online-status";
 import {
 	buildPickerRows,
 	formatLastServed,
@@ -25,6 +26,10 @@ import {
 } from "#/lib/agenda";
 import { assignGuestSlot } from "#/server/guests";
 import { claimSlot, reassignSlot } from "#/server/slots";
+import {
+	assignRoleViaQueue,
+	type OfflineMinutesHandle,
+} from "./offline-role-writes";
 
 type AssignPerson = PickerPerson &
 	({ kind: "guest"; row?: undefined } | { kind: "member"; row: PickerRow });
@@ -35,6 +40,13 @@ type AssignSlot = {
 	status: "open" | "claimed" | "confirmed";
 	isSpeakerRole: boolean;
 	label: string;
+	/** What a QUEUED assignment records (#1638): the role's name for the
+	 *  conflict toast, and who the officer sees holding it now. Optional, and
+	 *  only read with `offlineMinutes`. */
+	roleName?: string;
+	assigneeName?: string | null;
+	assigneeId?: string | null;
+	assigneeGuestId?: string | null;
 };
 
 /** roleDefinitionId → memberId → ISO date the member last held that role (#146). */
@@ -50,6 +62,7 @@ export function AssignSlotSheet({
 	canReassign = false,
 	allowGuests = false,
 	clubGuests = [],
+	offlineMinutes,
 	onOpenChange,
 	onAssigned,
 }: {
@@ -85,10 +98,23 @@ export function AssignSlotSheet({
 		preferredName?: string | null;
 		stage?: string;
 	}[];
+	/**
+	 * The meeting route's one offline-write queue (#1638). With it, a member
+	 * assignment goes through `offlineMinutes.mutate`: today's `claimSlot` /
+	 * `reassignSlot` while online with nothing queued, a queued op otherwise.
+	 * Guests cannot be assigned offline, so their options are hidden while the
+	 * browser is offline or anything is waiting to drain. Without it the sheet
+	 * calls the server directly, as it always did.
+	 */
+	offlineMinutes?: OfflineMinutesHandle;
 	onOpenChange: (open: boolean) => void;
 	onAssigned: () => void | Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
+	const online = useOnlineStatus();
+	const guestsAvailable =
+		allowGuests &&
+		(!offlineMinutes || (online && offlineMinutes.pendingCount === 0));
 	// Revive the ISO recency for the role being assigned into Dates for the rows.
 	const lastServedAt: Record<string, Date> = {};
 	if (slot) {
@@ -115,7 +141,7 @@ export function AssignSlotSheet({
 				row,
 			}),
 		),
-		...(allowGuests
+		...(guestsAvailable
 			? clubGuests.map(
 					(g): AssignPerson => ({
 						kind: "guest",
@@ -143,19 +169,43 @@ export function AssignSlotSheet({
 		}
 		setBusy(true);
 		try {
-			if (action.kind === "claim") {
-				await claimSlot({
-					data: {
-						slotId: slot.id,
-						memberId,
-						actorMemberId,
-						speakerDetails: action.speakerTba
+			// Today's exact call; `offlineMinutes` only decides whether it is made
+			// now or queued.
+			const direct = () =>
+				action.kind === "claim"
+					? claimSlot({
+							data: {
+								slotId: slot.id,
+								memberId,
+								actorMemberId,
+								speakerDetails: action.speakerTba
+									? { speechTitle: "TBA" }
+									: undefined,
+							},
+						})
+					: reassignSlot({ data: { slotId: slot.id, memberId } });
+			if (offlineMinutes) {
+				const row = roster.find((r) => r.id === memberId);
+				await assignRoleViaQueue(offlineMinutes, {
+					slot: {
+						id: slot.id,
+						roleName: slot.roleName ?? slot.label,
+						assigneeName: slot.assigneeName ?? null,
+						assigneeId: slot.assigneeId,
+						assigneeGuestId: slot.assigneeGuestId,
+					},
+					member: { id: memberId, name: row?.name ?? null },
+					// What today's call passes: the claim's actor, and none for a reassign.
+					actorMemberId: action.kind === "claim" ? actorMemberId : null,
+					// The speaker "TBA" the claim sends (a reassign sends none).
+					speakerDetails:
+						action.kind === "claim" && action.speakerTba
 							? { speechTitle: "TBA" }
 							: undefined,
-					},
+					direct,
 				});
 			} else {
-				await reassignSlot({ data: { slotId: slot.id, memberId } });
+				await direct();
 			}
 			toast.success(isReassign ? "Role reassigned." : "Role assigned.");
 			await onAssigned();
@@ -225,10 +275,12 @@ export function AssignSlotSheet({
 							people={people}
 							disabled={busy}
 							placeholder={
-								allowGuests ? "Search members and guests…" : "Search members…"
+								guestsAvailable
+									? "Search members and guests…"
+									: "Search members…"
 							}
 							emptyText={
-								allowGuests ? "No matching people." : "No members found."
+								guestsAvailable ? "No matching people." : "No members found."
 							}
 							onPick={(person) =>
 								person.kind === "guest"
@@ -272,7 +324,7 @@ export function AssignSlotSheet({
 						/>
 					)}
 
-					{allowGuests && !reassignBlocked ? (
+					{guestsAvailable && !reassignBlocked ? (
 						<div className="mt-4 space-y-3 border-t pt-4">
 							<p className="font-semibold text-sm">Add a new guest</p>
 							<p className="text-muted-foreground text-xs">

@@ -1,15 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import { postAgendaChanged } from "#/lib/agenda-live";
+import { withDrainLock } from "#/lib/drain-lock";
 import {
 	dispatchOp,
 	drainMinutesQueue,
 	type MinutesServerFns,
+	type RoleServerFns,
+	roleSkipMessage,
 } from "#/lib/drain-minutes";
+import { postRoleOpsDrained } from "#/lib/drained-roles";
 import { listRoles } from "#/lib/list-roles";
 import {
 	enqueue,
 	type MinutesOp,
+	type QueuedOp,
+	type RoleSlotOp,
 	readQueue,
 	readSnapshot,
 	removeOp,
@@ -19,6 +26,8 @@ import {
 	ONLINE_WRITE_TIMEOUT_MS,
 	raceWithDeadline,
 } from "#/lib/offline-write-deadline";
+import { SIGN_IN_TO_QUEUE_ROLE_MESSAGE } from "#/lib/role-op-owner";
+import { isRoleSlotOp } from "#/lib/role-slot-op";
 import type { MinutesData } from "#/server/minutes-logic";
 
 /** The receipt for an Absent release (#1256): the online write and the drain
@@ -94,13 +103,31 @@ export function useOfflineMinutes(input: {
 	 * `setSnapshot`, which only this hook has once the state moves here.
 	 */
 	minutes?: MinutesData | null;
+	/**
+	 * The member signed in on this page, null for nobody (#1638). Stamped on each
+	 * queued role op, and compared at drain: a role op replays only for the member
+	 * who queued it. Omitted means "nobody", so a role op queued by a signed-in
+	 * member waits rather than replaying under a caller that cannot say who it is.
+	 */
+	sessionMemberId?: string | null;
+	/** The signed-in user (#1638): the identity an impersonating superadmin
+	 *  has instead of a member; stamped beside `sessionMemberId`. */
+	sessionUserId?: string | null;
 }) {
 	const online = useOnlineStatus();
 	const [busy, setBusy] = useState(false);
-	const [queue, setQueue] = useState<MinutesOp[]>([]);
+	const [queue, setQueue] = useState<QueuedOp[]>([]);
 	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
 	const [draining, setDraining] = useState(false);
 	const [syncError, setSyncError] = useState<string | null>(null);
+	// Role ops the last drain held for another member (#1638), tagged with the
+	// session identity it held them under. A hold is NOT a `syncError`: that parks
+	// the whole auto-drain and, with the queue never empty, sends every later edit
+	// to the queue to wait for a Retry. A hold only sets these ops aside.
+	const [held, setHeld] = useState<{ identity: string; ops: RoleSlotOp[] }>({
+		identity: "",
+		ops: [],
+	});
 	// Transient "All changes synced" confirmation shown briefly after a drain
 	// fully lands, then auto-dismissed (the effect below clears it on a timer).
 	const [justSynced, setJustSynced] = useState(false);
@@ -118,6 +145,15 @@ export function useOfflineMinutes(input: {
 	const minutesRef = useRef<MinutesData | null>(null);
 	const { meetingId, minutes } = input;
 	minutesRef.current = minutes ?? snapshot;
+	// Read at enqueue and at drain, not captured: the session can change between.
+	const sessionMemberIdRef = useRef(input.sessionMemberId ?? null);
+	sessionMemberIdRef.current = input.sessionMemberId ?? null;
+	const sessionUserIdRef = useRef(input.sessionUserId ?? null);
+	sessionUserIdRef.current = input.sessionUserId ?? null;
+	const identity = identityKey(
+		input.sessionMemberId ?? null,
+		input.sessionUserId ?? null,
+	);
 
 	// The meeting an ASYNC CONTINUATION must re-check before it touches shared
 	// state, and the fix for the corruption the write deadline reopened.
@@ -198,6 +234,7 @@ export function useOfflineMinutes(input: {
 		setQueue([]);
 		setSnapshot(null);
 		setSyncError(null);
+		setHeld({ identity: "", ops: [] });
 		setJustSynced(false);
 		// `busy` too, and it is not cosmetic. The route wires
 		// `busy={offlineMinutes.busy || offlineMinutes.draining}` into the panel's
@@ -290,112 +327,210 @@ export function useOfflineMinutes(input: {
 		void saveSnapshot(meetingId, minutes);
 	}, [online, minutes, meetingId]);
 
+	// The held ops that still exist, for the CURRENT session identity. A hold
+	// recorded under another identity is not remembered: signing in as the owner
+	// (or anyone else) makes the ops eligible again, and each identity dispatches
+	// them once, because the auto-drain skips them until the identity changes or
+	// the user presses Retry.
+	const heldOps = useMemo(() => {
+		if (held.identity !== identity) return [];
+		const queued = new Set(queue.map((o) => o.opId));
+		return held.ops.filter((o) => queued.has(o.opId));
+	}, [held, identity, queue]);
+	const heldIds = useMemo(() => new Set(heldOps.map((o) => o.opId)), [heldOps]);
+	const heldSlotIds = useMemo(
+		() => new Set(heldOps.map((o) => o.slotId)),
+		[heldOps],
+	);
+
 	// #176 slice 4: replay the queued ops to the server IN ORDER, removing each as
 	// it lands, then re-fetch authoritative state. Stops at the first failure and
 	// keeps the failed op + successors queued for the next reconnect / Retry.
 	const runDrain = useCallback(
-		async (ops: MinutesOp[]) => {
+		async (ops: QueuedOp[]) => {
 			if (drainingRef.current || ops.length === 0) return;
 			drainingRef.current = true;
 			setDraining(true);
 			setSyncError(null);
 			setJustSynced(false);
 			try {
-				// Deferred import — see the hook's doc comment above for why this is
-				// lazy rather than a static top-of-file import.
-				const {
-					setAttendance,
-					addMinutesGuest,
-					removeMinutesGuest,
-					addTableTopics,
-					removeTableTopics,
-					moveTableTopics,
-					setMinutesAward,
-					clearMinutesAward,
-				} = await import("#/server/minutes");
-				const fns: MinutesServerFns = {
-					setAttendance,
-					addGuest: addMinutesGuest,
-					removeGuest: removeMinutesGuest,
-					addTableTopics,
-					removeTableTopics,
-					moveTableTopics,
-					setAward: setMinutesAward,
-					clearAward: clearMinutesAward,
-				};
-				const result = await drainMinutesQueue({
-					meetingId,
-					ops,
-					// Deadlined for the same reason the write below is, and it is the
-					// other half of the same fix: without it, closing the `busy`
-					// hang merely moved it. A write that times out is queued, the
-					// auto-drain effect fires the moment it sees a queue with
-					// `navigator.onLine` true, the replay hits the same
-					// unreachable network, and `draining` — which the panel also
-					// disables on — never clears. Throwing lands on
-					// `drainMinutesQueue`'s stop-on-failure path: this op and its
-					// successors stay queued, `syncError` shows with Retry, and
-					// the auto-drain stops tight-looping (it gates on
-					// `!syncError`).
-					dispatch: async (op) => {
-						const work = dispatchOp(op, meetingId, fns);
-						const raced = await raceWithDeadline(work, ONLINE_WRITE_TIMEOUT_MS);
-						if (raced === "timeout") throw new Error(DRAIN_STALLED_MESSAGE);
-						// Settled, so this does not wait: the outcome `raceWithDeadline`
-						// drops (what an Absent release freed, #1256).
-						return work;
-					},
-					onOpDrained: async (opId) => {
-						await removeOp(meetingId, opId);
-						// Same split as `queueOp`, same reason: the durable removal is
-						// scoped to the meeting THIS drain belongs to, the state update is
-						// not. A drain still in flight across a hop would otherwise filter
-						// the NEXT meeting's queue by this meeting's opIds.
-						if (meetingIdRef.current === meetingId) {
-							setQueue((q) => q.filter((o) => o.opId !== opId));
+				// One drain per meeting across this browser's tabs (#1638), and the
+				// queue is re-read INSIDE the lock: a tab that waited sees only what the
+				// tab ahead of it left, so an op is dispatched once.
+				await withDrainLock(meetingId, async (mode) => {
+					let batch = ops;
+					if (mode === "locked") {
+						batch = await readQueue(meetingId);
+						const stillQueued = new Set(batch.map((o) => o.opId));
+						const drainedElsewhere = ops
+							.map((o) => o.opId)
+							.filter((id) => !stillQueued.has(id));
+						if (drainedElsewhere.length > 0) {
+							if (meetingIdRef.current === meetingId) {
+								setQueue((q) =>
+									q.filter((o) => !drainedElsewhere.includes(o.opId)),
+								);
+							}
+							// Another tab wrote these: this page re-reads the server.
+							if (batch.length === 0) {
+								await onMutatedRef.current(meetingId);
+								return;
+							}
 						}
-					},
-				});
-				// What the drained Absent ops freed (#1256), told BEFORE the branch below
-				// because it is true on both of its arms: an op that released and then
-				// had a successor fail still released. One toast per op, the same copy
-				// as the online write.
-				for (const r of result.released) {
-					const name =
-						(minutesRef.current?.members ?? []).find(
-							(m) => m.memberId === r.memberId,
-						)?.name ?? "this member";
-					toast.success(releasedToastMessage(name, r.labels));
-				}
-				if (result.error) {
-					// The agenda must show the open slots even when a later op failed.
-					// Any applied op, not just a releasing one (#1600): an award that
-					// landed before a later op failed changed the winner too.
-					if (result.drainedCount > 0 || result.released.length > 0) {
-						await onMutatedRef.current(meetingId);
+						if (batch.length === 0) return;
 					}
-					// Stop-on-failure: the failed op + successors stay queued. The
-					// banner and the confirmation both DESCRIBE THIS MEETING'S QUEUE,
-					// so a drain that finishes after a hop keeps quiet rather than
-					// painting its verdict onto the meeting now on screen: "All changes
-					// synced" over a queue that is still pending is the false
-					// reassurance this indicator exists to prevent, and a stale
-					// `syncError` would additionally suppress the next meeting's
-					// auto-drain (which gates on `!syncError`). The ops stay in
-					// IndexedDB under their own meeting either way, so the failure is
-					// surfaced the moment that meeting is opened again.
+					// Deferred import — see the hook's doc comment above for why this is
+					// lazy rather than a static top-of-file import.
+					const {
+						setAttendance,
+						addMinutesGuest,
+						removeMinutesGuest,
+						addTableTopics,
+						removeTableTopics,
+						moveTableTopics,
+						setMinutesAward,
+						clearMinutesAward,
+					} = await import("#/server/minutes");
+					// The slot writers load only when the queue holds a role op: a pure
+					// minutes drain must not pull them in.
+					const roleFns: Partial<RoleServerFns> = batch.some(isRoleSlotOp)
+						? await import("#/lib/role-server-fns").then(
+								({ claimSlot, reassignSlot, releaseSlot }) => ({
+									claimSlot,
+									reassignSlot,
+									releaseSlot,
+								}),
+							)
+						: {};
+					const fns: MinutesServerFns & Partial<RoleServerFns> = {
+						...roleFns,
+						setAttendance,
+						addGuest: addMinutesGuest,
+						removeGuest: removeMinutesGuest,
+						addTableTopics,
+						removeTableTopics,
+						moveTableTopics,
+						setAward: setMinutesAward,
+						clearAward: clearMinutesAward,
+					};
+					const result = await drainMinutesQueue({
+						meetingId,
+						ops: batch,
+						// Deadlined for the same reason the write below is, and it is the
+						// other half of the same fix: without it, closing the `busy`
+						// hang merely moved it. A write that times out is queued, the
+						// auto-drain effect fires the moment it sees a queue with
+						// `navigator.onLine` true, the replay hits the same
+						// unreachable network, and `draining` — which the panel also
+						// disables on — never clears. Throwing lands on
+						// `drainMinutesQueue`'s stop-on-failure path: this op and its
+						// successors stay queued, `syncError` shows with Retry, and
+						// the auto-drain stops tight-looping (it gates on
+						// `!syncError`).
+						dispatch: async (op) => {
+							const work = dispatchOp(op, meetingId, fns, {
+								memberId: sessionMemberIdRef.current,
+								userId: sessionUserIdRef.current,
+							});
+							const raced = await raceWithDeadline(
+								work,
+								ONLINE_WRITE_TIMEOUT_MS,
+							);
+							if (raced === "timeout") throw new Error(DRAIN_STALLED_MESSAGE);
+							// Settled, so this does not wait: the outcome `raceWithDeadline`
+							// drops (what an Absent release freed, #1256).
+							return work;
+						},
+						onOpDrained: async (opId, role) => {
+							await removeOp(meetingId, opId);
+							// Told AFTER the IndexedDB write committed (#1638), so a deck that
+							// re-reads the queue on this message never finds the op still in
+							// it, and carrying how the op ended so the deck can keep showing
+							// it until a server read that started after this catches up.
+							if (role) {
+								postRoleOpsDrained([
+									{
+										op: role.op,
+										outcome: role.outcome,
+										reason: role.reason,
+										currentHolderName: role.currentHolderName,
+									},
+								]);
+							}
+							// Same split as `queueOp`, same reason: the durable removal is
+							// scoped to the meeting THIS drain belongs to, the state update is
+							// not. A drain still in flight across a hop would otherwise filter
+							// the NEXT meeting's queue by this meeting's opIds.
+							if (meetingIdRef.current === meetingId) {
+								setQueue((q) => q.filter((o) => o.opId !== opId));
+							}
+						},
+					});
+					// What the drained Absent ops freed (#1256), told BEFORE the branch below
+					// because it is true on both of its arms: an op that released and then
+					// had a successor fail still released. One toast per op, the same copy
+					// as the online write.
+					// A role op the server skipped (#1638): the online change stays, and
+					// the officer hears which of their offline changes did not land.
+					for (const r of result.roleOutcomes ?? []) {
+						if (r.outcome === "skipped") toast.warning(roleSkipMessage(r));
+					}
+					for (const r of result.released) {
+						const name =
+							(minutesRef.current?.members ?? []).find(
+								(m) => m.memberId === r.memberId,
+							)?.name ?? "this member";
+						toast.success(releasedToastMessage(name, r.labels));
+					}
+					// Recorded for every outcome, so a drain that held nothing clears an
+					// earlier hold (signed in as the owner, say).
 					if (meetingIdRef.current === meetingId) {
-						setSyncError(errMessage(result.error));
+						setHeld({
+							identity: identityKey(
+								sessionMemberIdRef.current,
+								sessionUserIdRef.current,
+							),
+							ops: (result.held ?? []).filter(isRoleSlotOp),
+						});
 					}
-				} else {
-					// Everything replayed — re-fetch authoritative state (the online
-					// snapshot-save effect then refreshes the offline snapshot).
-					// UNCONDITIONAL: server state really did change, and the refetch is
-					// for the router, not for this meeting's banner.
-					await onMutatedRef.current(meetingId);
-					// Flash a brief "All changes synced" confirmation (auto-dismissed).
-					if (meetingIdRef.current === meetingId) setJustSynced(true);
-				}
+					if (result.error) {
+						// The agenda must show the open slots even when a later op failed.
+						// Any applied op, not just a releasing one (#1600): an award that
+						// landed before a later op failed changed the winner too.
+						if (result.drainedCount > 0 || result.released.length > 0) {
+							await onMutatedRef.current(meetingId);
+						}
+						// Stop-on-failure: the failed op + successors stay queued. The
+						// banner and the confirmation both DESCRIBE THIS MEETING'S QUEUE,
+						// so a drain that finishes after a hop keeps quiet rather than
+						// painting its verdict onto the meeting now on screen: "All changes
+						// synced" over a queue that is still pending is the false
+						// reassurance this indicator exists to prevent, and a stale
+						// `syncError` would additionally suppress the next meeting's
+						// auto-drain (which gates on `!syncError`). The ops stay in
+						// IndexedDB under their own meeting either way, so the failure is
+						// surfaced the moment that meeting is opened again.
+						if (meetingIdRef.current === meetingId) {
+							setSyncError(errMessage(result.error));
+						}
+					} else if (result.held && result.held.length > 0) {
+						// Role ops held for another member (#1638): everything else drained,
+						// these stay queued. Not "all synced", and NOT a `syncError`: the
+						// hold is recorded above, the banner offers Discard, and the
+						// auto-drain keeps running for every other op.
+						if (result.drainedCount > 0 || result.released.length > 0) {
+							await onMutatedRef.current(meetingId);
+						}
+					} else {
+						// Everything replayed — re-fetch authoritative state (the online
+						// snapshot-save effect then refreshes the offline snapshot).
+						// UNCONDITIONAL: server state really did change, and the refetch is
+						// for the router, not for this meeting's banner.
+						await onMutatedRef.current(meetingId);
+						// Flash a brief "All changes synced" confirmation (auto-dismissed).
+						if (meetingIdRef.current === meetingId) setJustSynced(true);
+					}
+				});
 			} catch (err) {
 				if (meetingIdRef.current === meetingId) setSyncError(errMessage(err));
 			} finally {
@@ -431,10 +566,15 @@ export function useOfflineMinutes(input: {
 	// anything about `draining`: each pass either shortens the queue (progress),
 	// empties it, or sets `syncError` and is gated out here. "stops a DRAIN the
 	// network never answers" holds that with a dispatch-count assertion.
+	//
+	// Held role ops (#1638) are not drainable for this identity, so a queue of
+	// only held ops does not re-fire it (that would re-dispatch them in a loop);
+	// any other op does, and the drain carries the held ones along in order.
 	useEffect(() => {
-		if (!online || queue.length === 0 || syncError || draining) return;
+		const drainable = queue.some((o) => !heldIds.has(o.opId));
+		if (!online || !drainable || syncError || draining) return;
 		void runDrain(queue);
-	}, [online, queue, syncError, runDrain, draining]);
+	}, [online, queue, syncError, runDrain, draining, heldIds]);
 
 	// Going offline clears a stale sync error so the next genuine reconnect
 	// auto-retries; while online, a persistent error stays set (see above).
@@ -453,7 +593,26 @@ export function useOfflineMinutes(input: {
 
 	/** Reflect the op optimistically and persist it. The OFFLINE path, and also
 	 *  where an online write that blew its deadline lands. */
-	async function queueOp(op: MinutesOp) {
+	async function queueOp(queued: QueuedOp) {
+		// A role op remembers who queued it (#1638): the drain replays it only for
+		// that member. Stamped here, the one place every op passes, not by callers.
+		// No clear or reassign is queued with nobody signed in (#1638): it would
+		// carry no owner, and any later sign-in could replay it.
+		if (
+			isRoleSlotOp(queued) &&
+			(queued.type === "releaseSlot" || queued.expectedHolder !== null) &&
+			sessionMemberIdRef.current === null &&
+			sessionUserIdRef.current === null
+		) {
+			throw new Error(SIGN_IN_TO_QUEUE_ROLE_MESSAGE);
+		}
+		const op: QueuedOp = isRoleSlotOp(queued)
+			? {
+					...queued,
+					queuedBy: sessionMemberIdRef.current,
+					queuedByUserId: sessionUserIdRef.current,
+				}
+			: queued;
 		// `enqueue` stays on the CAPTURED meeting and must: the op is that
 		// meeting's roll and has to persist under it, so it replays against it
 		// later. The optimistic `setQueue` is hook-level, so it is SKIPPED once a
@@ -466,6 +625,9 @@ export function useOfflineMinutes(input: {
 		}
 		try {
 			await enqueue(meetingId, op);
+			// Tell this browser's other tabs (#1637): a Present deck re-reads the
+			// queue and shows the change at once. After the write committed.
+			postAgendaChanged();
 		} catch (err) {
 			toast.error(errMessage(err));
 		}
@@ -481,6 +643,7 @@ export function useOfflineMinutes(input: {
 	 */
 	async function writeOnline(
 		onlineFn: () => Promise<unknown>,
+		throwOnError: boolean,
 	): Promise<"done" | "queue"> {
 		setBusy(true);
 		try {
@@ -499,6 +662,10 @@ export function useOfflineMinutes(input: {
 			await input.onMutated(meetingId);
 			return "done";
 		} catch (err) {
+			// A caller that reports the failure itself (the role writes, whose
+			// agenda shows the refusal with its sign-in link) gets it back; every
+			// other caller keeps the toast.
+			if (throwOnError) throw err;
 			toast.error(errMessage(err));
 			return "done";
 		} finally {
@@ -511,8 +678,9 @@ export function useOfflineMinutes(input: {
 	// the op and reflect it optimistically; never hit the server or onMutated.
 	async function mutate(
 		onlineFn: () => Promise<unknown>,
-		makeOp: () => MinutesOp,
-	) {
+		makeOp: () => QueuedOp,
+		options?: { throwOnError?: boolean; slotId?: string },
+	): Promise<void> {
 		// `draining` joins the guard so a reconnect drain isn't interleaved with a
 		// fresh edit (which could reorder ops).
 		if (busy || draining) return;
@@ -558,7 +726,19 @@ export function useOfflineMinutes(input: {
 		// through `queueOp` below or the persisted load, both of which commit before
 		// the next user event can be dispatched — a tap during `writeOnline`'s
 		// in-flight window is already refused by `busy`.
-		if (!online || queue.length > 0) {
+		// Held role ops (#1638) are not in the way: they wait for another member,
+		// so they do not turn a direct write into a queued one. The exception is a
+		// ROLE write on the very slot a held op is waiting on, which queues behind
+		// it so the order on that slot holds.
+		const activeCount = queue.filter((o) => !heldIds.has(o.opId)).length;
+		if (!online || activeCount > 0) {
+			await queueOp(makeOp());
+			return;
+		}
+		// The role writers name their slot, so no probe of `makeOp` is needed (it
+		// throws for writes that cannot be queued, which must still go direct on
+		// another slot). On a held slot a throw surfaces: it cannot go ahead.
+		if (options?.slotId !== undefined && heldSlotIds.has(options.slotId)) {
 			await queueOp(makeOp());
 			return;
 		}
@@ -569,10 +749,21 @@ export function useOfflineMinutes(input: {
 		// `busy` stuck true, which disabled every chip and the guest group with no
 		// spinner, no toast and no recovery short of a reload, on the one surface
 		// #176's queue was built for.
-		if ((await writeOnline(onlineFn)) === "queue") {
+		if (
+			(await writeOnline(onlineFn, options?.throwOnError === true)) === "queue"
+		) {
 			await queueOp(makeOp());
 		}
 	}
+
+	const minutesOps = useMemo(
+		() => queue.filter((o): o is MinutesOp => !isRoleSlotOp(o)),
+		[queue],
+	);
+	const roleOps = useMemo(
+		() => queue.filter((o): o is RoleSlotOp => isRoleSlotOp(o)),
+		[queue],
+	);
 
 	const opMeta = () => ({
 		opId: crypto.randomUUID(),
@@ -587,6 +778,21 @@ export function useOfflineMinutes(input: {
 	// 8-key return (`mutate, opMeta, busy, queue, snapshot, draining, syncError,
 	// justSynced`): `meeting-minutes.tsx`'s existing Retry control needs a way to
 	// reach this, and the hook owns `runDrain` now.
+	// Throw away the role ops held for another member (#1638), and only those:
+	// minutes ops and every other queued op stay.
+	const discardHeld = async () => {
+		if (drainingRef.current || heldOps.length === 0) return;
+		const ids = new Set(heldOps.map((o) => o.opId));
+		for (const id of ids) await removeOp(meetingId, id);
+		if (meetingIdRef.current === meetingId) {
+			setQueue((q) => q.filter((o) => !ids.has(o.opId)));
+			setHeld({ identity: "", ops: [] });
+		}
+		// After the removal committed: a Present deck re-reads the queue and
+		// stops projecting them.
+		postAgendaChanged();
+	};
+
 	const retryDrain = async () => {
 		// Nothing queued, yet an error is showing. TWO ways into that state, not the
 		// one this comment used to claim: the persisted load rejected
@@ -615,11 +821,27 @@ export function useOfflineMinutes(input: {
 		mutate,
 		opMeta,
 		busy,
-		queue,
+		// The MINUTES ops only, which is what every existing consumer projects
+		// through `deriveMinutes`. A role op has nothing to say to a minutes
+		// snapshot, and its type is kept out of that union on purpose (see
+		// `RoleSlotOp`).
+		queue: minutesOps,
+		/** The queued role edits (#1638), in order. */
+		roleOps,
+		/** Everything waiting to drain, minutes and role ops alike: what a
+		 *  "n changes pending" indicator counts. */
+		pendingCount: queue.length - heldOps.length,
+		/** Role ops held for another member on this device (#1638). */
+		heldOps,
+		discardHeld,
 		snapshot,
 		draining,
 		syncError,
 		justSynced,
 		retryDrain,
 	};
+}
+
+function identityKey(memberId: string | null, userId: string | null): string {
+	return `${memberId ?? ""}|${userId ?? ""}`;
 }

@@ -111,7 +111,7 @@ describe("the meeting route wires the Ballots awards list (#1583)", () => {
 	// panel disables its buttons (vote-counter-panel.test.tsx drives that)
 	it("feeds winnerWritesPaused from the offline queue's pending-or-draining state", () => {
 		expect(source).toContain(
-			"const winnerWritesPaused = offlineMinutes.queue.length > 0 || offlineMinutes.draining;",
+			"const winnerWritesPaused = offlineMinutes.pendingCount > 0 || offlineMinutes.draining;",
 		);
 		expect(source).toContain("winnerWritesPaused={winnerWritesPaused}");
 	});

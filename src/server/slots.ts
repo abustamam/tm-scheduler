@@ -3,7 +3,16 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings, members, roleDefinitions, roleSlots } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { assertMeetingAccepts } from "#/lib/meeting-lifecycle";
+import {
+	ROLE_OP_OTHER_USER_MESSAGE,
+	roleOpOwnerMismatch,
+} from "#/lib/role-op-owner";
+import {
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
+	type WriteProof,
+} from "#/lib/write-proof";
 import { logActivity } from "./activity";
 import { withDeadlockRetry } from "./deadlock-retry";
 import {
@@ -15,6 +24,8 @@ import {
 	requireUser,
 } from "./guards";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
+import { PermanentRefusal, toPermanentRefusal } from "./permanent-refusal";
+import { type ExpectedHolderResult, SLOT_GONE } from "./slot-write-answers";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
@@ -22,6 +33,7 @@ import {
 	applyMoveSpeakerSlot,
 	applyRemoveRoleSlot,
 	applyRemoveSpeakerSlot,
+	applyRoleOpExpectingHolder,
 	claimSlotCore,
 	confirmSlotCore,
 	reassignSlotCore,
@@ -38,11 +50,85 @@ import {
 	requireSessionActor,
 } from "./write-actor-logic";
 
+/** The holder the officer SAW when a queued change was made (#1638):
+ *  `"m:<memberId>"`, `"g:<guestId>"`, or null for an open slot. ABSENT is not
+ *  null: absent keeps today's behaviour for every online caller, null means
+ *  "expected open" and switches the write to the compare-and-act path. */
+const expectedHolderSchema = z
+	.string()
+	.regex(/^[mg]:[0-9a-f-]{36}$/i)
+	.nullable()
+	.optional();
+
+/** Who queued the op (#1638), read only when `expectedHolder` is present: the
+ *  member and the user signed in on the device when the change was made. The
+ *  server checks them against the session that carries the drain. A user id is
+ *  not a uuid (Better Auth's), so it is a bounded string. */
+const queuedByShape = {
+	queuedBy: z.string().uuid().nullable().optional(),
+	queuedByUserId: z.string().min(1).max(128).nullable().optional(),
+};
+
+/** What the three role writes answer. `proof` / `reason` are optional on the
+ *  arm that lacks them so a caller destructuring `{ proof }` still types. */
+type SlotWriteResult<T extends object> =
+	| ({ ok: true } & T)
+	| (Extract<ExpectedHolderResult, { ok: false }> & {
+			[K in keyof T]?: undefined;
+	  });
+
+/** The answer for a refusal that is permanent for a queued write (#1638). */
+function refusedAnswer(
+	message: string,
+): Extract<ExpectedHolderResult, { ok: false }> {
+	return { ok: false, reason: "refused", message, currentHolderName: null };
+}
+
+/** A queued write replays only for the member who queued it (#1638). Runs on
+ *  the expected-holder path after the session is established and before any
+ *  answer that reveals state; throws, so the op stays queued. `memberId` is
+ *  undefined when the refusal came before a member could be resolved. */
+async function assertQueuedByCaller(
+	data: { queuedBy?: string | null; queuedByUserId?: string | null },
+	memberId: string | null | undefined,
+): Promise<void> {
+	const user = await getSessionUser();
+	if (roleOpOwnerMismatch(data, { memberId, userId: user?.id ?? null })) {
+		throw new Error(ROLE_OP_OTHER_USER_MESSAGE);
+	}
+}
+
+/** A queued write's refusal raised in the handler before the transaction
+ *  (#1638): only `permanent` messages become a `refused` answer, after the
+ *  ownership check; everything else (sign-in, no membership, actor refusals,
+ *  driver errors) rethrows. */
+async function permanentOrThrow(
+	error: unknown,
+	permanent: ReadonlySet<string>,
+	data: { queuedBy?: string | null; queuedByUserId?: string | null },
+	memberId: string | null | undefined,
+) {
+	try {
+		toPermanentRefusal(error, permanent);
+	} catch (translated) {
+		if (!(translated instanceof PermanentRefusal)) throw translated;
+		await assertQueuedByCaller(data, memberId);
+		return refusedAnswer(translated.message);
+	}
+}
+
+const INELIGIBLE_MEMBER: ReadonlySet<string> = new Set([
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
+]);
+const ARCHIVED_CLUB: ReadonlySet<string> = new Set([CLUB_ARCHIVED_MESSAGE]);
+
 const claimSchema = z.object({
 	slotId: z.string().uuid(),
 	memberId: z.string().uuid(),
 	actorMemberId: z.string().uuid(),
 	speakerDetails: speakerDetailsSchema.optional(),
+	expectedHolder: expectedHolderSchema,
+	...queuedByShape,
 });
 
 /** Claim an open slot for the given member. Speaker details are optional; a
@@ -58,58 +144,100 @@ const claimSchema = z.object({
  *  caller who can use it. */
 export const claimSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => claimSchema.parse(input))
-	.handler(async ({ data }) => {
-		// Cheap pre-read solely to resolve clubId for the trust guard; the
-		// authoritative read-and-write happens in `claimSlotCore`.
-		const [slot] = await db
-			.select({ clubId: meetings.clubId })
-			.from(roleSlots)
-			.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
-			.where(eq(roleSlots.id, data.slotId))
-			.limit(1);
+	.handler(
+		async ({ data }): Promise<SlotWriteResult<{ proof: WriteProof }>> => {
+			// Cheap pre-read solely to resolve clubId for the trust guard; the
+			// authoritative read-and-write happens in `claimSlotCore`.
+			const [slot] = await db
+				.select({ clubId: meetings.clubId })
+				.from(roleSlots)
+				.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+				.where(eq(roleSlots.id, data.slotId))
+				.limit(1);
 
-		if (!slot) {
-			throw new Error("Role not found.");
-		}
-		// Trust guard: memberId must be a roster member of this club.
-		await requireMemberInClub(data.memberId, slot.clubId);
-		// Actor provenance (#396): a signed-in caller is credited as themselves; an
-		// anonymous one keeps the name-pick, club-scoped to THIS slot's club. The
-		// proof says which (#763) and is what `claimSlotCore` gates on.
-		//
-		// Null only for an impersonating superadmin (the asserted id is required
-		// and club-scoped, so "nobody to credit" cannot arise here), and a null
-		// carries no proof — which the core would read as ungated. So that caller
-		// goes through the session gate instead: `read_write` is admitted and
-		// credited as themselves, `read_only` is refused (ADR-0020: write-blind).
-		const actor = (await requestWriteActorWithProof({
-			clubId: slot.clubId,
-			claimedActorMemberId: data.actorMemberId,
-		})) ?? {
-			memberId: (await requireSessionActor({ clubId: slot.clubId })).memberId,
-			proof: "session" as const,
-		};
+			if (!slot) {
+				// A queued write answers instead of throwing (#1638).
+				if (data.expectedHolder !== undefined) return SLOT_GONE;
+				throw new Error("Role not found.");
+			}
+			// Trust guard: memberId must be a roster member of this club.
+			let ineligible: unknown = null;
+			try {
+				await requireMemberInClub(data.memberId, slot.clubId);
+			} catch (error) {
+				// A queued write defers the refusal until the actor is known (#1638).
+				if (data.expectedHolder === undefined) throw error;
+				ineligible = error;
+			}
+			// Actor provenance (#396): a signed-in caller is credited as themselves; an
+			// anonymous one keeps the name-pick, club-scoped to THIS slot's club. The
+			// proof says which (#763) and is what `claimSlotCore` gates on.
+			//
+			// Null only for an impersonating superadmin (the asserted id is required
+			// and club-scoped, so "nobody to credit" cannot arise here), and a null
+			// carries no proof — which the core would read as ungated. So that caller
+			// goes through the session gate instead: `read_write` is admitted and
+			// credited as themselves, `read_only` is refused (ADR-0020: write-blind).
+			const actor = (await requestWriteActorWithProof({
+				clubId: slot.clubId,
+				claimedActorMemberId: data.actorMemberId,
+			})) ?? {
+				memberId: (await requireSessionActor({ clubId: slot.clubId })).memberId,
+				proof: "session" as const,
+			};
 
-		// One retry on a deadlock with a member edit (#1388), on a new transaction.
-		await withDeadlockRetry(() =>
-			db.transaction((tx) =>
-				claimSlotCore(tx, {
-					slotId: data.slotId,
-					memberId: data.memberId,
-					actorMemberId: actor.memberId,
-					speakerDetails: data.speakerDetails,
-					proof: actor.proof,
-				}),
-			),
-		);
+			// A queued write (#1638): compare the holder under the lock, then act.
+			if (data.expectedHolder !== undefined) {
+				const expectedHolder = data.expectedHolder;
+				// The op's owner first, then a permanent refusal of the target.
+				await assertQueuedByCaller(data, actor.memberId);
+				if (ineligible) {
+					return permanentOrThrow(
+						ineligible,
+						INELIGIBLE_MEMBER,
+						data,
+						actor.memberId,
+					);
+				}
+				const result = await withDeadlockRetry(() =>
+					db.transaction((tx) =>
+						applyRoleOpExpectingHolder(tx, {
+							kind: "claim",
+							slotId: data.slotId,
+							memberId: data.memberId,
+							actorMemberId: actor.memberId,
+							speakerDetails: data.speakerDetails,
+							proof: actor.proof,
+							expectedHolder,
+						}),
+					),
+				);
+				return result.ok ? { ok: true as const, proof: actor.proof } : result;
+			}
 
-		return { ok: true as const, proof: actor.proof };
-	});
+			// One retry on a deadlock with a member edit (#1388), on a new transaction.
+			await withDeadlockRetry(() =>
+				db.transaction((tx) =>
+					claimSlotCore(tx, {
+						slotId: data.slotId,
+						memberId: data.memberId,
+						actorMemberId: actor.memberId,
+						speakerDetails: data.speakerDetails,
+						proof: actor.proof,
+					}),
+				),
+			);
+
+			return { ok: true as const, proof: actor.proof };
+		},
+	);
 
 // No `actorMemberId` on the wire (#763): the actor is the caller's session.
 // An older client still sends one; zod drops it.
 const releaseSchema = z.object({
 	slotId: z.string().uuid(),
+	expectedHolder: expectedHolderSchema,
+	...queuedByShape,
 });
 
 /** Release a slot back to open. Any SIGNED-IN member of the club may release any
@@ -129,7 +257,7 @@ const releaseSchema = z.object({
  *  under its row lock. */
 export const releaseSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => releaseSchema.parse(input))
-	.handler(async ({ data }) => {
+	.handler(async ({ data }): Promise<SlotWriteResult<object>> => {
 		// Cheap pre-read solely to resolve clubId for the actor guard; the
 		// authoritative read-and-write happens under a row lock in
 		// `releaseSlotCore`. Same shape as `reassignSlot` below.
@@ -141,6 +269,8 @@ export const releaseSlot = createServerFn({ method: "POST" })
 			.limit(1);
 
 		if (!slot) {
+			// A queued write answers instead of throwing (#1638).
+			if (data.expectedHolder !== undefined) return SLOT_GONE;
 			throw new Error("Role not found.");
 		}
 
@@ -148,9 +278,35 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		// any signed-in club member may release/clear any slot; the activity log
 		// records who did it (mirrors reassignSlot). Null only for a `read_write`
 		// impersonating superadmin, whom `logActivity` records as themselves.
-		const { memberId: actorMemberId } = await requireSessionActor({
-			clubId: slot.clubId,
-		});
+		let actorMemberId: string | null;
+		try {
+			actorMemberId = (await requireSessionActor({ clubId: slot.clubId }))
+				.memberId;
+		} catch (error) {
+			if (data.expectedHolder === undefined) throw error;
+			// A queued write: only an archived club is permanent (#1638); the
+			// sign-in and membership refusals rethrow and the op stays queued.
+			return permanentOrThrow(error, ARCHIVED_CLUB, data, undefined);
+		}
+
+		// A queued write (#1638): compare the holder under the lock, then act.
+		if (data.expectedHolder !== undefined) {
+			const expectedHolder = data.expectedHolder;
+			await assertQueuedByCaller(data, actorMemberId);
+			// One retry on a deadlock (#1388): this path takes the merge and member
+			// locks first, like the claim's.
+			return withDeadlockRetry(() =>
+				db.transaction((tx) =>
+					applyRoleOpExpectingHolder(tx, {
+						kind: "release",
+						slotId: data.slotId,
+						actorMemberId,
+						proof: "session",
+						expectedHolder,
+					}),
+				),
+			);
+		}
 
 		await db.transaction((tx) =>
 			releaseSlotCore(tx, {
@@ -272,6 +428,8 @@ export const unconfirmSlot = createServerFn({ method: "POST" })
 const reassignSchema = z.object({
 	slotId: z.string().uuid(),
 	memberId: z.string().uuid(),
+	expectedHolder: expectedHolderSchema,
+	...queuedByShape,
 });
 
 /** Reassign a claimed slot to a different member. Any SIGNED-IN member of the
@@ -281,7 +439,7 @@ const reassignSchema = z.object({
  *  also refuses an archived club before any transaction. */
 export const reassignSlot = createServerFn({ method: "POST" })
 	.validator((input: unknown) => reassignSchema.parse(input))
-	.handler(async ({ data }) => {
+	.handler(async ({ data }): Promise<SlotWriteResult<object>> => {
 		// Cheap pre-read solely to resolve clubId for the trust guards; the
 		// authoritative read-and-write happens under a row lock in
 		// reassignSlotCore (ADR-0005 atomicity — this row may change before the tx).
@@ -293,15 +451,46 @@ export const reassignSlot = createServerFn({ method: "POST" })
 			.limit(1);
 
 		if (!slot) {
+			// A queued write answers instead of throwing (#1638).
+			if (data.expectedHolder !== undefined) return SLOT_GONE;
 			throw new Error("Role not found.");
 		}
 
 		// The session gate (#763), then the target: a member id off the wire, so
 		// it is checked against THIS club's roster.
-		const { memberId: actorMemberId } = await requireSessionActor({
-			clubId: slot.clubId,
-		});
-		await requireMemberInClub(data.memberId, slot.clubId);
+		let actorMemberId: string | null;
+		try {
+			actorMemberId = (await requireSessionActor({ clubId: slot.clubId }))
+				.memberId;
+		} catch (error) {
+			if (data.expectedHolder === undefined) throw error;
+			return permanentOrThrow(error, ARCHIVED_CLUB, data, undefined);
+		}
+		try {
+			await requireMemberInClub(data.memberId, slot.clubId);
+		} catch (error) {
+			if (data.expectedHolder === undefined) throw error;
+			return permanentOrThrow(error, INELIGIBLE_MEMBER, data, actorMemberId);
+		}
+
+		// A queued write (#1638): compare the holder under the lock, then act.
+		if (data.expectedHolder !== undefined) {
+			const expectedHolder = data.expectedHolder;
+			await assertQueuedByCaller(data, actorMemberId);
+			// One retry on a deadlock (#1388), as the claim above.
+			return withDeadlockRetry(() =>
+				db.transaction((tx) =>
+					applyRoleOpExpectingHolder(tx, {
+						kind: "reassign",
+						slotId: data.slotId,
+						memberId: data.memberId,
+						actorMemberId,
+						proof: "session",
+						expectedHolder,
+					}),
+				),
+			);
+		}
 
 		await db.transaction((tx) =>
 			reassignSlotCore(tx, {

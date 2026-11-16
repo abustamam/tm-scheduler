@@ -238,25 +238,59 @@ const SLOT_FILL_BLANK: Record<
 		],
 		logic: [
 			{
+				// The gates live in ONE function (#1638): `claimSlotCore` and the
+				// expected-holder path both call it, so a gate added here reaches both.
 				file: "slots-logic.ts",
-				fn: "claimSlotCore",
+				fn: "assertClaimActorGates",
 				mustContain: [
 					// Someone else, and not the TMOD: refused. `&&`, both `!==`, and the
 					// TMOD read through the caller's transaction, never the pool.
 					"const forSomeoneElse = args.actorMemberId !== args.memberId;",
-					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
+					'if (args.proof === "asserted") { if (forSomeoneElse && args.actorMemberId !== (await loadTmodMemberId(args.meetingId, tx))) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }',
 					// Over the member's own decline: refused. The PLAN only, never the
 					// roll, for the sessionless proof.
-					"if (await isMemberNotComing(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
+					"if (await isMemberNotComing(tx, { memberId: args.memberId, meetingId: args.meetingId, })) { throw new Error(SIGN_IN_REQUIRED_MESSAGE); }",
 					// The connector arm keeps the roll-aware read.
-					'if (args.proof === "connector") { await lockMemberAttendance(tx, slot.meetingId, args.memberId); if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: slot.meetingId, })) { throw new Error("You\'re marked as not coming to that meeting."); } }',
-					"proof: args.proof,",
+					'if (args.proof === "connector") { await lockMemberAttendance(tx, args.meetingId, args.memberId); if (await isMemberUnavailable(tx, { memberId: args.memberId, meetingId: args.meetingId, })) { throw new Error("You\'re marked as not coming to that meeting."); } }',
 				],
-				mustPrecede: [['if (args.proof === "asserted")', ".update(roleSlots)"]],
 				// The sessionless proof reads the plan only: the roll-aware check
 				// belongs to the connector arm, and the asserted block never calls it.
 				mustNotContainIn: [
 					['if (args.proof === "asserted") {', "isMemberUnavailable"],
+				],
+			},
+			{
+				file: "slots-logic.ts",
+				fn: "claimSlotCore",
+				mustContain: [
+					// The gates run through the shared function, with this slot's meeting
+					// and the caller's proof; the forwarding is what a swap would drop.
+					"await assertClaimActorGates(tx, { memberId: args.memberId, actorMemberId: args.actorMemberId, proof: args.proof, meetingId: slot.meetingId, });",
+					"proof: args.proof,",
+				],
+				mustPrecede: [
+					["await assertClaimActorGates(tx,", ".update(roleSlots)"],
+				],
+			},
+			{
+				// The expected-holder path (#1638) runs the same gates before it
+				// compares holders, in `claimSlotCore`'s order (#1135).
+				file: "slots-logic.ts",
+				fn: "applyRoleOpExpectingHolder",
+				mustContain: [
+					'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED)',
+					"await assertClaimActorGates(tx, { memberId: args.memberId as string, actorMemberId: args.actorMemberId, proof: args.proof, meetingId: pre.meetingId, });",
+				],
+				mustPrecede: [
+					[
+						'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED)',
+						"await assertClaimActorGates(tx,",
+					],
+					[
+						"await assertClaimActorGates(tx,",
+						'assertMeetingAccepts(pre.meetingStatus, "plan")',
+					],
+					['assertMeetingAccepts(pre.meetingStatus, "plan")', '.for("update"'],
 				],
 			},
 			{

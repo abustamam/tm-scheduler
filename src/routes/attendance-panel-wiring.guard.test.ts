@@ -755,7 +755,7 @@ describe("attendance panel route wiring (PR 2)", () => {
 		// test (they supply their own fixture). The officer just silently loses the
 		// only thing that says a roll is still sitting unsynced on their phone.
 		expect(src).toContain("sync={{");
-		expect(src).toContain("queueCount: offlineMinutes.queue.length");
+		expect(src).toContain("queueCount: offlineMinutes.pendingCount");
 		expect(src).toContain("draining: offlineMinutes.draining");
 		expect(src).toContain("syncError: offlineMinutes.syncError");
 		expect(src).toContain("justSynced: offlineMinutes.justSynced");

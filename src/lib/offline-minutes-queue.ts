@@ -23,6 +23,10 @@ export type NewGuestPayload = {
 	phone?: string;
 };
 
+export type { HolderKey } from "#/lib/holder-key";
+
+import type { HolderKey } from "#/lib/holder-key";
+
 /**
  * A single queued minutes edit. Mirrors one server mutation each. Every op
  * carries a generated `opId` (queue-entry identity) and `queuedAt`. Creates also
@@ -162,6 +166,68 @@ export type MinutesOp =
 	  };
 
 /**
+ * A queued ROLE edit (#1638): assign someone to a role, or clear it. Kept apart
+ * from `MinutesOp` on purpose. `deriveMinutes` and `dispatchOp` both end in an
+ * exhaustive `never` switch over `MinutesOp`, and `deriveMinutes` has nothing to
+ * do with a role: its snapshot has no slot list. Folding these in would force a
+ * no-op arm into every minutes projection, so the hook hands the minutes
+ * consumers `queue` (minutes ops only) and the role ops separately.
+ */
+export type RoleSlotOp =
+	| {
+			/** Give a role to a MEMBER (#1638). Offline assignment is members only. */
+			type: "assignSlot";
+			opId: string;
+			queuedAt: number;
+			slotId: string;
+			/** For the conflict toast, e.g. "Timer". */
+			roleName: string;
+			memberId: string;
+			/** What the page and the deck show while the op is queued, captured
+			 *  from the picker's own roster row: nothing is looked up offline. */
+			memberDisplayName: string;
+			/** The asserting actor, exactly as the caller passes it to `claimSlot`
+			 *  today (#747); null where today's call passes none (a reassign). The
+			 *  server still authorizes against the session, and the drain sends the
+			 *  actor only to the claim. */
+			actorMemberId: string | null;
+			/** Speech details the claim carries: only the `TBA` placeholder a
+			 *  speaker slot sends, never real details (those are online-only). */
+			speakerDetails?: { speechTitle?: string };
+			/** The holder the officer SAW (projected state), so a second offline
+			 *  edit to the slot chains off the first. */
+			expectedHolder: HolderKey;
+			expectedHolderName: string | null;
+			queuedBy?: string | null;
+			/** The signed-in USER when it was queued: an impersonating superadmin
+			 *  has no member, so this is the only identity the server can compare. */
+			queuedByUserId?: string | null;
+	  }
+	| {
+			/** Clear a role (#1638). A guest-held slot may be cleared offline. */
+			type: "releaseSlot";
+			opId: string;
+			queuedAt: number;
+			slotId: string;
+			roleName: string;
+			expectedHolder: HolderKey;
+			expectedHolderName: string | null;
+			/** The member who was signed in when this was queued (null: nobody),
+			 *  stamped by the hook. The queue is keyed by meeting, not by user, so
+			 *  the drain replays a role op only for this same member: under anyone
+			 *  else it would be a different actor's write (#1638). */
+			queuedBy?: string | null;
+			/** The signed-in USER when it was queued: an impersonating superadmin
+			 *  has no member, so this is the only identity the server can compare. */
+			queuedByUserId?: string | null;
+	  };
+
+/** Everything the offline queue can hold for a meeting. */
+export type QueuedOp = MinutesOp | RoleSlotOp;
+
+export { isRoleSlotOp } from "#/lib/role-slot-op";
+
+/**
  * Minimal async key/value storage the queue is built on. IndexedDB in the
  * browser; an in-memory fake in unit tests (no real IndexedDB required).
  */
@@ -181,14 +247,13 @@ const snapshotKey = (meetingId: string) => `snapshot:${meetingId}`;
 export function createOfflineMinutesQueue(store: KeyValueStore) {
 	return {
 		/** Append an op to a meeting's queue (order preserved). */
-		async enqueue(meetingId: string, op: MinutesOp): Promise<void> {
-			const existing =
-				(await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+		async enqueue(meetingId: string, op: QueuedOp): Promise<void> {
+			const existing = (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 			await store.set(queueKey(meetingId), [...existing, op]);
 		},
 		/** Read a meeting's queued ops in insertion order (empty when none). */
-		async readQueue(meetingId: string): Promise<MinutesOp[]> {
-			return (await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+		async readQueue(meetingId: string): Promise<QueuedOp[]> {
+			return (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 		},
 		/** Drop every queued op for a meeting (slice 4 calls this after a drain). */
 		async clearQueue(meetingId: string): Promise<void> {
@@ -196,8 +261,7 @@ export function createOfflineMinutesQueue(store: KeyValueStore) {
 		},
 		/** Remove a single op by its `opId` (leaves the rest in order). */
 		async removeOp(meetingId: string, opId: string): Promise<void> {
-			const existing =
-				(await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+			const existing = (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 			await store.set(
 				queueKey(meetingId),
 				existing.filter((o) => o.opId !== opId),
@@ -317,7 +381,7 @@ function getDefaultQueue(): OfflineMinutesQueue {
 	return defaultQueue;
 }
 
-export const enqueue = (meetingId: string, op: MinutesOp) =>
+export const enqueue = (meetingId: string, op: QueuedOp) =>
 	getDefaultQueue().enqueue(meetingId, op);
 export const readQueue = (meetingId: string) =>
 	getDefaultQueue().readQueue(meetingId);

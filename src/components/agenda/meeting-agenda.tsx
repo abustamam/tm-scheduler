@@ -10,6 +10,7 @@ import {
 	buildRecruitTargets,
 	NudgeRecruitPicker,
 } from "#/components/club/nudge-recruit-picker";
+import type { OfflineMinutesHandle } from "#/components/club/offline-role-writes";
 import { ProjectPicker } from "#/components/pathways/project-picker";
 import { useProjectOptions } from "#/components/pathways/use-project-options";
 import { Badge } from "#/components/ui/badge";
@@ -121,6 +122,9 @@ export interface MeetingAgendaActions {
 }
 
 export interface MeetingAgendaProps {
+	/** The route's one offline queue (#1638). With it, assigning a role from the
+	 *  sheet is queued offline; without it nothing changes. */
+	offlineMinutes?: OfflineMinutesHandle;
 	slots: AgendaSlot[];
 	/** Members-only stored introductions by slot id (#1480); `null` for a viewer
 	 *  who may not read them, which hides the field on the Edit speech sheet. */
@@ -254,6 +258,7 @@ export function MeetingAgenda({
 	onOwnLateRelease,
 	slotExtra,
 	speechIntroductions = null,
+	offlineMinutes,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -1043,9 +1048,14 @@ export function MeetingAgenda({
 								status: assignSlot.status,
 								isSpeakerRole: assignSlot.isSpeakerRole,
 								label: slotLabel(assignSlot, roleCounts),
+								roleName: assignSlot.roleName,
+								assigneeName: assignSlot.assigneeName,
+								assigneeId: assignSlot.assigneeId,
+								assigneeGuestId: assignSlot.assigneeGuestId,
 							}
 						: null
 				}
+				offlineMinutes={offlineMinutes}
 				roster={roster}
 				roleByMemberId={roleByMemberId}
 				unavailableIds={unavailableMemberIds}
