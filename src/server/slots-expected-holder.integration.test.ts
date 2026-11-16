@@ -11,11 +11,14 @@
  */
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clubs, guests, meetings, roleSlots } from "#/db/schema";
+import { clubs, guests, meetings, members, roleSlots } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
-import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
+import {
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
+	SIGN_IN_REQUIRED_MESSAGE,
+} from "#/lib/write-proof";
 import {
 	cleanup,
 	hasTestDb,
@@ -251,15 +254,23 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			.update(clubs)
 			.set({ archivedAt: new Date() })
 			.where(eq(clubs.id, s.clubId));
-		await expect(
-			run({
+		// protects=R4: an archived club is a permanent refusal, answered not thrown;
+		// fails_when=it throws again, or writes; no_claim=the toast text.
+		expect(
+			await run({
 				kind: "claim",
 				slotId: s.slotId,
 				memberId: s.memberId,
 				actorMemberId: s.adminMemberId,
 				expectedHolder: null,
 			}),
-		).rejects.toThrow(CLUB_ARCHIVED_MESSAGE);
+		).toEqual({
+			ok: false,
+			reason: "refused",
+			message: CLUB_ARCHIVED_MESSAGE,
+			currentHolderName: null,
+		});
+		expect((await holder(s.slotId))?.m).toBe(s.memberId);
 	});
 
 	it("a completed meeting refuses BEFORE the comparison, even for an already-applied op", async () => {
@@ -269,14 +280,21 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			.update(meetings)
 			.set({ status: "completed" })
 			.where(eq(meetings.id, s.meetingId));
-		await expect(
-			run({
+		// protects=R4: a completed meeting is a permanent refusal, answered, and
+		// the holder stays; fails_when=it throws, or the release is written.
+		expect(
+			await run({
 				kind: "release",
 				slotId: s.slotId,
 				actorMemberId: s.adminMemberId,
 				expectedHolder: `m:${s.memberId}`,
 			}),
-		).rejects.toThrow(MEETING_LOCKED_MESSAGE);
+		).toMatchObject({
+			ok: false,
+			reason: "refused",
+			message: MEETING_LOCKED_MESSAGE,
+		});
+		expect((await holder(s.slotId))?.m).toBe(s.memberId);
 	});
 
 	it("the claim actor gate runs BEFORE already-applied", async () => {
@@ -369,24 +387,61 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			.update(meetings)
 			.set({ status: "cancelled" })
 			.where(eq(meetings.id, s.meetingId));
-		await expect(
-			run(
-				kind === "claim"
-					? {
-							kind,
-							slotId: s.slotId,
-							memberId: s.memberId,
-							actorMemberId: s.adminMemberId,
-							expectedHolder: null,
-						}
-					: {
-							kind,
-							slotId: s.slotId,
-							actorMemberId: s.adminMemberId,
-							expectedHolder: null,
-						},
-			),
-		).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+		const answer = await run(
+			kind === "claim"
+				? {
+						kind,
+						slotId: s.slotId,
+						memberId: s.memberId,
+						actorMemberId: s.adminMemberId,
+						expectedHolder: null,
+					}
+				: {
+						kind,
+						slotId: s.slotId,
+						actorMemberId: s.adminMemberId,
+						expectedHolder: null,
+					},
+		);
+		expect(answer).toMatchObject({
+			ok: false,
+			reason: "refused",
+			message: MEETING_CANCELLED_MESSAGE,
+		});
+		expect((await holder(s.slotId))?.m ?? null).toBe(
+			kind === "claim" ? s.memberId : null,
+		);
+	});
+
+	// protects=R4: an ended or ineligible member is a permanent refusal, answered
+	//   with the plain write's message, and the slot is left as it was;
+	// fails_when=the member lock throws again, or the write goes through;
+	// no_claim=a deadlock on that lock (not a plain Error, still thrown).
+	it.each([
+		"claim",
+		"reassign",
+	] as const)("an ended member refuses a %s with a refused answer and no write", async (kind) => {
+		const s = await seedLiveClub();
+		await setHolder(s.slotId, kind === "reassign" ? s.adminMemberId : null);
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, s.memberId));
+		const answer = await run({
+			kind,
+			slotId: s.slotId,
+			memberId: s.memberId,
+			actorMemberId: s.adminMemberId,
+			expectedHolder: kind === "reassign" ? `m:${s.adminMemberId}` : null,
+		});
+		expect(answer).toMatchObject({
+			ok: false,
+			reason: "refused",
+			message: MEMBER_NOT_ELIGIBLE_MESSAGE,
+		});
+		expect((await holder(s.slotId))?.m ?? null).toBe(
+			kind === "reassign" ? s.adminMemberId : null,
+		);
 	});
 
 	it("on a cancelled meeting an ineligible asserted claimer hears the sign-in refusal first (#1135)", async () => {

@@ -144,7 +144,9 @@ export type DrainedRoleOp = {
 	op: RoleSlotOp;
 	outcome: "applied" | "skipped";
 	/** Why a skipped op was skipped. */
-	reason?: "holder-changed" | "slot-gone";
+	reason?: "holder-changed" | "slot-gone" | "refused";
+	/** The server's refusal text, for a `refused` skip. */
+	message?: string;
 	/** Who holds the slot now, from the server's answer to a skipped op. Not
 	 *  projected: see `projectDrained`. */
 	currentHolderName: string | null;

@@ -157,10 +157,12 @@ export type RoleServerFns = {
 export type RoleDrainOutcome = {
 	op: RoleSlotOp;
 	outcome: "applied" | "skipped";
-	reason?: "holder-changed" | "slot-gone";
+	reason?: "holder-changed" | "slot-gone" | "refused";
 	currentHolderName: string | null;
 	/** Whether anyone holds the slot now, for a `holder-changed` skip. */
 	holderPresent?: boolean;
+	/** The server's refusal text, for a `refused` skip. */
+	message?: string;
 };
 
 /** The toast for a skipped role op (#1638). The online change is kept, and the
@@ -171,6 +173,10 @@ export function roleSkipMessage(o: RoleDrainOutcome): string {
 		op.type === "assignSlot"
 			? `Your offline change to ${op.memberDisplayName}`
 			: "Your offline clear";
+	if (o.reason === "refused") {
+		const why = (o.message ?? "The server refused it").replace(/\.+$/, "");
+		return `${op.roleName}: ${why}. Your offline change was not applied.`;
+	}
 	if (o.reason === "slot-gone") {
 		return `${op.roleName}: that role was removed. Your offline change was not applied.`;
 	}
@@ -410,6 +416,7 @@ async function dispatchRoleOp(
 				...(answer.reason === "holder-changed"
 					? { holderPresent: answer.holderPresent }
 					: {}),
+				...(answer.reason === "refused" ? { message: answer.message } : {}),
 			};
 }
 

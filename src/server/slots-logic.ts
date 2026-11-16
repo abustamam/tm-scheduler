@@ -2745,6 +2745,27 @@ async function holderNameOf(
  * Lock order is the plain claim's: merge lock, member row, the asserted
  * claimer's attendance lock, then the slot row.
  */
+/** Run a refusal-capable step; a plain `Error` (the gates' own throws, never a
+ *  driver error such as a deadlock) becomes a permanent `refused` answer. */
+async function refusedBy(
+	step: () => void | Promise<void>,
+): Promise<ExpectedHolderResult | null> {
+	try {
+		await step();
+		return null;
+	} catch (error) {
+		if (error instanceof Error && error.constructor === Error) {
+			return {
+				ok: false,
+				reason: "refused",
+				message: error.message,
+				currentHolderName: null,
+			};
+		}
+		throw error;
+	}
+}
+
 export async function applyRoleOpExpectingHolder(
 	tx: Tx,
 	args: {
@@ -2761,7 +2782,11 @@ export async function applyRoleOpExpectingHolder(
 	if (args.kind !== "release") {
 		if (!args.memberId) throw new Error("A member is required.");
 		await lockMembershipsAgainstMerge(tx, [args.memberId]);
-		await lockMemberForAssignment(tx, args.memberId);
+		const memberId = args.memberId;
+		const ineligible = await refusedBy(() =>
+			lockMemberForAssignment(tx, memberId),
+		);
+		if (ineligible) return ineligible;
 	}
 	const [pre] = await tx
 		.select({
@@ -2774,12 +2799,16 @@ export async function applyRoleOpExpectingHolder(
 		.where(eq(roleSlots.id, args.slotId))
 		.limit(1);
 	if (!pre) return SLOT_GONE;
-	await assertClubNotArchived(pre.clubId, tx);
+	const archived = await refusedBy(() => assertClubNotArchived(pre.clubId, tx));
+	if (archived) return archived;
 	if (args.kind === "claim") {
 		// The order of `claimSlotCore` (#1135): the early refusal accepts a
 		// cancelled meeting, the asserted gates run, and only then is a cancelled
 		// meeting refused, so an ineligible actor hears the sign-in refusal.
-		assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
+		const early = await refusedBy(() =>
+			assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED),
+		);
+		if (early) return early;
 		await assertClaimActorGates(tx, {
 			memberId: args.memberId as string,
 			actorMemberId: args.actorMemberId,
@@ -2787,7 +2816,10 @@ export async function applyRoleOpExpectingHolder(
 			meetingId: pre.meetingId,
 		});
 	}
-	assertMeetingAccepts(pre.meetingStatus, "plan");
+	const closed = await refusedBy(() =>
+		assertMeetingAccepts(pre.meetingStatus, "plan"),
+	);
+	if (closed) return closed;
 
 	const [locked] = await tx
 		.select({

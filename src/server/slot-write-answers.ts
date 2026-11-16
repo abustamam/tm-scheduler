@@ -18,6 +18,16 @@ export type ExpectedHolderResult =
 	  }
 	| {
 			ok: false;
+			/** The server refuses this write for good (R4): the member has ended or
+			 *  is ineligible, the meeting is completed or cancelled, or the club is
+			 *  archived. `message` is the same text the plain write would throw.
+			 *  Sign-in and actor refusals are NOT here: they still throw. */
+			reason: "refused";
+			message: string;
+			currentHolderName: null;
+	  }
+	| {
+			ok: false;
 			reason: "slot-gone";
 			/** Always null: nothing about the club or its holder is revealed. */
 			currentHolderName: null;

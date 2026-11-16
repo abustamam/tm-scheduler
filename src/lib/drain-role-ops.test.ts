@@ -253,9 +253,9 @@ describe("W3, W1, W2 and R2 on the drain (#1638)", () => {
 			speechTitle: "TBA",
 		});
 		await dispatchOp(assign(), "m1", f.all);
-		expect("speakerDetails" in f.role.claimSlot.mock.calls[1]?.[0].data).toBe(
-			false,
-		);
+		expect(
+			"speakerDetails" in (f.role.claimSlot.mock.calls[1]?.[0]?.data ?? {}),
+		).toBe(false);
 	});
 
 	// protects=an assign over an open slot with no actor never claims (it would
@@ -322,5 +322,74 @@ describe("W3, W1, W2 and R2 on the drain (#1638)", () => {
 			}),
 		).rejects.toThrow(ROLE_OP_OTHER_USER_MESSAGE);
 		expect(f.role.claimSlot).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("R4: a permanent refusal leaves the queue (#1638)", () => {
+	const refused = {
+		ok: false,
+		reason: "refused",
+		message: "Member not found in this club.",
+		currentHolderName: null,
+	};
+
+	// protects=a queued op the server refuses for good is dequeued with the
+	//   toast text, and the ops behind it still drain;
+	// fails_when=a refusal stops the drain (blocking the meeting's queue), or
+	//   the toast loses the server's message;
+	// no_claim=which server states count as permanent (the integration suite).
+	it("is dequeued with a toast, and later ops still drain", async () => {
+		const f = fns();
+		f.role.claimSlot.mockResolvedValueOnce(refused);
+		const ops = [assign({ opId: "a1" }), release({ opId: "r1" })];
+		const removed: string[] = [];
+		const result = await drainMinutesQueue({
+			meetingId: "m1",
+			ops,
+			dispatch: (op) => dispatchOp(op, "m1", f.all),
+			onOpDrained: async (id) => {
+				removed.push(id);
+			},
+		});
+		expect(removed).toEqual(["a1", "r1"]);
+		expect(result.remaining).toEqual([]);
+		expect(result.error).toBeUndefined();
+		expect(f.role.releaseSlot).toHaveBeenCalledTimes(1);
+		const first = result.roleOutcomes?.[0];
+		expect(first).toMatchObject({ outcome: "skipped", reason: "refused" });
+		expect(first && roleSkipMessage(first)).toBe(
+			"Timer: Member not found in this club. Your offline change was not applied.",
+		);
+	});
+
+	// protects=nobody signed in, the R2 wrong-user hold and a network failure
+	//   are NOT permanent: the op stays queued;
+	// fails_when=any of them is treated as a refusal and dequeued;
+	// no_claim=a deadlock (it surfaces as a thrown error like the network one).
+	it.each([
+		[
+			"signed out",
+			new Error("You need to be signed in to do that."),
+			undefined,
+		],
+		["a network failure", new TypeError("Failed to fetch"), undefined],
+		["another member's op", null, { memberId: "bob" }],
+	])("%s stays queued", async (_label, failure, session) => {
+		const f = fns();
+		if (failure) f.role.claimSlot.mockRejectedValue(failure);
+		const ops = [assign({ opId: "a1", queuedBy: "officer-a" }), release()];
+		const removed: string[] = [];
+		const result = await drainMinutesQueue({
+			meetingId: "m1",
+			ops,
+			dispatch: (op) =>
+				dispatchOp(op, "m1", f.all, session ?? { memberId: "officer-a" }),
+			onOpDrained: async (id) => {
+				removed.push(id);
+			},
+		});
+		expect(removed).toEqual([]);
+		expect(result.remaining.map((o) => o.opId)).toEqual(["a1", "r1"]);
+		expect(result.error).toBeInstanceOf(Error);
 	});
 });

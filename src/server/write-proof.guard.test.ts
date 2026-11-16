@@ -278,19 +278,19 @@ const SLOT_FILL_BLANK: Record<
 				file: "slots-logic.ts",
 				fn: "applyRoleOpExpectingHolder",
 				mustContain: [
-					'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);',
+					'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED)',
 					"await assertClaimActorGates(tx, { memberId: args.memberId as string, actorMemberId: args.actorMemberId, proof: args.proof, meetingId: pre.meetingId, });",
 				],
 				mustPrecede: [
 					[
-						'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);',
+						'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED)',
 						"await assertClaimActorGates(tx,",
 					],
 					[
 						"await assertClaimActorGates(tx,",
-						'assertMeetingAccepts(pre.meetingStatus, "plan");',
+						'assertMeetingAccepts(pre.meetingStatus, "plan")',
 					],
-					['assertMeetingAccepts(pre.meetingStatus, "plan");', '.for("update"'],
+					['assertMeetingAccepts(pre.meetingStatus, "plan")', '.for("update"'],
 				],
 			},
 			{
