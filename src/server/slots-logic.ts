@@ -21,10 +21,12 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { holderKey } from "#/lib/holder-key";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	assertMeetingAccepts,
+	MEETING_LOCKED_MESSAGE,
 	type MeetingWriteClass,
 	meetingRefusal,
 } from "#/lib/meeting-lifecycle";
@@ -57,6 +59,7 @@ import { loadMeetingShapeDefs, roleDefScope } from "./meeting-templates-logic";
 import { meetingAcceptsWrite, meetingRowAccepts } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
+import { PermanentRefusal, toPermanentRefusal } from "./permanent-refusal";
 import { resolveProjectDisplay } from "./project-picker-logic";
 import { SLOT_GONE } from "./slot-write-answers";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
@@ -2745,16 +2748,31 @@ async function holderNameOf(
  * Lock order is the plain claim's: merge lock, member row, the asserted
  * claimer's attendance lock, then the slot row.
  */
-/** Run a refusal-capable step; a plain `Error` (the gates' own throws, never a
- *  driver error such as a deadlock) becomes a permanent `refused` answer. */
+/** The messages that are a permanent refusal of a queued role write (#1638),
+ *  imported from where each is defined: never retyped. */
+export const PERMANENT_ROLE_REFUSALS: ReadonlySet<string> = new Set([
+	MEMBER_NOT_ELIGIBLE_MESSAGE,
+	CLUB_ARCHIVED_MESSAGE,
+	MEETING_CANCELLED_MESSAGE,
+	MEETING_LOCKED_MESSAGE,
+]);
+
+/** Run a refusal-capable step. Only a `PermanentRefusal` becomes a `refused`
+ *  answer: the step's plain `Error` is translated when its message is on
+ *  `PERMANENT_ROLE_REFUSALS`, and everything else (a driver error such as a
+ *  deadlock, an unknown message) keeps throwing so the op stays queued. */
 async function refusedBy(
 	step: () => void | Promise<void>,
 ): Promise<ExpectedHolderResult | null> {
 	try {
-		await step();
+		try {
+			await step();
+		} catch (error) {
+			toPermanentRefusal(error, PERMANENT_ROLE_REFUSALS);
+		}
 		return null;
 	} catch (error) {
-		if (error instanceof Error && error.constructor === Error) {
+		if (error instanceof PermanentRefusal) {
 			return {
 				ok: false,
 				reason: "refused",
