@@ -976,16 +976,22 @@ export async function applyRemoveSpeakerSlot(
 		// order. Against claim, release, reassign, guest assignment and
 		// `assign_roles` (meeting first, then slots by id) this lock is cycle-free:
 		// each of those holds at most one slot, or takes the meeting before its
-		// slots. Locking every paired slot would ADD a cycle with a speech relink
-		// (`attachSpeechToOpenSlot` in `speeches-logic.ts` unlinks the speech's
-		// current slot, then writes the target, without the meeting lock).
+		// slots. A speech relink (`attachSpeechToOpenSlot` in `speeches-logic.ts`)
+		// takes its source and target slots in id order too (#1641), so a caller
+		// that locks a whole lineup in id order, as `edit_speaker_slots` does, is
+		// cycle-free against a single relink. Two concurrent relinks of ONE
+		// speech are not covered (see the note in `attachSpeechToOpenSlot`).
 		//
 		// NOT cycle-free overall. `realignEvaluatorPairs` below runs after the
 		// deletes and updates the surviving speakers and evaluators in POSITION
 		// order, not id order. A relink of a speech already on claimed speaker O
-		// to chosen speaker T locks O and waits on T while this holds T; when O
-		// sits after T, the realign renumbers O and waits on the relink, and
-		// Postgres aborts one side as a deadlock. That
+		// to chosen speaker T, when O's id is below T's, locks O and waits on T
+		// while this holds T (a relink takes its slots in id order since #1641, so
+		// with O's id above T's it waits on T holding no slot); when O sits after
+		// T in POSITION, the realign renumbers O and waits on the relink, and
+		// Postgres aborts one side as a deadlock. Inside `edit_speaker_slots` the
+		// whole lineup is locked first, so the realign there never waits; this is
+		// reachable from the other callers only. That
 		// cycle predates #840 (the old id-only DELETE held T just the same), needs
 		// a relink onto the very slot being removed, and is left for the realign.
 		//

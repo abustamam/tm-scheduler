@@ -528,9 +528,10 @@ export async function openBlockingTx(
  */
 export async function waitForLockWait(
 	match: string,
-	blockedBy: number,
+	blockedBy: number | number[],
 	timeoutMs = 10_000,
 ): Promise<number> {
+	const blockers = Array.isArray(blockedBy) ? blockedBy : [blockedBy];
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const res = await testDb.execute(sql`
@@ -538,13 +539,13 @@ export async function waitForLockWait(
 			where datname = current_database()
 			  and state = 'active' and wait_event_type = 'Lock'
 			  and query ilike ${`%${match}%`}
-			  and ${blockedBy} = any(pg_blocking_pids(pid))
+			  and pg_blocking_pids(pid) && ${sql.param(blockers)}::int[]
 			limit 1`);
 		const pid = (res.rows[0] as { pid?: number } | undefined)?.pid;
 		if (pid) return pid;
 		await new Promise((r) => setTimeout(r, 25));
 	}
 	throw new Error(
-		`timed out waiting for a statement matching ${match} to block on pid ${blockedBy}`,
+		`timed out waiting for a statement matching ${match} to block on pid ${blockers.join(",")}`,
 	);
 }
