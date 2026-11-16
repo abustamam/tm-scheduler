@@ -16,6 +16,12 @@
 export const ROLE_OP_OTHER_USER_MESSAGE =
 	"Role changes queued on this device by another member are waiting. Sign in as them to sync.";
 
+/** Thrown at queue time for a clear or a reassign with nobody signed in: it
+ *  would carry no owner, so no later session could be told apart from the
+ *  one that queued it. A claim has its asserting actor and needs no such rule. */
+export const SIGN_IN_TO_QUEUE_ROLE_MESSAGE =
+	"Sign in to change who holds this role. It can't be saved offline while you're signed out.";
+
 /** Who queued the op, as the client stamped it. `undefined` is an op queued
  *  before this existed (or a caller that does not say): it is not checked. */
 export interface RoleOpQueuedBy {

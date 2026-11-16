@@ -15,7 +15,8 @@ import {
 	type RoleServerFns,
 	roleSkipMessage,
 } from "./drain-minutes";
-import type { RoleSlotOp } from "./offline-minutes-queue";
+import type { QueuedOp, RoleSlotOp } from "./offline-minutes-queue";
+import { MEMBER_NOT_ELIGIBLE_MESSAGE } from "./write-proof";
 
 const assign = (over: Partial<RoleSlotOp> = {}): RoleSlotOp =>
 	({
@@ -303,7 +304,8 @@ describe("W3, W1, W2 and R2 on the drain (#1638)", () => {
 		expect(f.role.releaseSlot).not.toHaveBeenCalled();
 		expect(removed).toEqual([]);
 		expect(result.remaining.map((x) => x.opId)).toEqual(["a1", "r1"]);
-		expect((result.error as Error).message).toBe(ROLE_OP_OTHER_USER_MESSAGE);
+		expect(result.held?.map((x) => x.opId)).toEqual(["a1", "r1"]);
+		expect(result.error).toBeUndefined();
 	});
 
 	// protects=the same member replays their own op, and a signed-out replay of
@@ -329,7 +331,7 @@ describe("R4: a permanent refusal leaves the queue (#1638)", () => {
 	const refused = {
 		ok: false,
 		reason: "refused",
-		message: "Member not found in this club.",
+		message: MEMBER_NOT_ELIGIBLE_MESSAGE,
 		currentHolderName: null,
 	};
 
@@ -358,7 +360,7 @@ describe("R4: a permanent refusal leaves the queue (#1638)", () => {
 		const first = result.roleOutcomes?.[0];
 		expect(first).toMatchObject({ outcome: "skipped", reason: "refused" });
 		expect(first && roleSkipMessage(first)).toBe(
-			"Timer: Member not found in this club. Your offline change was not applied.",
+			`Timer: ${MEMBER_NOT_ELIGIBLE_MESSAGE.replace(/\.$/, "")}. Your offline change was not applied.`,
 		);
 	});
 
@@ -374,7 +376,7 @@ describe("R4: a permanent refusal leaves the queue (#1638)", () => {
 		],
 		["a network failure", new TypeError("Failed to fetch"), undefined],
 		["another member's op", null, { memberId: "bob" }],
-	])("%s stays queued", async (_label, failure, session) => {
+	])("%s stays queued", async (label, failure, session) => {
 		const f = fns();
 		if (failure) f.role.claimSlot.mockRejectedValue(failure);
 		const ops = [assign({ opId: "a1", queuedBy: "officer-a" }), release()];
@@ -390,6 +392,117 @@ describe("R4: a permanent refusal leaves the queue (#1638)", () => {
 		});
 		expect(removed).toEqual([]);
 		expect(result.remaining.map((o) => o.opId)).toEqual(["a1", "r1"]);
-		expect(result.error).toBeInstanceOf(Error);
+		// The hold is not an error; a real failure still is.
+		if (label === "another member's op") {
+			expect(result.held).toHaveLength(2);
+			expect(result.error).toBeUndefined();
+		} else {
+			expect(result.error).toBeInstanceOf(Error);
+		}
+	});
+});
+
+describe("a held role op does not block the queue behind it (#1638)", () => {
+	const attendance = (opId = "t1"): QueuedOp => ({
+		type: "setAttendance",
+		opId,
+		queuedAt: 3,
+		memberId: "ann",
+		status: "present",
+	});
+	const bob = { memberId: "bob" };
+	const run = async (ops: QueuedOp[]) => {
+		const f = fns();
+		const minutes = vi.fn().mockResolvedValue(undefined);
+		const removed: string[] = [];
+		const result = await drainMinutesQueue({
+			meetingId: "m1",
+			ops,
+			dispatch: (op) =>
+				dispatchOp(
+					op,
+					"m1",
+					{ ...f.all, setAttendance: minutes } as never,
+					bob,
+				),
+			onOpDrained: async (id) => {
+				removed.push(id);
+			},
+		});
+		return { f, minutes, removed, result };
+	};
+
+	// protects=option A: a role op held for another member leaves the queue
+	//   behind it moving: attendance and minutes ops drain, the role op stays;
+	// fails_when=the held op stops the drain (the old stop-on-failure);
+	// no_claim=a MINUTES op that fails (still stops the drain, below).
+	it("an attendance op behind it drains; the role op stays", async () => {
+		const { minutes, removed, result } = await run([
+			assign({ opId: "a1", queuedBy: "officer-a" }),
+			attendance("t1"),
+			attendance("t2"),
+		]);
+		expect(minutes).toHaveBeenCalledTimes(2);
+		expect(removed).toEqual(["t1", "t2"]);
+		expect(result.remaining.map((o) => o.opId)).toEqual(["a1"]);
+		expect(result.held?.map((o) => o.opId)).toEqual(["a1"]);
+		expect(result.error).toBeUndefined();
+		expect(result.drainedCount).toBe(2);
+	});
+
+	// protects=role ops on ONE slot keep their order: a later op on the held
+	//   op's slot is not dispatched ahead of it;
+	// fails_when=the same-slot hold is dropped (the later release overtakes);
+	// no_claim=other slots (next test).
+	it("a later role op on the SAME slot stays queued behind it", async () => {
+		const { f, removed, result } = await run([
+			assign({ opId: "a1", slotId: "s1", queuedBy: "officer-a" }),
+			release({ opId: "r1", slotId: "s1", queuedBy: "bob" }),
+		]);
+		expect(f.role.releaseSlot).not.toHaveBeenCalled();
+		expect(removed).toEqual([]);
+		expect(result.remaining.map((o) => o.opId)).toEqual(["a1", "r1"]);
+		expect(result.held?.map((o) => o.opId)).toEqual(["a1", "r1"]);
+	});
+
+	// protects=a different slot is independent: it drains past the held op;
+	// fails_when=the hold spreads to every role op;
+	// no_claim=ordering across slots (none is promised).
+	it("a role op on a DIFFERENT slot drains", async () => {
+		const { f, removed, result } = await run([
+			assign({ opId: "a1", slotId: "s1", queuedBy: "officer-a" }),
+			release({ opId: "r2", slotId: "s2", queuedBy: "bob" }),
+		]);
+		expect(f.role.releaseSlot).toHaveBeenCalledTimes(1);
+		expect(removed).toEqual(["r2"]);
+		expect(result.remaining.map((o) => o.opId)).toEqual(["a1"]);
+	});
+
+	// protects=a held MINUTES op's neighbours: a real failure still stops the
+	//   drain, and the held ops before it stay queued in their original order;
+	// fails_when=a hard failure drops the held ops from `remaining`, or
+	//   reorders them after it;
+	// no_claim=the hold itself.
+	it("a failing minutes op still stops the drain; held ops keep their place", async () => {
+		const f = fns();
+		const removed: string[] = [];
+		const result = await drainMinutesQueue({
+			meetingId: "m1",
+			ops: [
+				assign({ opId: "a1", queuedBy: "officer-a" }),
+				attendance("t1"),
+				attendance("t2"),
+			],
+			dispatch: (op) =>
+				op.opId === "t1"
+					? Promise.reject(new Error("boom"))
+					: dispatchOp(op, "m1", f.all, bob),
+			onOpDrained: async (id) => {
+				removed.push(id);
+			},
+		});
+		expect(removed).toEqual([]);
+		expect(result.remaining.map((o) => o.opId)).toEqual(["a1", "t1", "t2"]);
+		expect((result.error as Error).message).toBe("boom");
 	});
 });

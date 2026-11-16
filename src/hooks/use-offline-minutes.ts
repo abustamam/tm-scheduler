@@ -7,6 +7,7 @@ import {
 	dispatchOp,
 	drainMinutesQueue,
 	type MinutesServerFns,
+	ROLE_OP_OTHER_USER_MESSAGE,
 	type RoleServerFns,
 	roleSkipMessage,
 } from "#/lib/drain-minutes";
@@ -26,6 +27,7 @@ import {
 	ONLINE_WRITE_TIMEOUT_MS,
 	raceWithDeadline,
 } from "#/lib/offline-write-deadline";
+import { SIGN_IN_TO_QUEUE_ROLE_MESSAGE } from "#/lib/role-op-owner";
 import { isRoleSlotOp } from "#/lib/role-slot-op";
 import type { MinutesData } from "#/server/minutes-logic";
 
@@ -472,6 +474,17 @@ export function useOfflineMinutes(input: {
 						if (meetingIdRef.current === meetingId) {
 							setSyncError(errMessage(result.error));
 						}
+					} else if (result.held && result.held.length > 0) {
+						// Role ops held for another member (#1638): everything else drained,
+						// these stay queued. Not "all synced": the banner shows why and
+						// `syncError` parks the auto-drain so the held op is not retried in
+						// a loop. Retry (or signing in as the owner, then Retry) replays it.
+						if (result.drainedCount > 0 || result.released.length > 0) {
+							await onMutatedRef.current(meetingId);
+						}
+						if (meetingIdRef.current === meetingId) {
+							setSyncError(ROLE_OP_OTHER_USER_MESSAGE);
+						}
 					} else {
 						// Everything replayed — re-fetch authoritative state (the online
 						// snapshot-save effect then refreshes the offline snapshot).
@@ -542,6 +555,16 @@ export function useOfflineMinutes(input: {
 	async function queueOp(queued: QueuedOp) {
 		// A role op remembers who queued it (#1638): the drain replays it only for
 		// that member. Stamped here, the one place every op passes, not by callers.
+		// No clear or reassign is queued with nobody signed in (#1638): it would
+		// carry no owner, and any later sign-in could replay it.
+		if (
+			isRoleSlotOp(queued) &&
+			(queued.type === "releaseSlot" || queued.expectedHolder !== null) &&
+			sessionMemberIdRef.current === null &&
+			sessionUserIdRef.current === null
+		) {
+			throw new Error(SIGN_IN_TO_QUEUE_ROLE_MESSAGE);
+		}
 		const op: QueuedOp = isRoleSlotOp(queued)
 			? {
 					...queued,

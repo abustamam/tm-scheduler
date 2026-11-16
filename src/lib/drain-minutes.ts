@@ -47,6 +47,7 @@ import {
 	ROLE_OP_OTHER_USER_MESSAGE,
 	type RoleOpQueuedBy,
 } from "#/lib/role-op-owner";
+import { isRoleSlotOp } from "#/lib/role-slot-op";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
 import type { ExpectedHolderResult } from "#/server/slot-write-answers";
 import type {
@@ -457,7 +458,17 @@ export type DrainResult<Op extends QueuedOp = QueuedOp> = {
 	/** How each role op that left the queue ended (#1638), in drain order, the
 	 *  skipped ones included. Includes ops that drained before a later one failed. */
 	roleOutcomes?: RoleDrainOutcome[];
+	/** Role ops left queued because their owner is not the member signed in
+	 *  (#1638), plus later role ops on the same slot queued behind them. They are
+	 *  also in `remaining`. Not an `error`: the ops after them drained. Empty or
+	 *  absent when nothing was held. */
+	held?: Op[];
 };
+
+/** True for the refusal that holds a role op instead of stopping the drain. */
+export function isHeldRoleOpError(error: unknown): boolean {
+	return error instanceof Error && error.message === ROLE_OP_OTHER_USER_MESSAGE;
+}
 
 /**
  * Replay `ops` to the server SEQUENTIALLY, in order (order matters for
@@ -484,20 +495,37 @@ export async function drainMinutesQueue<
 	let drainedCount = 0;
 	const released: DrainResult["released"] = [];
 	const roleOutcomes: RoleDrainOutcome[] = [];
+	// A role op held for its owner (#1638) does not block minutes or attendance
+	// ops behind it, but later role ops on the SAME slot stay queued after it, so
+	// the slot's edits keep their order.
+	const held: Op[] = [];
+	const heldSlots = new Set<string>();
+	const withHeld = () => (held.length > 0 ? { held } : {});
 
 	for (let i = 0; i < ops.length; i++) {
 		const op = ops[i];
+		if (isRoleSlotOp(op) && heldSlots.has(op.slotId)) {
+			held.push(op);
+			continue;
+		}
 		let outcome: DispatchOutcome | undefined;
 		try {
 			outcome = await dispatch(op);
 		} catch (error) {
-			// Stop at the first failure: leave this op + all successors queued.
+			if (isRoleSlotOp(op) && isHeldRoleOpError(error)) {
+				held.push(op);
+				heldSlots.add(op.slotId);
+				continue;
+			}
+			// Stop at the first failure: leave this op + all successors queued
+			// (the held ops stay, in their original order before it).
 			return {
 				drainedCount,
-				remaining: ops.slice(i),
+				remaining: [...held, ...ops.slice(i)],
 				error,
 				released,
 				...withRoles(roleOutcomes),
+				...withHeld(),
 			};
 		}
 		// Recorded BEFORE the queue removal: the release has happened either way,
@@ -516,10 +544,11 @@ export async function drainMinutesQueue<
 			// (an upsert, so harmlessly) on the next pass.
 			return {
 				drainedCount,
-				remaining: ops.slice(i),
+				remaining: [...held, ...ops.slice(i)],
 				error,
 				released,
 				...withRoles(roleOutcomes),
+				...withHeld(),
 			};
 		}
 		drainedCount += 1;
@@ -527,9 +556,10 @@ export async function drainMinutesQueue<
 
 	return {
 		drainedCount,
-		remaining: [],
+		remaining: held,
 		error: undefined,
 		released,
 		...withRoles(roleOutcomes),
+		...withHeld(),
 	};
 }

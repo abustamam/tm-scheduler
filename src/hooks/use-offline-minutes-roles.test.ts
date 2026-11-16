@@ -13,6 +13,7 @@ import {
 	roleSkipMessage,
 } from "#/lib/drain-minutes";
 import type { QueuedOp, RoleSlotOp } from "#/lib/offline-minutes-queue";
+import { SIGN_IN_TO_QUEUE_ROLE_MESSAGE } from "#/lib/role-op-owner";
 import { useOfflineMinutes } from "./use-offline-minutes";
 
 const h = vi.hoisted(() => ({
@@ -283,6 +284,63 @@ describe("useOfflineMinutes with role ops (#1638)", () => {
 		expect(h.claimSlot).not.toHaveBeenCalled();
 		expect(h.store).toHaveLength(1);
 		expect(result.current.pendingCount).toBe(1);
+	});
+
+	// protects=option A in the hook: a role op held for another member leaves the
+	//   attendance op behind it draining, stays queued, the indicator still
+	//   reports pending work (syncError set, pendingCount 1), and the drain does
+	//   not spin on it;
+	// fails_when=the hold stops the drain (attendance never dispatched), the
+	//   hold reads as "all synced", or the auto-drain retries the held op;
+	// no_claim=a held MINUTES op (unchanged stop-the-drain, in drain-role-ops).
+	it("a held role op: later attendance drains, the indicator still waits, no spin", async () => {
+		h.store = [assign({ queuedBy: "officer-a" }), attendance()];
+		const { result } = mount("member-b");
+		await waitFor(
+			() => expect(result.current.syncError).toBe(ROLE_OP_OTHER_USER_MESSAGE),
+			{ timeout: 5000 },
+		);
+		expect(h.setAttendance).toHaveBeenCalledTimes(1);
+		expect(h.claimSlot).not.toHaveBeenCalled();
+		expect(h.store.map((o) => (o as { opId: string }).opId)).toEqual(["a1"]);
+		expect(result.current.pendingCount).toBe(1);
+		expect(result.current.justSynced).toBe(false);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(h.setAttendance).toHaveBeenCalledTimes(1);
+		expect(h.claimSlot).not.toHaveBeenCalled();
+	});
+
+	// protects=signed out, a clear or a reassign is refused at queue time with
+	//   the sign-in message and nothing is stored; a claim of an open slot (it
+	//   has its asserting actor) is not refused by this rule;
+	// fails_when=the refusal is dropped (an ownerless clear is queued), or it
+	//   also refuses the claim;
+	// no_claim=the online path (nothing is queued there).
+	it("signed out, a queued clear or reassign is refused", async () => {
+		h.online = false;
+		const { result } = mount(null);
+		await act(async () => {
+			await expect(
+				result.current.mutate(
+					async () => {},
+					() => release(),
+				),
+			).rejects.toThrow(SIGN_IN_TO_QUEUE_ROLE_MESSAGE);
+			await expect(
+				result.current.mutate(
+					async () => {},
+					() => assign({ expectedHolder: "m:ann" }),
+				),
+			).rejects.toThrow(SIGN_IN_TO_QUEUE_ROLE_MESSAGE);
+		});
+		expect(h.store).toHaveLength(0);
+		await act(async () => {
+			await result.current.mutate(
+				async () => {},
+				() => assign(),
+			);
+		});
+		expect(h.store).toHaveLength(1);
 	});
 
 	// protects=R3: two tabs draining one queue dispatch each op ONCE (a second
