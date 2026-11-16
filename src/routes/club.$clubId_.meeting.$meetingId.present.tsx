@@ -2,6 +2,7 @@ import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { MeetingPresent } from "#/components/agenda/meeting-present";
 import { OfflineBadge } from "#/components/agenda/offline-badge";
+import { useLiveMeeting } from "#/components/agenda/use-live-meeting";
 import { useNextMeetingRefresh } from "#/components/agenda/use-next-meeting-refresh";
 import { CancelledWatermark } from "#/components/club/cancelled-meeting-notice";
 import { MeetingNotFound } from "#/components/meeting-not-found";
@@ -68,8 +69,25 @@ export const Route = createFileRoute(
 });
 
 function PresentPage() {
-	const data = Route.useLoaderData();
+	const loaded = Route.useLoaderData();
 	const { clubId, meetingId } = Route.useParams();
+	// Role changes land while the deck is up (#1637): the loader's snapshot,
+	// silently replaced by the same public, projected read the loader did. The
+	// logo and the cancelled mark stay from the loader. A refresh that throws
+	// (including a meeting that is gone or now belongs to another club) keeps the
+	// last good copy, so the deck never blanks.
+	const data = useLiveMeeting(
+		loaded,
+		[loaded.meeting.clubId, meetingId],
+		async () => {
+			const fresh = await getPublicMeetingByKey({
+				data: { clubId: loaded.meeting.clubId, key: meetingId },
+			});
+			if (fresh.meeting.clubId !== loaded.meeting.clubId)
+				throw new Error("Meeting not found.");
+			return { ...loaded, ...inRoomMeetingPayload(fresh) };
+		},
+	);
 	const navigate = useNavigate();
 	// The absolute ballot URL is derived in the browser (#510), same as the
 	// guest-book QR on the VP Membership page: SSR has no origin, and a QR

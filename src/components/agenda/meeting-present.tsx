@@ -44,6 +44,7 @@ import {
 	NAVY_GRADIENT_BOTTOM,
 	NAVY_GRADIENT_TOP,
 } from "#/lib/slide-palette";
+import { remapSlideIndex } from "#/lib/slide-remap";
 import {
 	cqw,
 	SLIDE_BODY_BOTTOM_PCT,
@@ -95,6 +96,13 @@ function voteCategory(
 	return "best_table_topics";
 }
 
+export { remapSlideIndex };
+
+/** A slide's identity for re-mapping; the builders always set `key`. */
+function slideKey(s: Slide): string {
+	return s.key ?? s.kind;
+}
+
 /** Full-screen, keyboard-driven slideshow. Read-only; position is local state. */
 export function MeetingPresent({
 	deck,
@@ -115,13 +123,32 @@ export function MeetingPresent({
 	 *  the .pptx button rather than over the slide (#361). */
 	offlineBadge?: ReactNode;
 }) {
-	const [i, setI] = useState(0);
+	const [iState, setI] = useState(0);
 	// The overview is closed until asked for (#360): the meeting sees the deck
 	// and nothing else. `cursor` is the highlighted card while it is open —
 	// separate from `i` so browsing the list does not move the projection until
 	// the presenter commits.
 	const [overview, setOverview] = useState(false);
-	const [cursor, setCursor] = useState(0);
+	const [cursorState, setCursor] = useState(0);
+	// Keep the presenter's place across a live rebuild (#1637): the deck is a
+	// fresh array on every render, so react to the key LIST changing, not the
+	// array. Adjusting state during render is React's sanctioned pattern for
+	// state derived from a prop change; it avoids a frame on the old index.
+	const keys = deck.map(slideKey);
+	const keySig = keys.join("\u0000");
+	const [seen, setSeen] = useState({ sig: keySig, keys });
+	// The remapped values are used for THIS pass too: React re-renders after a
+	// render-phase setState, but the rest of this pass still runs first, and
+	// indexing the new, shorter deck with the old index would throw.
+	let i = iState;
+	let cursor = cursorState;
+	if (seen.sig !== keySig) {
+		i = remapSlideIndex(seen.keys, keys, iState);
+		cursor = remapSlideIndex(seen.keys, keys, cursorState);
+		setSeen({ sig: keySig, keys });
+		setI(i);
+		setCursor(cursor);
+	}
 	// A BARE COUNT, never per-candidate numbers (#510): a live leaderboard on
 	// the projector produces bandwagon voting and destroys the reveal —
 	// per-candidate tallies exist only behind the gated `getVoteTally`. Polls
