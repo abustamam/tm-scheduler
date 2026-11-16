@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
 	MeetingAgendaActions,
@@ -161,6 +161,39 @@ export function useMeetingCover(args: {
 	// whether that call is made now or queued (see `offline-role-writes.ts`).
 	// Absent, they are the bare calls.
 	type RoleSlot = MeetingDetail["slots"][number];
+	// Whether the role write that just returned was QUEUED rather than sent
+	// (#1648). A queued write changed nothing on the server, so the agenda's
+	// `onMutated` must not re-run the route loader: offline that fetch fails and
+	// the route's error screen replaces the page. The queue refreshes the route
+	// itself once it drains (`useOfflineMinutes`' own `onMutated`), and a write
+	// that went direct was already refreshed by `mutate`. Set before a write,
+	// cleared the moment its direct call resolves, consumed by `refreshRoute`.
+	const roleWriteQueuedRef = useRef(false);
+	function trackQueued(direct: () => Promise<unknown>) {
+		return async () => {
+			const result = await direct();
+			roleWriteQueuedRef.current = false;
+			return result;
+		};
+	}
+	// Runs one queue-capable role write. A throw (busy, an unqueueable op, a
+	// refused direct call) queued nothing, so it leaves the flag clear.
+	async function viaQueue(write: () => Promise<void>) {
+		roleWriteQueuedRef.current = true;
+		try {
+			await write();
+		} catch (err) {
+			roleWriteQueuedRef.current = false;
+			throw err;
+		}
+	}
+	function refreshRoute() {
+		if (roleWriteQueuedRef.current) {
+			roleWriteQueuedRef.current = false;
+			return;
+		}
+		return router.invalidate();
+	}
 	async function claimOrQueue(
 		slot: RoleSlot,
 		me: { id: string; name: string | null },
@@ -170,13 +203,15 @@ export function useMeetingCover(args: {
 			await claimAs(me, slot, speakerDetails);
 			return;
 		}
-		await assignRoleViaQueue(offlineMinutes, {
-			slot,
-			member: me,
-			actorMemberId: me.id,
-			speakerDetails,
-			direct: () => claimAs(me, slot, speakerDetails),
-		});
+		await viaQueue(() =>
+			assignRoleViaQueue(offlineMinutes, {
+				slot,
+				member: me,
+				actorMemberId: me.id,
+				speakerDetails,
+				direct: trackQueued(() => claimAs(me, slot, speakerDetails)),
+			}),
+		);
 	}
 	async function reassignOrQueue(
 		slot: RoleSlot,
@@ -188,14 +223,16 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await assignRoleViaQueue(offlineMinutes, {
-			slot,
-			member: me,
-			// Today's reassign carries no actor on the wire (#763), so the op
-			// carries none either.
-			actorMemberId: null,
-			direct,
-		});
+		await viaQueue(() =>
+			assignRoleViaQueue(offlineMinutes, {
+				slot,
+				member: me,
+				// Today's reassign carries no actor on the wire (#763), so the op
+				// carries none either.
+				actorMemberId: null,
+				direct: trackQueued(direct),
+			}),
+		);
 	}
 	async function releaseOrQueue(slot: RoleSlot) {
 		const direct = () => releaseSlot({ data: { slotId: slot.id } });
@@ -203,7 +240,12 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await releaseRoleViaQueue(offlineMinutes, { slot, direct });
+		await viaQueue(() =>
+			releaseRoleViaQueue(offlineMinutes, {
+				slot,
+				direct: trackQueued(direct),
+			}),
+		);
 	}
 
 	// Manager (admin) actions: act as the session member; exposes the manager-only
@@ -256,7 +298,7 @@ export function useMeetingCover(args: {
 				data: { meetingId: meeting.id, selfMemberId: managerActorId },
 			});
 		},
-		onMutated: () => router.invalidate(),
+		onMutated: refreshRoute,
 	};
 
 	// Self-serve (member / anon) actions: resolve identity first (a signed-in
@@ -307,7 +349,7 @@ export function useMeetingCover(args: {
 			});
 			toast.success("Speaker removed.");
 		},
-		onMutated: () => router.invalidate(),
+		onMutated: refreshRoute,
 	};
 
 	const actions = effectiveCanManage ? managerActions : selfActions;

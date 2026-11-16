@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OfflineMinutesHandle } from "./offline-role-writes";
 import { useMeetingCover } from "./use-meeting-cover";
 
+const router = vi.hoisted(() => ({ invalidate: vi.fn(async () => {}) }));
 vi.mock("@tanstack/react-router", () => ({
-	useRouter: () => ({ invalidate: vi.fn(async () => {}) }),
+	useRouter: () => router,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 vi.mock("#/components/write-error-toast", () => ({ showWriteError: vi.fn() }));
@@ -147,5 +148,42 @@ describe("useMeetingCover with the offline queue (#1638)", () => {
 		expect(s.reassignSlot).toHaveBeenCalledWith({
 			data: { slotId: "slot1", memberId: "mgr" },
 		});
+	});
+
+	// #1648: a QUEUED role write must not re-run the route loader (offline it
+	// fails and the page is replaced by the route error screen).
+	it("a queued role write does not invalidate the route", async () => {
+		const { h } = handle();
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.onMutated();
+		expect(router.invalidate).not.toHaveBeenCalled();
+		// The skip is for that one write only: the next refresh goes through.
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	it("a role write that went direct still invalidates", async () => {
+		const mutate = vi.fn(async (direct: () => Promise<unknown>) => {
+			await direct();
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await result.current.actions.release?.(slot as never);
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
+	});
+
+	it("a role write that threw queued nothing, so the next refresh invalidates", async () => {
+		const mutate = vi.fn(async () => {
+			throw new Error("still syncing");
+		});
+		const h = { busy: false, draining: false, mutate } as never;
+		const { result } = setup({ offlineMinutes: h });
+		await expect(
+			result.current.actions.release?.(slot as never),
+		).rejects.toThrow();
+		await result.current.actions.onMutated();
+		expect(router.invalidate).toHaveBeenCalledTimes(1);
 	});
 });

@@ -1,5 +1,5 @@
 import { Loader2, Trash2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
@@ -258,7 +258,7 @@ export function MeetingAgenda({
 	onOwnLateRelease,
 	slotExtra,
 	speechIntroductions = null,
-	offlineMinutes,
+	offlineMinutes: queue,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -377,6 +377,36 @@ export function MeetingAgenda({
 	for (const s of slots) {
 		if (!categories.includes(s.category)) categories.push(s.category);
 	}
+
+	// The assign sheet's own queue calls, watched (#1648): `mutate` only runs the
+	// direct call when it does not queue, so a call that never resolved was
+	// queued. Same handle otherwise, so the sheet behaves as before.
+	const assignQueuedRef = useRef(false);
+	const offlineMinutes = useMemo(() => {
+		if (!queue) return undefined;
+		return {
+			...queue,
+			mutate: async (
+				...[direct, makeOp, options]: Parameters<OfflineMinutesHandle["mutate"]>
+			) => {
+				assignQueuedRef.current = true;
+				try {
+					await queue.mutate(
+						async () => {
+							const result = await direct();
+							assignQueuedRef.current = false;
+							return result;
+						},
+						makeOp,
+						options,
+					);
+				} catch (err) {
+					assignQueuedRef.current = false;
+					throw err;
+				}
+			},
+		};
+	}, [queue]);
 
 	async function run(slotKey: string, fn: () => Promise<void>) {
 		setBusySlotId(slotKey);
@@ -1069,6 +1099,13 @@ export function MeetingAgenda({
 				}}
 				onAssigned={async () => {
 					setAssignSlot(null);
+					// A QUEUED assignment changed nothing on the server: re-running the
+					// route loader offline replaces the page with the error screen
+					// (#1648). The queue refreshes the route when it drains.
+					if (assignQueuedRef.current) {
+						assignQueuedRef.current = false;
+						return;
+					}
 					await actions.onMutated();
 				}}
 			/>
