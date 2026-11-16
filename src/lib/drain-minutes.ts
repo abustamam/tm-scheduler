@@ -44,7 +44,12 @@
 // `MinutesServerFns` by parameter contravariance.
 import { type AttendanceMode, withMode } from "#/lib/attendance-mode";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
-import type { MinutesOp, NewGuestPayload } from "./offline-minutes-queue";
+import type {
+	HolderKey,
+	NewGuestPayload,
+	QueuedOp,
+	RoleSlotOp,
+} from "./offline-minutes-queue";
 
 /**
  * The eight server-fn thunks the drain calls, named by OP (not by the
@@ -117,6 +122,66 @@ export type MinutesServerFns = {
 	}) => Promise<unknown>;
 };
 
+/** What a role write answers when it carries `expectedHolder` (#1638): ok for an
+ *  applied write and for an already-applied one, a normal skip otherwise. */
+export type RoleWriteAnswer =
+	| { ok: true }
+	| {
+			ok: false;
+			reason: "holder-changed" | "slot-gone";
+			currentHolderName: string | null;
+	  };
+
+/**
+ * The three role writes the drain replays (#1638). Separate from
+ * `MinutesServerFns` and optional on `dispatchOp`, so a caller that never
+ * drains a role op does not have to supply them; a role op with no fn throws,
+ * which stops the drain and leaves the op queued.
+ */
+export type RoleServerFns = {
+	claimSlot: (args: {
+		data: {
+			slotId: string;
+			memberId: string;
+			actorMemberId: string;
+			expectedHolder: HolderKey;
+		};
+	}) => Promise<RoleWriteAnswer>;
+	reassignSlot: (args: {
+		data: { slotId: string; memberId: string; expectedHolder: HolderKey };
+	}) => Promise<RoleWriteAnswer>;
+	releaseSlot: (args: {
+		data: { slotId: string; expectedHolder: HolderKey };
+	}) => Promise<RoleWriteAnswer>;
+};
+
+/** How a drained role op ended, for the toast and for the deck's overlay. An
+ *  already-applied write counts as `applied`: the slot holds what the officer
+ *  asked for. */
+export type RoleDrainOutcome = {
+	op: RoleSlotOp;
+	outcome: "applied" | "skipped";
+	reason?: "holder-changed" | "slot-gone";
+	currentHolderName: string | null;
+};
+
+/** The toast for a skipped role op (#1638). The online change is kept, and the
+ *  officer is told which of their offline changes did not land. */
+export function roleSkipMessage(o: RoleDrainOutcome): string {
+	const { op } = o;
+	if (o.reason === "slot-gone") {
+		return `${op.roleName}: that role was removed. Your offline change was not applied.`;
+	}
+	if (o.currentHolderName) {
+		return op.type === "assignSlot"
+			? `${op.roleName}: kept ${o.currentHolderName}. Your offline change to ${op.memberDisplayName} was not applied.`
+			: `${op.roleName}: kept ${o.currentHolderName}. Your offline clear was not applied.`;
+	}
+	return op.type === "assignSlot"
+		? `${op.roleName}: was cleared online. Your offline change to ${op.memberDisplayName} was not applied.`
+		: `${op.roleName}: was cleared online. Your offline clear was not applied.`;
+}
+
 /**
  * Replay one queued op to the server via `fns`. Builds the exact `{ data }`
  * payload each server schema accepts, threading client ids for idempotency:
@@ -125,11 +190,15 @@ export type MinutesServerFns = {
  * is a compile error here.
  */
 export async function dispatchOp(
-	op: MinutesOp,
+	op: QueuedOp,
 	meetingId: string,
-	fns: MinutesServerFns,
+	fns: MinutesServerFns & Partial<RoleServerFns>,
 ): Promise<DispatchOutcome | undefined> {
 	switch (op.type) {
+		case "assignSlot":
+		case "releaseSlot":
+			return { role: await dispatchRoleOp(op, fns) };
+
 		case "setAttendance": {
 			// `mode` forwarded as-is (#1049): `undefined` for an op queued before
 			// it existed, which the server reads as "leave the stored mode alone".
@@ -258,21 +327,76 @@ export async function dispatchOp(
 
 /** What replaying one op reports back, for the ops that report anything. */
 export type DispatchOutcome = {
-	released: { memberId: string; labels: string[] };
+	/** What an Absent op freed (#1256). */
+	released?: { memberId: string; labels: string[] };
+	/** How a role op ended (#1638). */
+	role?: RoleDrainOutcome;
 };
 
+/**
+ * One role op, replayed with the holder the officer SAW. An open slot goes
+ * through `claimSlot` (with the asserting actor, #747), a held one through
+ * `reassignSlot`, a clear through `releaseSlot`: the calls the online path
+ * makes. Each decides in a row lock on the server, so a replay whose first
+ * attempt committed answers ok instead of a false conflict.
+ */
+async function dispatchRoleOp(
+	op: RoleSlotOp,
+	fns: Partial<RoleServerFns>,
+): Promise<RoleDrainOutcome> {
+	const need = <K extends keyof RoleServerFns>(k: K): RoleServerFns[K] => {
+		const fn = fns[k];
+		if (!fn) throw new Error(`The ${k} write is not available to drain.`);
+		return fn;
+	};
+	let answer: RoleWriteAnswer;
+	if (op.type === "releaseSlot") {
+		answer = await need("releaseSlot")({
+			data: { slotId: op.slotId, expectedHolder: op.expectedHolder },
+		});
+	} else if (op.expectedHolder === null) {
+		answer = await need("claimSlot")({
+			data: {
+				slotId: op.slotId,
+				memberId: op.memberId,
+				actorMemberId: op.actorMemberId,
+				expectedHolder: null,
+			},
+		});
+	} else {
+		answer = await need("reassignSlot")({
+			data: {
+				slotId: op.slotId,
+				memberId: op.memberId,
+				expectedHolder: op.expectedHolder,
+			},
+		});
+	}
+	return answer.ok
+		? { op, outcome: "applied", currentHolderName: null }
+		: {
+				op,
+				outcome: "skipped",
+				reason: answer.reason,
+				currentHolderName: answer.currentHolderName,
+			};
+}
+
 /** Outcome of a drain pass. `remaining` is what is still queued afterwards. */
-export type DrainResult = {
+export type DrainResult<Op extends QueuedOp = QueuedOp> = {
 	/** How many ops were successfully replayed + removed this pass. */
 	drainedCount: number;
 	/** Ops still queued: empty on full success; the failed op onward on failure. */
-	remaining: MinutesOp[];
+	remaining: Op[];
 	/** The error that stopped the drain, or undefined on full success. */
 	error?: unknown;
 	/** Roles freed by the Absent ops that drained (#1256), one entry per op whose
 	 *  release freed something, in drain order. Includes ops that drained BEFORE a
 	 *  later one failed: those releases happened and the officer is told. */
 	released: { memberId: string; labels: string[] }[];
+	/** How each role op that left the queue ended (#1638), in drain order, the
+	 *  skipped ones included. Includes ops that drained before a later one failed. */
+	roleOutcomes: RoleDrainOutcome[];
 };
 
 /**
@@ -284,17 +408,22 @@ export type DrainResult = {
  * NOT removed, so the next reconnect resumes from the failed op. Empty `ops` is
  * a no-op.
  */
-export async function drainMinutesQueue(params: {
+export async function drainMinutesQueue<
+	Op extends QueuedOp = QueuedOp,
+>(params: {
 	meetingId: string;
-	ops: MinutesOp[];
+	ops: Op[];
 	/** Replay one op (typically `(op) => dispatchOp(op, meetingId, fns)`). */
-	dispatch: (op: MinutesOp) => Promise<DispatchOutcome | undefined>;
-	/** Remove one drained op from the durable queue by its `opId`. */
-	onOpDrained: (opId: string) => Promise<void>;
-}): Promise<DrainResult> {
+	dispatch: (op: Op) => Promise<DispatchOutcome | undefined>;
+	/** Remove one drained op from the durable queue by its `opId`. A role op
+	 *  passes how it ended as a second argument (#1638), so the caller can tell
+	 *  the deck AFTER the removal has committed. */
+	onOpDrained: (opId: string, role?: RoleDrainOutcome) => Promise<void>;
+}): Promise<DrainResult<Op>> {
 	const { ops, dispatch, onOpDrained } = params;
 	let drainedCount = 0;
 	const released: DrainResult["released"] = [];
+	const roleOutcomes: RoleDrainOutcome[] = [];
 
 	for (let i = 0; i < ops.length; i++) {
 		const op = ops[i];
@@ -303,24 +432,44 @@ export async function drainMinutesQueue(params: {
 			outcome = await dispatch(op);
 		} catch (error) {
 			// Stop at the first failure: leave this op + all successors queued.
-			return { drainedCount, remaining: ops.slice(i), error, released };
+			return {
+				drainedCount,
+				remaining: ops.slice(i),
+				error,
+				released,
+				roleOutcomes,
+			};
 		}
 		// Recorded BEFORE the queue removal: the release has happened either way,
 		// and a removal that throws must not swallow the officer's receipt for it.
-		if (outcome && outcome.released.labels.length > 0) {
+		if (outcome?.released && outcome.released.labels.length > 0) {
 			released.push(outcome.released);
 		}
+		if (outcome?.role) roleOutcomes.push(outcome.role);
 		try {
-			await onOpDrained(op.opId);
+			if (outcome?.role) await onOpDrained(op.opId, outcome.role);
+			else await onOpDrained(op.opId);
 		} catch (error) {
 			// The write landed but the durable removal failed (IndexedDB): report
 			// it as the drain's error WITH the receipts collected so far, so the
 			// caller still toasts and refreshes. This op stays queued and replays
 			// (an upsert, so harmlessly) on the next pass.
-			return { drainedCount, remaining: ops.slice(i), error, released };
+			return {
+				drainedCount,
+				remaining: ops.slice(i),
+				error,
+				released,
+				roleOutcomes,
+			};
 		}
 		drainedCount += 1;
 	}
 
-	return { drainedCount, remaining: [], error: undefined, released };
+	return {
+		drainedCount,
+		remaining: [],
+		error: undefined,
+		released,
+		roleOutcomes,
+	};
 }

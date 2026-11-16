@@ -1,15 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useOnlineStatus } from "#/hooks/use-online-status";
+import { postAgendaChanged } from "#/lib/agenda-live";
 import {
 	dispatchOp,
 	drainMinutesQueue,
 	type MinutesServerFns,
+	type RoleServerFns,
+	roleSkipMessage,
 } from "#/lib/drain-minutes";
+import { postRoleOpsDrained } from "#/lib/drained-roles";
 import { listRoles } from "#/lib/list-roles";
 import {
 	enqueue,
+	isRoleSlotOp,
 	type MinutesOp,
+	type QueuedOp,
+	type RoleSlotOp,
 	readQueue,
 	readSnapshot,
 	removeOp,
@@ -97,7 +104,7 @@ export function useOfflineMinutes(input: {
 }) {
 	const online = useOnlineStatus();
 	const [busy, setBusy] = useState(false);
-	const [queue, setQueue] = useState<MinutesOp[]>([]);
+	const [queue, setQueue] = useState<QueuedOp[]>([]);
 	const [snapshot, setSnapshot] = useState<MinutesData | null>(null);
 	const [draining, setDraining] = useState(false);
 	const [syncError, setSyncError] = useState<string | null>(null);
@@ -294,7 +301,7 @@ export function useOfflineMinutes(input: {
 	// it lands, then re-fetch authoritative state. Stops at the first failure and
 	// keeps the failed op + successors queued for the next reconnect / Retry.
 	const runDrain = useCallback(
-		async (ops: MinutesOp[]) => {
+		async (ops: QueuedOp[]) => {
 			if (drainingRef.current || ops.length === 0) return;
 			drainingRef.current = true;
 			setDraining(true);
@@ -313,7 +320,13 @@ export function useOfflineMinutes(input: {
 					setMinutesAward,
 					clearMinutesAward,
 				} = await import("#/server/minutes");
-				const fns: MinutesServerFns = {
+				const { claimSlot, reassignSlot, releaseSlot } = await import(
+					"#/server/slots"
+				);
+				const fns: MinutesServerFns & RoleServerFns = {
+					claimSlot,
+					reassignSlot,
+					releaseSlot,
 					setAttendance,
 					addGuest: addMinutesGuest,
 					removeGuest: removeMinutesGuest,
@@ -345,8 +358,21 @@ export function useOfflineMinutes(input: {
 						// drops (what an Absent release freed, #1256).
 						return work;
 					},
-					onOpDrained: async (opId) => {
+					onOpDrained: async (opId, role) => {
 						await removeOp(meetingId, opId);
+						// Told AFTER the IndexedDB write committed (#1638), so a deck that
+						// re-reads the queue on this message never finds the op still in
+						// it, and carrying how the op ended so the deck can keep showing
+						// it until a server read that started after this catches up.
+						if (role) {
+							postRoleOpsDrained([
+								{
+									op: role.op,
+									outcome: role.outcome,
+									currentHolderName: role.currentHolderName,
+								},
+							]);
+						}
 						// Same split as `queueOp`, same reason: the durable removal is
 						// scoped to the meeting THIS drain belongs to, the state update is
 						// not. A drain still in flight across a hop would otherwise filter
@@ -360,6 +386,11 @@ export function useOfflineMinutes(input: {
 				// because it is true on both of its arms: an op that released and then
 				// had a successor fail still released. One toast per op, the same copy
 				// as the online write.
+				// A role op the server skipped (#1638): the online change stays, and
+				// the officer hears which of their offline changes did not land.
+				for (const r of result.roleOutcomes) {
+					if (r.outcome === "skipped") toast.warning(roleSkipMessage(r));
+				}
 				for (const r of result.released) {
 					const name =
 						(minutesRef.current?.members ?? []).find(
@@ -453,7 +484,7 @@ export function useOfflineMinutes(input: {
 
 	/** Reflect the op optimistically and persist it. The OFFLINE path, and also
 	 *  where an online write that blew its deadline lands. */
-	async function queueOp(op: MinutesOp) {
+	async function queueOp(op: QueuedOp) {
 		// `enqueue` stays on the CAPTURED meeting and must: the op is that
 		// meeting's roll and has to persist under it, so it replays against it
 		// later. The optimistic `setQueue` is hook-level, so it is SKIPPED once a
@@ -466,6 +497,9 @@ export function useOfflineMinutes(input: {
 		}
 		try {
 			await enqueue(meetingId, op);
+			// Tell this browser's other tabs (#1637): a Present deck re-reads the
+			// queue and shows the change at once. After the write committed.
+			postAgendaChanged();
 		} catch (err) {
 			toast.error(errMessage(err));
 		}
@@ -481,6 +515,7 @@ export function useOfflineMinutes(input: {
 	 */
 	async function writeOnline(
 		onlineFn: () => Promise<unknown>,
+		throwOnError: boolean,
 	): Promise<"done" | "queue"> {
 		setBusy(true);
 		try {
@@ -499,6 +534,10 @@ export function useOfflineMinutes(input: {
 			await input.onMutated(meetingId);
 			return "done";
 		} catch (err) {
+			// A caller that reports the failure itself (the role writes, whose
+			// agenda shows the refusal with its sign-in link) gets it back; every
+			// other caller keeps the toast.
+			if (throwOnError) throw err;
 			toast.error(errMessage(err));
 			return "done";
 		} finally {
@@ -511,8 +550,9 @@ export function useOfflineMinutes(input: {
 	// the op and reflect it optimistically; never hit the server or onMutated.
 	async function mutate(
 		onlineFn: () => Promise<unknown>,
-		makeOp: () => MinutesOp,
-	) {
+		makeOp: () => QueuedOp,
+		options?: { throwOnError?: boolean },
+	): Promise<void> {
 		// `draining` joins the guard so a reconnect drain isn't interleaved with a
 		// fresh edit (which could reorder ops).
 		if (busy || draining) return;
@@ -569,10 +609,21 @@ export function useOfflineMinutes(input: {
 		// `busy` stuck true, which disabled every chip and the guest group with no
 		// spinner, no toast and no recovery short of a reload, on the one surface
 		// #176's queue was built for.
-		if ((await writeOnline(onlineFn)) === "queue") {
+		if (
+			(await writeOnline(onlineFn, options?.throwOnError === true)) === "queue"
+		) {
 			await queueOp(makeOp());
 		}
 	}
+
+	const minutesOps = useMemo(
+		() => queue.filter((o): o is MinutesOp => !isRoleSlotOp(o)),
+		[queue],
+	);
+	const roleOps = useMemo(
+		() => queue.filter((o): o is RoleSlotOp => isRoleSlotOp(o)),
+		[queue],
+	);
 
 	const opMeta = () => ({
 		opId: crypto.randomUUID(),
@@ -615,7 +666,16 @@ export function useOfflineMinutes(input: {
 		mutate,
 		opMeta,
 		busy,
-		queue,
+		// The MINUTES ops only, which is what every existing consumer projects
+		// through `deriveMinutes`. A role op has nothing to say to a minutes
+		// snapshot, and its type is kept out of that union on purpose (see
+		// `RoleSlotOp`).
+		queue: minutesOps,
+		/** The queued role edits (#1638), in order. */
+		roleOps,
+		/** Everything waiting to drain, minutes and role ops alike: what a
+		 *  "n changes pending" indicator counts. */
+		pendingCount: queue.length,
 		snapshot,
 		draining,
 		syncError,

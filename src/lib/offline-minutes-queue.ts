@@ -23,6 +23,10 @@ export type NewGuestPayload = {
 	phone?: string;
 };
 
+/** "m:<memberId>" | "g:<guestId>" | null. A member or a guest can hold a slot;
+ *  null is an open one (#1638). */
+export type HolderKey = string | null;
+
 /**
  * A single queued minutes edit. Mirrors one server mutation each. Every op
  * carries a generated `opId` (queue-entry identity) and `queuedAt`. Creates also
@@ -162,6 +166,52 @@ export type MinutesOp =
 	  };
 
 /**
+ * A queued ROLE edit (#1638): assign someone to a role, or clear it. Kept apart
+ * from `MinutesOp` on purpose. `deriveMinutes` and `dispatchOp` both end in an
+ * exhaustive `never` switch over `MinutesOp`, and `deriveMinutes` has nothing to
+ * do with a role: its snapshot has no slot list. Folding these in would force a
+ * no-op arm into every minutes projection, so the hook hands the minutes
+ * consumers `queue` (minutes ops only) and the role ops separately.
+ */
+export type RoleSlotOp =
+	| {
+			/** Give a role to a MEMBER (#1638). Offline assignment is members only. */
+			type: "assignSlot";
+			opId: string;
+			queuedAt: number;
+			slotId: string;
+			/** For the conflict toast, e.g. "Timer". */
+			roleName: string;
+			memberId: string;
+			/** What the page and the deck show while the op is queued, captured
+			 *  from the picker's own roster row: nothing is looked up offline. */
+			memberDisplayName: string;
+			/** The asserting actor, exactly as the picker passes it to `claimSlot`
+			 *  today (#747). The server still authorizes against the session. */
+			actorMemberId: string;
+			/** The holder the officer SAW (projected state), so a second offline
+			 *  edit to the slot chains off the first. */
+			expectedHolder: HolderKey;
+			expectedHolderName: string | null;
+	  }
+	| {
+			/** Clear a role (#1638). A guest-held slot may be cleared offline. */
+			type: "releaseSlot";
+			opId: string;
+			queuedAt: number;
+			slotId: string;
+			roleName: string;
+			expectedHolder: HolderKey;
+			expectedHolderName: string | null;
+	  };
+
+/** Everything the offline queue can hold for a meeting. */
+export type QueuedOp = MinutesOp | RoleSlotOp;
+
+export const isRoleSlotOp = (op: QueuedOp): op is RoleSlotOp =>
+	op.type === "assignSlot" || op.type === "releaseSlot";
+
+/**
  * Minimal async key/value storage the queue is built on. IndexedDB in the
  * browser; an in-memory fake in unit tests (no real IndexedDB required).
  */
@@ -181,14 +231,13 @@ const snapshotKey = (meetingId: string) => `snapshot:${meetingId}`;
 export function createOfflineMinutesQueue(store: KeyValueStore) {
 	return {
 		/** Append an op to a meeting's queue (order preserved). */
-		async enqueue(meetingId: string, op: MinutesOp): Promise<void> {
-			const existing =
-				(await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+		async enqueue(meetingId: string, op: QueuedOp): Promise<void> {
+			const existing = (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 			await store.set(queueKey(meetingId), [...existing, op]);
 		},
 		/** Read a meeting's queued ops in insertion order (empty when none). */
-		async readQueue(meetingId: string): Promise<MinutesOp[]> {
-			return (await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+		async readQueue(meetingId: string): Promise<QueuedOp[]> {
+			return (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 		},
 		/** Drop every queued op for a meeting (slice 4 calls this after a drain). */
 		async clearQueue(meetingId: string): Promise<void> {
@@ -196,8 +245,7 @@ export function createOfflineMinutesQueue(store: KeyValueStore) {
 		},
 		/** Remove a single op by its `opId` (leaves the rest in order). */
 		async removeOp(meetingId: string, opId: string): Promise<void> {
-			const existing =
-				(await store.get<MinutesOp[]>(queueKey(meetingId))) ?? [];
+			const existing = (await store.get<QueuedOp[]>(queueKey(meetingId))) ?? [];
 			await store.set(
 				queueKey(meetingId),
 				existing.filter((o) => o.opId !== opId),
@@ -317,7 +365,7 @@ function getDefaultQueue(): OfflineMinutesQueue {
 	return defaultQueue;
 }
 
-export const enqueue = (meetingId: string, op: MinutesOp) =>
+export const enqueue = (meetingId: string, op: QueuedOp) =>
 	getDefaultQueue().enqueue(meetingId, op);
 export const readQueue = (meetingId: string) =>
 	getDefaultQueue().readQueue(meetingId);

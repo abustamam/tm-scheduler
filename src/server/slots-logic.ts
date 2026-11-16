@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm";
 import { db } from "#/db";
 import {
+	guests,
 	meetings,
 	members,
 	roleDefinitions,
@@ -2146,6 +2147,71 @@ export async function lockMemberForAssignment(
 }
 
 /**
+ * The actor gates of a claim (#763, #1283), lifted out of `claimSlotCore` so the
+ * expected-holder path (#1638) can run them BEFORE it compares holders: an
+ * ineligible actor must hear its refusal even when the write would be skipped
+ * as already applied. Same statements, same order, same locks as when they
+ * lived inline.
+ */
+async function assertClaimActorGates(
+	tx: Tx,
+	args: {
+		memberId: string;
+		actorMemberId: string | null;
+		proof?: WriteProof;
+		meetingId: string;
+	},
+): Promise<void> {
+	const forSomeoneElse = args.actorMemberId !== args.memberId;
+	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
+	// themselves, whatever the caller passed. Mirrors `connectorActor`.
+	if (
+		args.proof === "connector" &&
+		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
+	) {
+		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+	}
+	if (args.proof === "connector") {
+		// The connector arm takes the same attendance lock as the asserted arm and
+		// re-checks with the roll-aware `isMemberUnavailable`: a claim must not
+		// slip between this member's own decline (browser) and the flip below.
+		await lockMemberAttendance(tx, args.meetingId, args.memberId);
+		if (
+			await isMemberUnavailable(tx, {
+				memberId: args.memberId,
+				meetingId: args.meetingId,
+			})
+		) {
+			throw new Error("You're marked as not coming to that meeting.");
+		}
+	}
+	if (args.proof === "asserted") {
+		// Through `tx`: this runs inside the caller's transaction, and a pooled
+		// read here holds one connection while waiting on a second.
+		if (
+			forSomeoneElse &&
+			args.actorMemberId !== (await loadTmodMemberId(args.meetingId, tx))
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+		// Held to commit, so a releasing decline cannot slip between this read
+		// and the flip below and leave the role on a member who said no.
+		await lockMemberAttendance(tx, args.meetingId, args.memberId);
+		// PLAN only, never the roll: this caller holds no session and the roll is
+		// members-only, so the refusal depends on the plan answer alone. It runs
+		// before the conditional UPDATE below, so a refusal writes nothing.
+		if (
+			await isMemberNotComing(tx, {
+				memberId: args.memberId,
+				meetingId: args.meetingId,
+			})
+		) {
+			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+		}
+	}
+}
+
+/**
  * Claim an OPEN slot for a member (#825).
  *
  * Extracted from `claimSlot`'s handler body for the reason #809 extracted
@@ -2223,52 +2289,7 @@ export async function claimSlotCore(
 	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
-	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
-	// themselves, whatever the caller passed. Mirrors `connectorActor`.
-	if (
-		args.proof === "connector" &&
-		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
-	) {
-		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-	}
-	if (args.proof === "connector") {
-		// The connector arm takes the same attendance lock as the asserted arm and
-		// re-checks with the roll-aware `isMemberUnavailable`: a claim must not
-		// slip between this member's own decline (browser) and the flip below.
-		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
-		if (
-			await isMemberUnavailable(tx, {
-				memberId: args.memberId,
-				meetingId: slot.meetingId,
-			})
-		) {
-			throw new Error("You're marked as not coming to that meeting.");
-		}
-	}
-	if (args.proof === "asserted") {
-		// Through `tx`: this runs inside the caller's transaction, and a pooled
-		// read here holds one connection while waiting on a second.
-		if (
-			forSomeoneElse &&
-			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))
-		) {
-			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-		}
-		// Held to commit, so a releasing decline cannot slip between this read
-		// and the flip below and leave the role on a member who said no.
-		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
-		// PLAN only, never the roll: this caller holds no session and the roll is
-		// members-only, so the refusal depends on the plan answer alone. It runs
-		// before the conditional UPDATE below, so a refusal writes nothing.
-		if (
-			await isMemberNotComing(tx, {
-				memberId: args.memberId,
-				meetingId: slot.meetingId,
-			})
-		) {
-			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-		}
-	}
+	await assertClaimActorGates(tx, { ...args, meetingId: slot.meetingId });
 
 	// Conditional UPDATE is the race guard: only one claim can flip 'open'. The
 	// meeting's status rides in the SAME statement (#1057, #1107,
@@ -2663,6 +2684,155 @@ export async function releaseSlotCore(
 	// unlinked speech were returned too until review: nothing read them, and an
 	// unread field is a claim about a caller that does not exist.
 	return { clubId: slot.clubId };
+}
+
+/** What an expected-holder write answers (#1638). `ok` covers an applied write
+ *  AND an already-applied one; a skip is a normal answer, not an error. */
+export type ExpectedHolderResult =
+	| { ok: true }
+	| {
+			ok: false;
+			reason: "holder-changed" | "slot-gone";
+			/** Who holds the slot now (members and guests alike); null when nobody
+			 *  does, and always null for `slot-gone`. */
+			currentHolderName: string | null;
+	  };
+
+/**
+ * A queued role write, decided against whoever holds the slot NOW (#1638).
+ *
+ * `expectedHolder` is what the officer SAW when they made the change, as
+ * `"m:<memberId>"`, `"g:<guestId>"` or null for an open slot. The order is
+ * fixed and each step runs before the next:
+ *
+ *  1. the slot is resolved: missing answers `slot-gone` (no throw, and nothing
+ *     about the club or its holder is revealed);
+ *  2. every gate the plain write has runs: the member's eligibility, the
+ *     archive gate, the meeting's status, and a claim's actor gates. They run
+ *     BEFORE the comparison, so an "already applied" never hides a refusal;
+ *  3. the slot row is locked and the holder compared:
+ *     - the write's own result is already there (the target holds an assign,
+ *       nobody holds a release): success, nothing written. This is what makes a
+ *       replay whose first attempt committed harmless;
+ *     - the holder is the expected one: the write's own core runs;
+ *     - anyone else: skipped, and the answer names who holds it.
+ *
+ * Lock order is the plain claim's: merge lock, member row, the asserted
+ * claimer's attendance lock, then the slot row.
+ */
+export async function applyRoleOpExpectingHolder(
+	tx: Tx,
+	args: {
+		kind: "claim" | "reassign" | "release";
+		slotId: string;
+		/** The member being given the role; absent for a release. */
+		memberId?: string;
+		actorMemberId: string | null;
+		proof?: WriteProof;
+		speakerDetails?: SpeechInput;
+		expectedHolder: string | null;
+	},
+): Promise<ExpectedHolderResult> {
+	const gone = {
+		ok: false,
+		reason: "slot-gone",
+		currentHolderName: null,
+	} as const;
+	if (args.kind !== "release") {
+		if (!args.memberId) throw new Error("A member is required.");
+		await lockMembershipsAgainstMerge(tx, [args.memberId]);
+		await lockMemberForAssignment(tx, args.memberId);
+	}
+	const [pre] = await tx
+		.select({
+			clubId: meetings.clubId,
+			meetingStatus: meetings.status,
+			meetingId: roleSlots.meetingId,
+		})
+		.from(roleSlots)
+		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1);
+	if (!pre) return gone;
+	await assertClubNotArchived(pre.clubId, tx);
+	assertMeetingAccepts(pre.meetingStatus, "plan");
+	if (args.kind === "claim" && args.memberId) {
+		await assertClaimActorGates(tx, {
+			memberId: args.memberId,
+			actorMemberId: args.actorMemberId,
+			proof: args.proof,
+			meetingId: pre.meetingId,
+		});
+	}
+
+	const [locked] = await tx
+		.select({
+			assignedMemberId: roleSlots.assignedMemberId,
+			assignedGuestId: roleSlots.assignedGuestId,
+		})
+		.from(roleSlots)
+		.where(eq(roleSlots.id, args.slotId))
+		.limit(1)
+		.for("update", { of: roleSlots });
+	if (!locked) return gone;
+	const current = locked.assignedGuestId
+		? `g:${locked.assignedGuestId}`
+		: locked.assignedMemberId
+			? `m:${locked.assignedMemberId}`
+			: null;
+
+	const target = args.memberId ? `m:${args.memberId}` : null;
+	// Already what the write would leave: a clear of an empty slot, or an assign
+	// to the member who already holds it.
+	if (current === target) return { ok: true };
+
+	if (current !== args.expectedHolder) {
+		let currentHolderName: string | null = null;
+		if (locked.assignedGuestId) {
+			currentHolderName =
+				(
+					await tx
+						.select({ name: guests.name })
+						.from(guests)
+						.where(eq(guests.id, locked.assignedGuestId))
+						.limit(1)
+				)[0]?.name ?? null;
+		} else if (locked.assignedMemberId) {
+			currentHolderName =
+				(
+					await tx
+						.select({ name: members.name })
+						.from(members)
+						.where(eq(members.id, locked.assignedMemberId))
+						.limit(1)
+				)[0]?.name ?? null;
+		}
+		return { ok: false, reason: "holder-changed", currentHolderName };
+	}
+
+	if (args.kind === "release") {
+		await releaseSlotCore(tx, {
+			slotId: args.slotId,
+			actorMemberId: args.actorMemberId,
+			proof: args.proof,
+		});
+	} else if (args.kind === "claim") {
+		await claimSlotCore(tx, {
+			slotId: args.slotId,
+			memberId: args.memberId as string,
+			actorMemberId: args.actorMemberId,
+			speakerDetails: args.speakerDetails,
+			proof: args.proof,
+		});
+	} else {
+		await reassignSlotCore(tx, {
+			slotId: args.slotId,
+			memberId: args.memberId as string,
+			actorMemberId: args.actorMemberId,
+			proof: args.proof,
+		});
+	}
+	return { ok: true };
 }
 
 /** The two speech fields the speaker-details writers log before and after
