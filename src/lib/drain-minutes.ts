@@ -44,6 +44,7 @@
 // `MinutesServerFns` by parameter contravariance.
 import { type AttendanceMode, withMode } from "#/lib/attendance-mode";
 import type { AttendanceStatus, AwardCategory } from "#/server/minutes-logic";
+import type { ExpectedHolderResult } from "#/server/slot-write-answers";
 import type {
 	HolderKey,
 	NewGuestPayload,
@@ -122,15 +123,9 @@ export type MinutesServerFns = {
 	}) => Promise<unknown>;
 };
 
-/** What a role write answers when it carries `expectedHolder` (#1638): ok for an
- *  applied write and for an already-applied one, a normal skip otherwise. */
-export type RoleWriteAnswer =
-	| { ok: true }
-	| {
-			ok: false;
-			reason: "holder-changed" | "slot-gone";
-			currentHolderName: string | null;
-	  };
+/** What a role write answers when it carries `expectedHolder` (#1638): the
+ *  server's own type, so the two cannot drift. */
+export type RoleWriteAnswer = ExpectedHolderResult;
 
 /**
  * The three role writes the drain replays (#1638). Separate from
@@ -144,6 +139,7 @@ export type RoleServerFns = {
 			slotId: string;
 			memberId: string;
 			actorMemberId: string;
+			speakerDetails?: { speechTitle?: string };
 			expectedHolder: HolderKey;
 		};
 	}) => Promise<RoleWriteAnswer>;
@@ -163,23 +159,27 @@ export type RoleDrainOutcome = {
 	outcome: "applied" | "skipped";
 	reason?: "holder-changed" | "slot-gone";
 	currentHolderName: string | null;
+	/** Whether anyone holds the slot now, for a `holder-changed` skip. */
+	holderPresent?: boolean;
 };
 
 /** The toast for a skipped role op (#1638). The online change is kept, and the
  *  officer is told which of their offline changes did not land. */
 export function roleSkipMessage(o: RoleDrainOutcome): string {
 	const { op } = o;
+	const what =
+		op.type === "assignSlot"
+			? `Your offline change to ${op.memberDisplayName}`
+			: "Your offline clear";
 	if (o.reason === "slot-gone") {
 		return `${op.roleName}: that role was removed. Your offline change was not applied.`;
 	}
-	if (o.currentHolderName) {
-		return op.type === "assignSlot"
-			? `${op.roleName}: kept ${o.currentHolderName}. Your offline change to ${op.memberDisplayName} was not applied.`
-			: `${op.roleName}: kept ${o.currentHolderName}. Your offline clear was not applied.`;
-	}
-	return op.type === "assignSlot"
-		? `${op.roleName}: was cleared online. Your offline change to ${op.memberDisplayName} was not applied.`
-		: `${op.roleName}: was cleared online. Your offline clear was not applied.`;
+	// `holderPresent` rather than the name: a holder whose name could not be
+	// read is still a holder, and "was cleared online" would be false.
+	const state = o.holderPresent
+		? `kept ${o.currentHolderName ?? "the current holder"}`
+		: "was cleared online";
+	return `${op.roleName}: ${state}. ${what} was not applied.`;
 }
 
 /**
@@ -193,10 +193,14 @@ export async function dispatchOp(
 	op: QueuedOp,
 	meetingId: string,
 	fns: MinutesServerFns & Partial<RoleServerFns>,
+	/** The member signed in NOW. A role op replays only for the member who
+	 *  queued it (see `ROLE_OP_OTHER_USER_MESSAGE`); a minutes op ignores it. */
+	session?: { memberId: string | null },
 ): Promise<DispatchOutcome | undefined> {
 	switch (op.type) {
 		case "assignSlot":
 		case "releaseSlot":
+			assertQueuedByCurrentUser(op, session);
 			return { role: await dispatchRoleOp(op, fns) };
 
 		case "setAttendance": {
@@ -325,6 +329,24 @@ export async function dispatchOp(
 	}
 }
 
+/** Thrown instead of replaying a role op under a different member (#1638). The
+ *  queue is keyed by meeting, so without this an op queued by one officer would
+ *  replay as whoever signs in next on the same laptop: `claimSlot` credits the
+ *  session, so a "give the role to B" would become B claiming it for themselves
+ *  (flipping their own decline, crediting them in the activity log). It stops
+ *  the drain like any refusal: the op stays queued, `syncError` shows. */
+export const ROLE_OP_OTHER_USER_MESSAGE =
+	"Role changes queued on this device by another member are waiting. Sign in as them to sync.";
+
+function assertQueuedByCurrentUser(
+	op: RoleSlotOp,
+	session: { memberId: string | null } | undefined,
+): void {
+	if ((op.queuedBy ?? null) !== (session?.memberId ?? null)) {
+		throw new Error(ROLE_OP_OTHER_USER_MESSAGE);
+	}
+}
+
 /** What replaying one op reports back, for the ops that report anything. */
 export type DispatchOutcome = {
 	/** What an Absent op freed (#1256). */
@@ -355,11 +377,17 @@ async function dispatchRoleOp(
 			data: { slotId: op.slotId, expectedHolder: op.expectedHolder },
 		});
 	} else if (op.expectedHolder === null) {
+		// A claim needs its asserting actor; the queue refuses to hold an assign
+		// without one for an open slot, so this is a corrupted op, not a case.
+		if (!op.actorMemberId) {
+			throw new Error("This queued change has no actor to claim with.");
+		}
 		answer = await need("claimSlot")({
 			data: {
 				slotId: op.slotId,
 				memberId: op.memberId,
 				actorMemberId: op.actorMemberId,
+				...(op.speakerDetails ? { speakerDetails: op.speakerDetails } : {}),
 				expectedHolder: null,
 			},
 		});
@@ -379,6 +407,9 @@ async function dispatchRoleOp(
 				outcome: "skipped",
 				reason: answer.reason,
 				currentHolderName: answer.currentHolderName,
+				...(answer.reason === "holder-changed"
+					? { holderPresent: answer.holderPresent }
+					: {}),
 			};
 }
 

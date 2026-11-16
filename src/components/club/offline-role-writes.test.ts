@@ -8,8 +8,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import {
+	ACTOR_UNAVAILABLE_MESSAGE,
 	assignRoleViaQueue,
 	hasSpeakerDetails,
+	NAME_UNAVAILABLE_MESSAGE,
 	type OfflineMinutesHandle,
 	releaseRoleViaQueue,
 	SPEECH_DETAILS_OFFLINE_MESSAGE,
@@ -131,5 +133,93 @@ describe("assignRoleViaQueue / releaseRoleViaQueue (#1638)", () => {
 			).rejects.toThrow(STILL_SYNCING_MESSAGE);
 			expect(mutate).not.toHaveBeenCalled();
 		}
+	});
+});
+
+describe("R14, W1, W2 on the queued assign (#1638)", () => {
+	// protects=no placeholder name reaches the deck: a missing or blank name
+	//   refuses the queue ("You" printed over a slide would be wrong in the room);
+	// fails_when=a fallback name is invented, or a blank passes;
+	// no_claim=the online path, which never needs the name.
+	it("R14: a missing or blank name is refused offline, and not needed online", async () => {
+		for (const name of [null, "", "   "]) {
+			const { h, queued } = handle({ online: false });
+			await expect(
+				assignRoleViaQueue(h, {
+					slot,
+					member: { id: "bob", name },
+					actorMemberId: "adm",
+					direct: vi.fn(),
+				}),
+			).rejects.toThrow(NAME_UNAVAILABLE_MESSAGE);
+			expect(queued).toEqual([]);
+		}
+		const { h } = handle();
+		const direct = vi.fn().mockResolvedValue(undefined);
+		await assignRoleViaQueue(h, {
+			slot,
+			member: { id: "bob", name: null },
+			actorMemberId: "adm",
+			direct,
+		});
+		expect(direct).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=W1: the op carries exactly the actor the caller passes: none for a
+	//   reassign, never the target filled in;
+	// fails_when=a missing actor becomes the member's own id (a self-claim);
+	// no_claim=the drain, which sends no actor to a reassign.
+	it("W1: a reassign queues actorMemberId null, not the target", async () => {
+		const { h, queued } = handle({ online: false });
+		await assignRoleViaQueue(h, {
+			slot,
+			member: { id: "bob", name: "Bob" },
+			actorMemberId: null,
+			direct: vi.fn(),
+		});
+		expect(queued[0]?.actorMemberId).toBeNull();
+		expect(queued[0]?.expectedHolder).toBe("m:ann");
+	});
+
+	// protects=W1: an assign over an OPEN slot replays as a claim, so it is
+	//   refused at enqueue without an actor rather than parked in the queue;
+	// fails_when=the guard is removed and an actor-less claim is queued;
+	// no_claim=a held slot, which needs no actor.
+	it("W1: an open slot with no actor is refused, not queued", async () => {
+		const { h, queued } = handle({ online: false });
+		await expect(
+			assignRoleViaQueue(h, {
+				slot: { ...slot, assigneeId: null, assigneeName: null },
+				member: { id: "bob", name: "Bob" },
+				actorMemberId: null,
+				direct: vi.fn(),
+			}),
+		).rejects.toThrow(ACTOR_UNAVAILABLE_MESSAGE);
+		expect(queued).toEqual([]);
+	});
+
+	// protects=W2: the sheet's speaker TBA rides the queued claim;
+	// fails_when=speakerDetails is dropped from the op, or a claim without it
+	//   gains one;
+	// no_claim=real details, which are refused.
+	it("W2: a TBA claim carries it; one without carries none", async () => {
+		const open = { ...slot, assigneeId: null, assigneeName: null };
+		const a = handle({ online: false });
+		await assignRoleViaQueue(a.h, {
+			slot: open,
+			member: { id: "bob", name: "Bob" },
+			actorMemberId: "adm",
+			speakerDetails: { speechTitle: "TBA" },
+			direct: vi.fn(),
+		});
+		expect(a.queued[0]?.speakerDetails).toEqual({ speechTitle: "TBA" });
+		const b = handle({ online: false });
+		await assignRoleViaQueue(b.h, {
+			slot: open,
+			member: { id: "bob", name: "Bob" },
+			actorMemberId: "adm",
+			direct: vi.fn(),
+		});
+		expect("speakerDetails" in (b.queued[0] as object)).toBe(false);
 	});
 });

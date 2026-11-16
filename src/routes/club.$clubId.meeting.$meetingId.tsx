@@ -405,6 +405,9 @@ function MeetingView() {
 				writtenMeetingId,
 			),
 		minutes: minutes.data,
+		// Who a queued role op belongs to (#1638): the signed-in member, the same
+		// identity `session` below carries; nobody for an anonymous visitor.
+		sessionMemberId: authCtx?.user ? (effectiveMemberId ?? null) : null,
 	});
 	// A role change queued offline shows at once (#1638): every consumer below
 	// reads the projected slots, not the loader's.

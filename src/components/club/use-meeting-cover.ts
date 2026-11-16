@@ -27,7 +27,6 @@ import type { CoverSlot } from "./cover-sheet";
 import type { useRequireIdentity } from "./identity-gate";
 import {
 	assignRoleViaQueue,
-	hasSpeakerDetails,
 	type OfflineMinutesHandle,
 	releaseRoleViaQueue,
 } from "./offline-role-writes";
@@ -164,7 +163,7 @@ export function useMeetingCover(args: {
 	type RoleSlot = MeetingDetail["slots"][number];
 	async function claimOrQueue(
 		slot: RoleSlot,
-		me: { id: string; name: string },
+		me: { id: string; name: string | null },
 		speakerDetails?: SpeakerDetails,
 	) {
 		if (!offlineMinutes) {
@@ -175,15 +174,13 @@ export function useMeetingCover(args: {
 			slot,
 			member: me,
 			actorMemberId: me.id,
-			speakerDetails: hasSpeakerDetails(speakerDetails)
-				? speakerDetails
-				: undefined,
+			speakerDetails,
 			direct: () => claimAs(me, slot, speakerDetails),
 		});
 	}
 	async function reassignOrQueue(
 		slot: RoleSlot,
-		me: { id: string; name: string },
+		me: { id: string; name: string | null },
 	) {
 		const direct = () =>
 			reassignSlot({ data: { slotId: slot.id, memberId: me.id } });
@@ -194,7 +191,9 @@ export function useMeetingCover(args: {
 		await assignRoleViaQueue(offlineMinutes, {
 			slot,
 			member: me,
-			actorMemberId: me.id,
+			// Today's reassign carries no actor on the wire (#763), so the op
+			// carries none either.
+			actorMemberId: null,
 			direct,
 		});
 	}
@@ -216,7 +215,7 @@ export function useMeetingCover(args: {
 			}
 			await claimOrQueue(
 				slot,
-				{ id: managerActorId, name: myName ?? "You" },
+				{ id: managerActorId, name: myName },
 				speakerDetails,
 			);
 		},
@@ -229,7 +228,7 @@ export function useMeetingCover(args: {
 			}
 			await reassignOrQueue(slot, {
 				id: managerActorId,
-				name: myName ?? "You",
+				name: myName,
 			});
 		},
 		confirm: async (slot) => {

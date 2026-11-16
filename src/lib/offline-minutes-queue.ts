@@ -24,6 +24,7 @@ export type NewGuestPayload = {
 };
 
 export type { HolderKey } from "#/lib/holder-key";
+
 import type { HolderKey } from "#/lib/holder-key";
 
 /**
@@ -185,13 +186,19 @@ export type RoleSlotOp =
 			/** What the page and the deck show while the op is queued, captured
 			 *  from the picker's own roster row: nothing is looked up offline. */
 			memberDisplayName: string;
-			/** The asserting actor, exactly as the picker passes it to `claimSlot`
-			 *  today (#747). The server still authorizes against the session. */
-			actorMemberId: string;
+			/** The asserting actor, exactly as the caller passes it to `claimSlot`
+			 *  today (#747); null where today's call passes none (a reassign). The
+			 *  server still authorizes against the session, and the drain sends the
+			 *  actor only to the claim. */
+			actorMemberId: string | null;
+			/** Speech details the claim carries: only the `TBA` placeholder a
+			 *  speaker slot sends, never real details (those are online-only). */
+			speakerDetails?: { speechTitle?: string };
 			/** The holder the officer SAW (projected state), so a second offline
 			 *  edit to the slot chains off the first. */
 			expectedHolder: HolderKey;
 			expectedHolderName: string | null;
+			queuedBy?: string | null;
 	  }
 	| {
 			/** Clear a role (#1638). A guest-held slot may be cleared offline. */
@@ -202,6 +209,11 @@ export type RoleSlotOp =
 			roleName: string;
 			expectedHolder: HolderKey;
 			expectedHolderName: string | null;
+			/** The member who was signed in when this was queued (null: nobody),
+			 *  stamped by the hook. The queue is keyed by meeting, not by user, so
+			 *  the drain replays a role op only for this same member: under anyone
+			 *  else it would be a different actor's write (#1638). */
+			queuedBy?: string | null;
 	  };
 
 /** Everything the offline queue can hold for a meeting. */

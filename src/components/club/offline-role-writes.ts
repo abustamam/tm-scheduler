@@ -32,6 +32,17 @@ export const STILL_SYNCING_MESSAGE =
 export const SPEECH_DETAILS_OFFLINE_MESSAGE =
 	"Speech details can't be saved offline. Claim the role without them, or try again when you're back online.";
 
+/** Thrown when the caller has no display name to show for the person being
+ *  given the role: a queued op carries the name the deck prints, and a
+ *  placeholder there would be wrong in front of the room. */
+export const NAME_UNAVAILABLE_MESSAGE =
+	"Can't save this offline: that person's name isn't loaded. Try again when you're back online.";
+
+/** Thrown for an assignment that would replay as a claim with nobody to credit
+ *  as the actor. */
+export const ACTOR_UNAVAILABLE_MESSAGE =
+	"Can't save this offline. Try again when you're back online.";
+
 /** Whether a claim's speech details carry anything to save. The `TBA`
  *  placeholder the assign sheet sends for a speaker slot is not something. */
 export function hasSpeakerDetails(
@@ -70,9 +81,12 @@ export async function assignRoleViaQueue(
 	offline: OfflineMinutesHandle,
 	args: {
 		slot: RoleOpSlot;
-		member: { id: string; name: string };
-		actorMemberId: string;
-		/** Speech details the claim would carry. Not queueable. */
+		member: { id: string; name: string | null };
+		/** What today's call passes as the actor: the claimer for a claim, null for
+		 *  a reassign (which carries none on the wire). Never filled in here. */
+		actorMemberId: string | null;
+		/** Speech details the claim passes. Only the `TBA` placeholder can be
+		 *  queued; real details are online-only. */
 		speakerDetails?: Parameters<typeof hasSpeakerDetails>[0];
 		direct: () => Promise<unknown>;
 	},
@@ -84,15 +98,27 @@ export async function assignRoleViaQueue(
 			if (hasSpeakerDetails(args.speakerDetails)) {
 				throw new Error(SPEECH_DETAILS_OFFLINE_MESSAGE);
 			}
+			const name = args.member.name?.trim();
+			if (!name) throw new Error(NAME_UNAVAILABLE_MESSAGE);
+			const expectedHolder = holderKeyOf(args.slot);
+			// An open slot replays as a claim, which needs its actor.
+			if (expectedHolder === null && !args.actorMemberId) {
+				throw new Error(ACTOR_UNAVAILABLE_MESSAGE);
+			}
 			return {
 				type: "assignSlot",
 				...offline.opMeta(),
 				slotId: args.slot.id,
 				roleName: args.slot.roleName,
 				memberId: args.member.id,
-				memberDisplayName: args.member.name,
+				memberDisplayName: name,
 				actorMemberId: args.actorMemberId,
-				expectedHolder: holderKeyOf(args.slot),
+				// The sheet's speaker "TBA": the online claim sends it, so the queued
+				// one does too and the page ends in the same state.
+				...(args.speakerDetails
+					? { speakerDetails: { speechTitle: args.speakerDetails.speechTitle } }
+					: {}),
+				expectedHolder,
 				expectedHolderName: args.slot.assigneeName,
 			};
 		},

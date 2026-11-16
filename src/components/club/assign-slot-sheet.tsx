@@ -194,10 +194,14 @@ export function AssignSlotSheet({
 						assigneeId: slot.assigneeId,
 						assigneeGuestId: slot.assigneeGuestId,
 					},
-					member: { id: memberId, name: row?.name ?? "Member" },
-					// Reassign carries no actor on the wire; the op still names the
-					// signed-in actor, which the drain ignores for a held slot.
-					actorMemberId: actorMemberId ?? memberId,
+					member: { id: memberId, name: row?.name ?? null },
+					// What today's call passes: the claim's actor, and none for a reassign.
+					actorMemberId: action.kind === "claim" ? actorMemberId : null,
+					// The speaker "TBA" the claim sends (a reassign sends none).
+					speakerDetails:
+						action.kind === "claim" && action.speakerTba
+							? { speechTitle: "TBA" }
+							: undefined,
 					direct,
 				});
 			} else {
