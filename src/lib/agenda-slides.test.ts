@@ -679,6 +679,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ geIntroducesFunctionaries: true })).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -686,6 +687,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the Table Topics Master",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the Table Topics Master",
 				toLabel: "the Table Topics Master",
@@ -693,6 +695,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the General Evaluator",
 				from: { role: "Table Topics Master", name: "Rasheed" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
@@ -700,6 +703,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the speech evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -771,6 +775,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ slots: [totd, genEval, speaker, evaluator] })).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -778,6 +783,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the General Evaluator",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the General Evaluator",
 				toLabel: "the General Evaluator",
@@ -785,6 +791,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the speech evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -815,6 +822,7 @@ describe("hand-off slides (#363)", () => {
 		expect(handoffs({ slots: [genEval, speaker, evaluator] })).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speech evaluators",
 				from: { role: "General Evaluator", name: "Riyaz" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -846,6 +854,7 @@ describe("hand-off slides (#363)", () => {
 		expect(open).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speakers",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -853,6 +862,7 @@ describe("hand-off slides (#363)", () => {
 			},
 			{
 				kind: "handoff",
+				key: "handoff:the speech evaluators",
 				from: { role: "Toastmaster of the Day", name: "Faisal" },
 				to: "the speech evaluators",
 				toLabel: "the speech evaluators",
@@ -872,6 +882,7 @@ describe("hand-off slides (#363)", () => {
 		expect(open).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speakers",
 				from: { role: "Toastmaster of the Day", name: "— open —" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -915,6 +926,7 @@ describe("hand-off slides (#363)", () => {
 		expect(renamed).toEqual([
 			{
 				kind: "handoff",
+				key: "handoff:the speakers",
 				from: { role: "Emcee", name: "Faisal" },
 				to: "the speakers",
 				toLabel: "the speakers",
@@ -1708,6 +1720,7 @@ describe("buildSlideDeck full meeting ordering", () => {
 		const at = mcf.findIndex((s) => s.kind === "functionaryIntro");
 		expect(mcf[at - 1]).toEqual({
 			kind: "handoff",
+			key: "handoff:the General Evaluator",
 			from: { role: "Toastmaster of the Day", name: "Schinthia" },
 			to: "the General Evaluator",
 			toLabel: "the General Evaluator",
@@ -1904,6 +1917,7 @@ describe("What's on tap for next meeting (#932)", () => {
 		);
 		expect(s).toEqual({
 			kind: "nextMeeting",
+			key: "nextMeeting",
 			scheduledAt: new Date("2026-07-09T23:45:00Z"),
 			timezone: "America/Chicago",
 			location: "Library Room B",
@@ -2183,6 +2197,14 @@ describe("buildSlideDeck open speech slots (#1484)", () => {
 				"utf8",
 			),
 		);
-		expect(JSON.parse(JSON.stringify(build({ slots })))).toEqual(expected);
+		const deck = build({ slots });
+		// The fixture predates slide keys (#1637); compare the deck without them
+		// and assert the keys on their own.
+		const withoutKeys = deck.map(({ key: _key, ...rest }) => rest);
+		expect(JSON.parse(JSON.stringify(withoutKeys))).toEqual(expected);
+		expect(deck.every((x) => typeof x.key === "string" && x.key !== "")).toBe(
+			true,
+		);
+		expect(new Set(deck.map((x) => x.key)).size).toBe(deck.length);
 	});
 });

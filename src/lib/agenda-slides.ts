@@ -150,7 +150,14 @@ type FeedbackInvitation = {
  *  builder sets it from the slots it names, and only for names the layout
  *  renders (`generalEvaluation` shows no holder, so it never carries it); the
  *  layout reads it and never looks at the text. Absent, not `false`, otherwise. */
-export type Slide = SlideShape & { visiting?: true };
+export type Slide = SlideShape & {
+	visiting?: true;
+	/** Stable identity (#1637), unique within a deck, so the presenter keeps
+	 *  their place when a live refresh rebuilds it. Always set by the builders
+	 *  (`assignSlideKeys`); optional on the type only so a hand-built slide in a
+	 *  test still type-checks. Never built from a member's name. */
+	key?: string;
+};
 
 type SlideShape =
 	| {
@@ -474,6 +481,7 @@ function pushHandoff(
 	if (from != null && present)
 		deck.push({
 			kind: "handoff",
+			key: `handoff:${to}`,
 			from,
 			to,
 			toLabel,
@@ -482,6 +490,30 @@ function pushHandoff(
 			toNames: toSlots.map((s) => assigneeDisplay(s)),
 			...visitingFlag(from, ...toSlots),
 		});
+}
+
+/** The key a slide has before de-duplication: its own `key` when the builder
+ *  set one (per-slot slides), else its kind, plus the title for a section. */
+function baseKey(slide: Slide): string {
+	if (slide.key) return slide.key;
+	if (slide.kind === "templateSection") return `${slide.kind}:${slide.title}`;
+	return slide.kind;
+}
+
+/**
+ * Give every slide of a finished deck a unique `key` (#1637). One pass appends
+ * `#2`, `#3`, ... to the second and later occurrences of a base key in deck
+ * order, so uniqueness holds by construction (repeated hand-offs, several
+ * beats on one slot). Shared by both deck builders.
+ */
+export function assignSlideKeys(deck: Slide[]): Slide[] {
+	const seen = new Map<string, number>();
+	return deck.map((slide) => {
+		const base = baseKey(slide);
+		const n = (seen.get(base) ?? 0) + 1;
+		seen.set(base, n);
+		return { ...slide, key: n === 1 ? base : `${base}#${n}` };
+	});
 }
 
 const SPEECH_ORDINALS = [
@@ -781,6 +813,7 @@ export function buildSlideDeck({
 		speakers.forEach((s, i) => {
 			deck.push({
 				kind: "speech",
+				key: `speech:${s.id}`,
 				label: speechLabel(i, multi),
 				speaker: assigneeDisplay(s),
 				title: s.speechTitle,
@@ -881,6 +914,7 @@ export function buildSlideDeck({
 		evaluators.forEach((s, i) => {
 			deck.push({
 				kind: "evaluation",
+				key: `evaluation:${s.id}`,
 				label: numbered("Evaluation", i, multi),
 				evaluator: assigneeDisplay(s),
 				speaker: s.evaluates?.speakerName ?? null,
@@ -913,6 +947,13 @@ export function buildSlideDeck({
 	if (geOwner != null && evaluators.length > 0) {
 		deck.push({
 			kind: "evaluatorEvaluation",
+			// The owner's slot, so a change of person keeps the identity.
+			key: `evaluatorEvaluation:${
+				(
+					byRole(slots, ROLE.generalEvaluator)[0] ??
+						byRole(slots, ROLE.toastmaster)[0]
+				)?.id ?? ""
+			}`,
 			owner: geOwner.role,
 			name: geOwner.name,
 			time: beatTiming(runOfShow, "evaluatorEvaluation"),
@@ -983,7 +1024,7 @@ export function buildSlideDeck({
 		feedbackUrl: geOwner != null ? null : feedbackUrl,
 	});
 
-	return deck;
+	return assignSlideKeys(deck);
 }
 
 /**

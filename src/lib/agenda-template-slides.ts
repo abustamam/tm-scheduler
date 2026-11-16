@@ -65,6 +65,7 @@ import {
 } from "./agenda-runsheet";
 import {
 	assignedNames,
+	assignSlideKeys,
 	byRole,
 	type ClubForDeck,
 	holder,
@@ -282,6 +283,13 @@ export function buildTemplateSlideDeck({
 		}
 		deck.push({
 			kind: "templateBeat",
+			// Slot first (a contestant keeps identity when an earlier one is
+			// removed), then the role's stable key, else the beat's own label:
+			// an event beat and a role beat bound to nobody both reach here with
+			// no `roleKey` and `slotId: null`, and their `who` is literal beat
+			// text, never a member's name. Duplicates are numbered by
+			// `assignSlideKeys`.
+			key: `templateBeat:${row.slotId ?? row.roleKey ?? row.who}`,
 			// `who`, not the beat's raw label: on a role row it is the numbered
 			// label plus the assignee ("Contestant 1 · Ada Lovelace"), which is
 			// what the room needs on the wall. Using the label alone would drop the
@@ -327,5 +335,5 @@ export function buildTemplateSlideDeck({
 		feedbackUrl,
 	});
 
-	return deck;
+	return assignSlideKeys(deck);
 }
