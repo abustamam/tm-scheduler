@@ -18,7 +18,8 @@ export type MeetingNumberRow = {
 
 /**
  * The number to display for `targetId`, or null when none can be determined.
- * `rows` must be the club's meetings ordered by `scheduledAt` ASCENDING.
+ * `rows` must be the club's meetings ordered by `scheduledAt` ASCENDING, and
+ * must include the rows AFTER the target: a later stored number caps it.
  */
 export function deriveMeetingNumber(
 	rows: MeetingNumberRow[],
@@ -40,7 +41,18 @@ export function deriveMeetingNumber(
 		for (let j = i + 1; j <= idx; j++) {
 			if (rows[j].status !== "cancelled") held++;
 		}
-		return anchor.meetingNumber + held;
+		const derived = anchor.meetingNumber + held;
+		// A meeting back-dated behind already-numbered history (#1639): its
+		// derived number would collide with, or pass, a LATER stored number. Stored
+		// numbers are never shifted, so such a meeting has no number.
+		for (let k = idx + 1; k < rows.length; k++) {
+			const later = rows[k].meetingNumber;
+			if (later == null) continue;
+			// Stored numbers rise with date, so the first one decides.
+			if (derived >= later) return null;
+			break;
+		}
+		return derived;
 	}
 	return null;
 }

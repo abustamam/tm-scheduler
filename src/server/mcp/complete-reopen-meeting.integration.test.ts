@@ -144,6 +144,32 @@ describe.skipIf(!hasTestDb)("complete_meeting / reopen_meeting (#1572)", () => {
 		);
 	});
 
+	it("completes a back-dated meeting behind numbered history with a success result (#1639)", async () => {
+		const mk = async (days: number, n: number) => {
+			await testDb.insert(meetings).values({
+				clubId: seed.clubId,
+				scheduledAt: new Date(Date.now() + days * 86_400_000),
+				status: "completed",
+				meetingNumber: n,
+			});
+		};
+		await mk(-20, 9);
+		await mk(-2, 10);
+		await setDate(new Date(Date.now() - 10 * 86_400_000));
+		const r = await complete(adminToken);
+		expect(r).toEqual({
+			meetingId: seed.meetingId,
+			clubId: seed.clubId,
+			status: "completed",
+			closedVotes: 0,
+		});
+		const row = await testDb.query.meetings.findFirst({
+			where: eq(meetings.id, seed.meetingId),
+			columns: { meetingNumber: true },
+		});
+		expect(row?.meetingNumber).toBeNull();
+	});
+
 	it("refuses a meeting before its date, a cancelled one and a completed one, each with its own sentence", async () => {
 		await expectMcpError(complete(adminToken), "VALIDATION", NOT_YET_MESSAGE);
 		expect(await status()).toBe("scheduled");

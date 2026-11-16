@@ -150,4 +150,83 @@ describe.skipIf(!hasTestDb)("meeting numbers (#358)", () => {
 		await freezeMeetingNumber(only);
 		expect(await storedNumber(only)).toBeNull();
 	});
+
+	describe("a back-dated meeting behind numbered history (#1639)", () => {
+		async function backdated() {
+			const nine = await addMeeting(-20, {
+				meetingNumber: 9,
+				status: "completed",
+			});
+			const ten = await addMeeting(-5, {
+				meetingNumber: 10,
+				status: "completed",
+			});
+			const held = await addMeeting(-10);
+			return { nine, ten, held };
+		}
+
+		it("has no number before or after completion, and completing succeeds", async () => {
+			const { nine, ten, held } = await backdated();
+			expect(await resolveMeetingNumber(held)).toBeNull();
+
+			const result = await applyCompleteMeeting({
+				meetingId: held,
+				actorMemberId: null,
+			});
+
+			expect(result).toEqual({
+				clubId: seeded.clubId,
+				alreadyCompleted: false,
+				closedVotes: 0,
+			});
+			const [row] = await testDb
+				.select({ status: meetings.status, n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, held));
+			expect(row).toEqual({ status: "completed", n: null });
+			expect(await resolveMeetingNumber(held)).toBeNull();
+			// History is untouched.
+			expect(await storedNumber(nine)).toBe(9);
+			expect(await storedNumber(ten)).toBe(10);
+		});
+
+		it("still freezes a meeting that sits in a gap below a later number", async () => {
+			// #9, target, #11: the derived 10 fits under the cap.
+			await addMeeting(-20, { meetingNumber: 9, status: "completed" });
+			const held = await addMeeting(-10);
+			await addMeeting(-5, { meetingNumber: 11, status: "completed" });
+			await applyCompleteMeeting({ meetingId: held, actorMemberId: null });
+			expect(await storedNumber(held)).toBe(10);
+		});
+
+		it("completes even when the freeze write fails", async () => {
+			await addMeeting(-20, { meetingNumber: 9, status: "completed" });
+			const held = await addMeeting(-1);
+			const err = vi.spyOn(console, "error").mockImplementation(() => {});
+			const upd = vi.spyOn(testDb, "update").mockImplementationOnce(() => {
+				throw new Error("meetings_club_number_unique");
+			});
+			try {
+				const result = await applyCompleteMeeting({
+					meetingId: held,
+					actorMemberId: null,
+				});
+				expect(result.alreadyCompleted).toBe(false);
+				expect(err).toHaveBeenCalledWith(
+					"freezeMeetingNumber failed",
+					held,
+					expect.any(Error),
+				);
+				expect(upd).toHaveBeenCalledTimes(1);
+			} finally {
+				upd.mockRestore();
+				err.mockRestore();
+			}
+			const [row] = await testDb
+				.select({ status: meetings.status, n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, held));
+			expect(row).toEqual({ status: "completed", n: null });
+		});
+	});
 });
