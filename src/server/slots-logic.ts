@@ -2147,10 +2147,11 @@ export async function lockMemberForAssignment(
 }
 
 /**
- * The actor gates of a claim (#763, #1283), copied from `claimSlotCore` (a guard test reads the gates there, so they stay inline in it) so the
- * expected-holder path (#1638) can run them BEFORE it compares holders: an
- * ineligible actor must hear its refusal even when the write would be skipped
- * as already applied. KEEP THE TWO IN STEP.
+ * The actor gates of a claim (#763, #1283): the ONE copy, called by
+ * `claimSlotCore` and by the expected-holder path (#1638), which runs it BEFORE
+ * it compares holders so an ineligible actor hears its refusal even when the
+ * write would be skipped as already applied. `write-proof.guard.test.ts` pins
+ * this function's text and that `claimSlotCore` calls it before its UPDATE.
  */
 async function assertClaimActorGates(
 	tx: Tx,
@@ -2288,52 +2289,15 @@ export async function claimSlotCore(
 	assertMeetingAccepts(slot.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 
 	const forSomeoneElse = args.actorMemberId !== args.memberId;
-	// Fail-safe (#1283): a `connector` claim is a token owner claiming for
-	// themselves, whatever the caller passed. Mirrors `connectorActor`.
-	if (
-		args.proof === "connector" &&
-		!isConnectorSelf(args.proof, args.actorMemberId, args.memberId)
-	) {
-		throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-	}
-	if (args.proof === "connector") {
-		// The connector arm takes the same attendance lock as the asserted arm and
-		// re-checks with the roll-aware `isMemberUnavailable`: a claim must not
-		// slip between this member's own decline (browser) and the flip below.
-		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
-		if (
-			await isMemberUnavailable(tx, {
-				memberId: args.memberId,
-				meetingId: slot.meetingId,
-			})
-		) {
-			throw new Error("You're marked as not coming to that meeting.");
-		}
-	}
-	if (args.proof === "asserted") {
-		// Through `tx`: this runs inside the caller's transaction, and a pooled
-		// read here holds one connection while waiting on a second.
-		if (
-			forSomeoneElse &&
-			args.actorMemberId !== (await loadTmodMemberId(slot.meetingId, tx))
-		) {
-			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-		}
-		// Held to commit, so a releasing decline cannot slip between this read
-		// and the flip below and leave the role on a member who said no.
-		await lockMemberAttendance(tx, slot.meetingId, args.memberId);
-		// PLAN only, never the roll: this caller holds no session and the roll is
-		// members-only, so the refusal depends on the plan answer alone. It runs
-		// before the conditional UPDATE below, so a refusal writes nothing.
-		if (
-			await isMemberNotComing(tx, {
-				memberId: args.memberId,
-				meetingId: slot.meetingId,
-			})
-		) {
-			throw new Error(SIGN_IN_REQUIRED_MESSAGE);
-		}
-	}
+	// The actor gates (#763, #1283), one function shared with the expected-holder
+	// path (#1638), which runs them BEFORE it compares holders. They run before
+	// the conditional UPDATE below, so a refusal writes nothing.
+	await assertClaimActorGates(tx, {
+		memberId: args.memberId,
+		actorMemberId: args.actorMemberId,
+		proof: args.proof,
+		meetingId: slot.meetingId,
+	});
 
 	// Conditional UPDATE is the race guard: only one claim can flip 'open'. The
 	// meeting's status rides in the SAME statement (#1057, #1107,
@@ -2799,15 +2763,19 @@ export async function applyRoleOpExpectingHolder(
 		.limit(1);
 	if (!pre) return gone;
 	await assertClubNotArchived(pre.clubId, tx);
-	assertMeetingAccepts(pre.meetingStatus, "plan");
-	if (args.kind === "claim" && args.memberId) {
+	if (args.kind === "claim") {
+		// The order of `claimSlotCore` (#1135): the early refusal accepts a
+		// cancelled meeting, the asserted gates run, and only then is a cancelled
+		// meeting refused, so an ineligible actor hears the sign-in refusal.
+		assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);
 		await assertClaimActorGates(tx, {
-			memberId: args.memberId,
+			memberId: args.memberId as string,
 			actorMemberId: args.actorMemberId,
 			proof: args.proof,
 			meetingId: pre.meetingId,
 		});
 	}
+	assertMeetingAccepts(pre.meetingStatus, "plan");
 
 	const [locked] = await tx
 		.select({

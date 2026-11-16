@@ -13,7 +13,10 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clubs, guests, meetings, roleSlots } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
-import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
+import {
+	MEETING_CANCELLED_MESSAGE,
+	MEETING_LOCKED_MESSAGE,
+} from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
@@ -278,6 +281,116 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 		// The asserted arm: a non-TMOD actor claiming for someone else is refused,
 		// even though the target already holds the slot.
 		await setHolder(s.slotId, s.adminMemberId);
+		await expect(
+			run({
+				kind: "claim",
+				slotId: s.slotId,
+				memberId: s.adminMemberId,
+				actorMemberId: s.memberId,
+				proof: "asserted",
+				expectedHolder: null,
+			}),
+		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+	});
+	// protects=a refused actor never learns who holds the slot: the refusal is
+	//   thrown, no holder name is returned, and nothing is written;
+	// fails_when=the comparison (and its name lookup) runs before the actor gates;
+	// no_claim=the gates' own cases (the guard test and the claim suite).
+	it("an actor refusal beats a changed holder: it throws and names nobody", async () => {
+		const s = await seedLiveClub();
+		// Held by someone who is neither the target nor the expected (open) holder.
+		await setHolder(s.slotId, s.memberId);
+		await expect(
+			run({
+				kind: "claim",
+				slotId: s.slotId,
+				memberId: s.adminMemberId,
+				// Not the TMOD, claiming for someone else, asserted: refused.
+				actorMemberId: s.memberId,
+				proof: "asserted",
+				expectedHolder: null,
+			}),
+		).rejects.toThrow(SIGN_IN_REQUIRED_MESSAGE);
+		expect((await holder(s.slotId))?.m).toBe(s.memberId);
+	});
+
+	// protects=a GUEST holder is named in a holder-changed answer for a claim
+	//   (the member lookup would return null for it);
+	// fails_when=the name lookup is member-only;
+	// no_claim=release against a guest (its own case above).
+	it("holder-changed on a claim names a GUEST holder", async () => {
+		const s = await seedLiveClub();
+		const [g] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson({ clubId: s.clubId, name: "Walk In" }, testDb),
+			)
+			.returning({ id: guests.id });
+		await testDb
+			.update(roleSlots)
+			.set({
+				assignedMemberId: null,
+				assignedGuestId: g!.id,
+				status: "claimed",
+			})
+			.where(eq(roleSlots.id, s.slotId));
+		const r = await run({
+			kind: "claim",
+			slotId: s.slotId,
+			memberId: s.memberId,
+			actorMemberId: s.adminMemberId,
+			expectedHolder: null,
+		});
+		expect(r).toEqual({
+			ok: false,
+			reason: "holder-changed",
+			currentHolderName: "Walk In",
+		});
+		expect((await holder(s.slotId))?.g).toBe(g!.id);
+	});
+
+	// protects=a cancelled meeting is refused for every kind, before an
+	//   already-applied success, and (claim) AFTER the asserted gates (#1135);
+	// fails_when=the status check is skipped for a claim, or runs before the
+	//   actor gates;
+	// no_claim=a meeting cancelled between this check and the write (the core's
+	//   UPDATE guards that).
+	it.each([
+		["claim", "already applied"],
+		["release", "already applied"],
+	] as const)("a cancelled meeting refuses a %s even when %s", async (kind) => {
+		const s = await seedLiveClub();
+		await setHolder(s.slotId, kind === "claim" ? s.memberId : null);
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, s.meetingId));
+		await expect(
+			run(
+				kind === "claim"
+					? {
+							kind,
+							slotId: s.slotId,
+							memberId: s.memberId,
+							actorMemberId: s.adminMemberId,
+							expectedHolder: null,
+						}
+					: {
+							kind,
+							slotId: s.slotId,
+							actorMemberId: s.adminMemberId,
+							expectedHolder: null,
+						},
+			),
+		).rejects.toThrow(MEETING_CANCELLED_MESSAGE);
+	});
+
+	it("on a cancelled meeting an ineligible asserted claimer hears the sign-in refusal first (#1135)", async () => {
+		const s = await seedLiveClub();
+		await testDb
+			.update(meetings)
+			.set({ status: "cancelled" })
+			.where(eq(meetings.id, s.meetingId));
 		await expect(
 			run({
 				kind: "claim",

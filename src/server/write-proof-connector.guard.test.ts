@@ -63,4 +63,9 @@ describe("the connector proof stays out of session-only rulings (#1283)", () => 
 		const src = readSource(resolve(SERVER, "slots-logic.ts"));
 		expect(functionSource(src, "claimSlotCore")).toMatch(/connector/);
 	});
+
+	it("assertClaimActorGates, the one copy of the claim gates (#1638), may use it", () => {
+		const src = readSource(resolve(SERVER, "slots-logic.ts"));
+		expect(functionSource(src, "assertClaimActorGates")).toMatch(/connector/);
+	});
 });

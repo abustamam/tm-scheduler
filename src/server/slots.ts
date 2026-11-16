@@ -209,14 +209,18 @@ export const releaseSlot = createServerFn({ method: "POST" })
 		// A queued write (#1638): compare the holder under the lock, then act.
 		if (data.expectedHolder !== undefined) {
 			const expectedHolder = data.expectedHolder;
-			return db.transaction((tx) =>
-				applyRoleOpExpectingHolder(tx, {
-					kind: "release",
-					slotId: data.slotId,
-					actorMemberId,
-					proof: "session",
-					expectedHolder,
-				}),
+			// One retry on a deadlock (#1388): this path takes the merge and member
+			// locks first, like the claim's.
+			return withDeadlockRetry(() =>
+				db.transaction((tx) =>
+					applyRoleOpExpectingHolder(tx, {
+						kind: "release",
+						slotId: data.slotId,
+						actorMemberId,
+						proof: "session",
+						expectedHolder,
+					}),
+				),
 			);
 		}
 
@@ -377,15 +381,18 @@ export const reassignSlot = createServerFn({ method: "POST" })
 		// A queued write (#1638): compare the holder under the lock, then act.
 		if (data.expectedHolder !== undefined) {
 			const expectedHolder = data.expectedHolder;
-			return db.transaction((tx) =>
-				applyRoleOpExpectingHolder(tx, {
-					kind: "reassign",
-					slotId: data.slotId,
-					memberId: data.memberId,
-					actorMemberId,
-					proof: "session",
-					expectedHolder,
-				}),
+			// One retry on a deadlock (#1388), as the claim above.
+			return withDeadlockRetry(() =>
+				db.transaction((tx) =>
+					applyRoleOpExpectingHolder(tx, {
+						kind: "reassign",
+						slotId: data.slotId,
+						memberId: data.memberId,
+						actorMemberId,
+						proof: "session",
+						expectedHolder,
+					}),
+				),
 			);
 		}
 
