@@ -976,9 +976,10 @@ export async function applyRemoveSpeakerSlot(
 		// order. Against claim, release, reassign, guest assignment and
 		// `assign_roles` (meeting first, then slots by id) this lock is cycle-free:
 		// each of those holds at most one slot, or takes the meeting before its
-		// slots. Locking every paired slot would ADD a cycle with a speech relink
-		// (`attachSpeechToOpenSlot` in `speeches-logic.ts` unlinks the speech's
-		// current slot, then writes the target, without the meeting lock).
+		// slots. A speech relink (`attachSpeechToOpenSlot` in `speeches-logic.ts`)
+		// takes its source and target slots in id order too (#1641), so a caller
+		// that locks a whole lineup in id order, as `edit_speaker_slots` does, is
+		// cycle-free against it as well.
 		//
 		// NOT cycle-free overall. `realignEvaluatorPairs` below runs after the
 		// deletes and updates the surviving speakers and evaluators in POSITION

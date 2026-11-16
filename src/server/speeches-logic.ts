@@ -21,6 +21,7 @@ import {
 	isNull,
 	ne,
 	notExists,
+	or,
 	sql,
 } from "drizzle-orm";
 import type { db } from "#/db";
@@ -337,6 +338,25 @@ export async function attachSpeechToOpenSlot(
 	// transaction (the cast), or the row locks would not outlive the statement.
 	await lockMembershipsAgainstMerge(conn as Tx, [membership.id]);
 	await lockMemberForAssignment(conn as Tx, membership.id);
+
+	// Take the slot rows this writes, the target and every slot still holding
+	// the speech, `FOR UPDATE` in ASCENDING id, before writing either (#1641).
+	// The unlink below writes the source and the UPDATE after it writes the
+	// target, in whatever id order the speech happens to sit; `edit_speaker_slots`
+	// locks a meeting's whole lineup in id order, so a relink from a higher id to
+	// a lower one would hold the source and wait on the target while the tool
+	// holds the target and waits on the source (40P01). One ordered statement:
+	// the sort runs before the row locks, so they are taken in id order. The
+	// sources are read again below, now under these locks, so a slot that gained
+	// or lost the speech while this waited is seen as it is.
+	await conn
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			or(eq(roleSlots.id, args.slotId), eq(roleSlots.speechId, args.speechId)),
+		)
+		.orderBy(asc(roleSlots.id))
+		.for("update");
 
 	// Invariant guard: unlink any slot still pointing at this speech before we
 	// relink, so setting the new slot's speech_id can't violate the unique index.

@@ -41,7 +41,11 @@
  * the meeting lock, a no-op in the same transaction. The id-order guarantee
  * holds for a whole batch, not just a single move (#1327): a member's End locks
  * their slots in id order without the meeting lock, and a batch that locked its
- * pairs in request order could deadlock with it.
+ * pairs in request order could deadlock with it. A speech relink
+ * (`attachSpeechToOpenSlot`) takes its source and target slots in id order as
+ * well, so it cannot form a cycle with the whole-lineup lock. PREVIEW takes the
+ * lineup lock too (it plans inside the same transaction, which then rolls
+ * back), so a preview blocks other writers of those slots until it finishes.
  */
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
