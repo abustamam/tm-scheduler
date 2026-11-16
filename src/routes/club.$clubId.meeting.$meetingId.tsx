@@ -136,6 +136,7 @@ import { useEffectiveMember } from "#/lib/member-identity";
 import { outstandingDutiesByMember } from "#/lib/nudge";
 import { meetingOgImage, OG_IMAGE_SIZE_META } from "#/lib/og-image-url";
 import { normalizePresentationUrl } from "#/lib/presentation-url";
+import { projectSlots } from "#/lib/project-slots";
 import { shareMeta } from "#/lib/share-meta";
 import { footerDate } from "#/lib/slide-layout";
 import { hasWordOfTheDay } from "#/lib/word-poster";
@@ -338,7 +339,7 @@ function MeetingView() {
 		Route.useRouteContext();
 	const {
 		meeting,
-		slots,
+		slots: loaderSlots,
 		canManage,
 		timezone,
 		unavailableMembers,
@@ -405,6 +406,12 @@ function MeetingView() {
 			),
 		minutes: minutes.data,
 	});
+	// A role change queued offline shows at once (#1638): every consumer below
+	// reads the projected slots, not the loader's.
+	const slots = useMemo(
+		() => projectSlots(loaderSlots, offlineMinutes.roleOps),
+		[loaderSlots, offlineMinutes.roleOps],
+	);
 
 	// Shell-wrapped signed-in member → act as the session identity; anonymous
 	// visitor → the localStorage-picked member (#317).
@@ -831,6 +838,8 @@ function MeetingView() {
 		dismissCoverCard,
 		declineFreesRoles,
 	} = useMeetingCover({
+		offlineMinutes,
+		myName: member?.name ?? null,
 		clubUuid,
 		clubSlug,
 		meeting,
@@ -1013,7 +1022,7 @@ function MeetingView() {
 	// The console's winner buttons write directly, not through the queue, so they
 	// pause while the queue holds unsent ops or is draining (#1583).
 	const winnerWritesPaused =
-		offlineMinutes.queue.length > 0 || offlineMinutes.draining;
+		offlineMinutes.pendingCount > 0 || offlineMinutes.draining;
 	const activeTab = meetingTabFrom(search, offeredTabs);
 	const selectTab = (tab: MeetingTab) => {
 		void navigate({
@@ -1447,6 +1456,7 @@ function MeetingView() {
 					    links to the digital agenda route). Always rendered. */}
 							<section id={MEETING_AGENDA_ANCHOR_ID} className="scroll-mt-28">
 								<MeetingAgenda
+									offlineMinutes={offlineMinutes}
 									slotExtra={coverChipUnderRow}
 									slots={slots}
 									speechIntroductions={speechIntroductions}
@@ -1610,7 +1620,7 @@ function MeetingView() {
 							// own indicator — it still queues its own non-attendance edits.
 							sync={{
 								online,
-								queueCount: offlineMinutes.queue.length,
+								queueCount: offlineMinutes.pendingCount,
 								draining: offlineMinutes.draining,
 								syncError: offlineMinutes.syncError,
 								justSynced: offlineMinutes.justSynced,
@@ -1697,7 +1707,7 @@ function MeetingView() {
 										<>
 											<SyncStatus
 												online={online}
-												queueCount={offlineMinutes.queue.length}
+												queueCount={offlineMinutes.pendingCount}
 												draining={offlineMinutes.draining}
 												syncError={offlineMinutes.syncError}
 												justSynced={offlineMinutes.justSynced}
