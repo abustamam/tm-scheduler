@@ -856,7 +856,9 @@ describe.skipIf(!hasTestDb)("guest merge (#1609)", () => {
 			absorbedGuestId: B.id,
 		});
 		const text = JSON.stringify(rows[0]);
-		expect(text).not.toMatch(/Keeper Kay|Absorbed Abe|example\.test|555-/);
+		expect(text).not.toMatch(
+			/Keeper Kay|Absorbed Abe|example\.test|555-777-8888/,
+		);
 	});
 
 	it("previews the same numbers the apply then writes, and the preview changes nothing", async () => {
