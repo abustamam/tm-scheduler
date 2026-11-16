@@ -43,7 +43,8 @@
  * their slots in id order without the meeting lock, and a batch that locked its
  * pairs in request order could deadlock with it. A speech relink
  * (`attachSpeechToOpenSlot`) takes its source and target slots in id order as
- * well, so it cannot form a cycle with the whole-lineup lock. PREVIEW takes the
+ * well, so a single relink cannot form a cycle with the whole-lineup lock (two
+ * concurrent relinks of one speech still can; see the note there). PREVIEW takes the
  * lineup lock too (it plans inside the same transaction, which then rolls
  * back), so a preview blocks other writers of those slots until it finishes.
  */

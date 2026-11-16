@@ -17,8 +17,10 @@
  * Case 1, the End gets in first. Two blockers hold i0 and i2 (i2 sits between
  * the member's slots, so a tool locking in DESCENDING id parks on it holding
  * i3):
- *   1. the tool applies and parks on a blocker; with the fix it holds nothing
- *      yet (i0 is the lowest lineup id of the three);
+ *   1. the tool applies and parks on a blocker; with the fix it holds none of
+ *      the member's slots yet (i0 is the lowest SPEAKER id; it does hold the
+ *      meeting row and any evaluator row with a lower id, which the End never
+ *      touches);
  *   2. the End starts. Without the fix it takes i1 and parks on i2/i3 behind
  *      the tool; with it nothing the tool holds is in its way and it commits;
  *   3. the blockers commit. The End changed who holds the slots, so the tool

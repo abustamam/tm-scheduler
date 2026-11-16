@@ -346,9 +346,18 @@ export async function attachSpeechToOpenSlot(
 	// locks a meeting's whole lineup in id order, so a relink from a higher id to
 	// a lower one would hold the source and wait on the target while the tool
 	// holds the target and waits on the source (40P01). One ordered statement:
-	// the sort runs before the row locks, so they are taken in id order. The
-	// sources are read again below, now under these locks, so a slot that gained
-	// or lost the speech while this waited is seen as it is.
+	// the sort runs before the row locks, so they are taken in id order.
+	//
+	// NOT a full guarantee. The statement locks the sources its snapshot saw.
+	// The sources are read again below, so a slot that gained the speech while
+	// this waited is SEEN, but it was not locked here: the unlink then locks it
+	// out of id order. That needs a second relink of this same speech to commit
+	// while this one waits, and a lineup-locking tool call on the meeting at the
+	// same moment; Postgres then aborts one of them (40P01) and nothing is
+	// corrupted. Left as is: closing it means serialising relinks per speech.
+	// The lock also covers a source in another club or a completed meeting,
+	// which the checks below go on to refuse, so a relink can now wait on that
+	// row's writer before it is refused.
 	await conn
 		.select({ id: roleSlots.id })
 		.from(roleSlots)
