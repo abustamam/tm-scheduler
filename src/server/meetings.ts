@@ -551,7 +551,7 @@ async function loadMeetingDetail(
 	// role with its holders' names. It also backs the Thank-You slide's date, so
 	// the two slides are one read. Names only; an in-room artifact still narrows
 	// it through `inRoomMeetingPayload` like everything else on this payload.
-	const nextMeeting = await loadNextMeetingSummary(meeting, tz, meetingNumber);
+	const nextMeeting = await loadNextMeetingSummary(meeting, tz);
 
 	// Cover requests (#1438): who handed a role off, and who covered it. Names
 	// only, like the assignee names the public page already shows. Read off

@@ -28,11 +28,8 @@ vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
 const { loadNextMeetingSummary } = await import("./next-meeting-summary-logic");
 
 /** Load the summary the way `loadMeetingDetail` does: from the meeting's own
- *  row, in its club's timezone, handed the current meeting's number. */
-async function summaryAfter(
-	meetingId: string,
-	currentNumber: number | null = null,
-) {
+ *  row, in its club's timezone, . */
+async function summaryAfter(meetingId: string) {
 	const [row] = await testDb
 		.select({
 			id: meetings.id,
@@ -44,7 +41,7 @@ async function summaryAfter(
 		.innerJoin(clubs, eq(clubs.id, meetings.clubId))
 		.where(eq(meetings.id, meetingId));
 	if (!row) throw new Error("no such meeting");
-	return loadNextMeetingSummary(row, row.timezone, currentNumber);
+	return loadNextMeetingSummary(row, row.timezone);
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -203,18 +200,43 @@ describe.skipIf(!hasTestDb)("loadNextMeetingSummary (#932)", () => {
 		expect(await summaryAfter(seeded.meetingId)).toBeNull();
 	});
 
-	it("derives the next number from the current one when it stores none", async () => {
+	it("derives the next number by the shared rule when it stores none (in order)", async () => {
 		await testDb
 			.update(meetings)
 			.set({ meetingNumber: null })
 			.where(eq(meetings.id, seeded.meetingId));
-		expect((await summaryAfter(presented, 56))?.meetingNumber).toBe(57);
-		expect((await summaryAfter(presented, null))?.meetingNumber).toBeNull();
+		await testDb
+			.update(meetings)
+			.set({ meetingNumber: 56, status: "completed" })
+			.where(eq(meetings.id, presented));
+		expect((await summaryAfter(presented))?.meetingNumber).toBe(57);
+	});
+
+	it("is null when the club has no numbering at all", async () => {
+		await testDb
+			.update(meetings)
+			.set({ meetingNumber: null })
+			.where(eq(meetings.id, seeded.meetingId));
+		expect((await summaryAfter(presented))?.meetingNumber).toBeNull();
+	});
+
+	it("shows no number for a back-dated unnumbered next meeting (#1639)", async () => {
+		// Completed #9 (presented) and #10 (the seeded meeting), with an
+		// unnumbered meeting back-dated between them: current + 1 would say 10.
+		await testDb
+			.update(meetings)
+			.set({ meetingNumber: 9, status: "completed" })
+			.where(eq(meetings.id, presented));
+		await testDb
+			.update(meetings)
+			.set({ meetingNumber: 10, status: "completed" })
+			.where(eq(meetings.id, seeded.meetingId));
+		await addMeeting(BASE + 3 * DAY, { status: "completed" });
+		expect((await summaryAfter(presented))?.meetingNumber).toBeNull();
 	});
 
 	it("prefers the next meeting's own stored number", async () => {
-		// Stored 57 in beforeEach; a current number that disagrees does not win.
-		expect((await summaryAfter(presented, 10))?.meetingNumber).toBe(57);
+		expect((await summaryAfter(presented))?.meetingNumber).toBe(57);
 	});
 
 	it("never reaches into another club", async () => {

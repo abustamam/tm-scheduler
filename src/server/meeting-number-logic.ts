@@ -16,7 +16,7 @@ import {
  * result (a back-dated meeting gets none, #1639). Served by the (club_id,
  * scheduled_at) unique index.
  */
-async function clubRows(clubId: string): Promise<MeetingNumberRow[]> {
+async function clubMeetingSpine(clubId: string): Promise<MeetingNumberRow[]> {
 	return db
 		.select({
 			id: meetings.id,
@@ -48,7 +48,7 @@ export async function resolveMeetingNumber(
 	if (!meeting) return null;
 	if (meeting.meetingNumber != null) return meeting.meetingNumber;
 
-	const rows = await clubRows(meeting.clubId);
+	const rows = await clubMeetingSpine(meeting.clubId);
 	return deriveMeetingNumber(rows, meetingId);
 }
 
@@ -69,7 +69,7 @@ export async function freezeMeetingNumber(meetingId: string): Promise<void> {
 		.limit(1);
 	if (!meeting || meeting.meetingNumber != null) return;
 
-	const rows = await clubRows(meeting.clubId);
+	const rows = await clubMeetingSpine(meeting.clubId);
 	const derived = deriveMeetingNumber(rows, meetingId);
 	if (derived == null) return;
 

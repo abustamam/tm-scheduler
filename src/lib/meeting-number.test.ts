@@ -71,6 +71,11 @@ describe("deriveMeetingNumber", () => {
 			expect(deriveMeetingNumber(rows, "t")).toBeNull();
 		});
 
+		it("only the FIRST later stored number decides (stored numbers rise with date)", () => {
+			const rows = [m("a", 9), m("t"), m("b", 12), m("c", 10)];
+			expect(deriveMeetingNumber(rows, "t")).toBe(10);
+		});
+
 		it("keeps the number when a gap leaves room (#9, target, #11)", () => {
 			const rows = [m("a", 9), m("t"), m("b", 11)];
 			expect(deriveMeetingNumber(rows, "t")).toBe(10);

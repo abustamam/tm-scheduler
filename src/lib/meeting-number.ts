@@ -47,7 +47,10 @@ export function deriveMeetingNumber(
 		// numbers are never shifted, so such a meeting has no number.
 		for (let k = idx + 1; k < rows.length; k++) {
 			const later = rows[k].meetingNumber;
-			if (later != null && derived >= later) return null;
+			if (later == null) continue;
+			// Stored numbers rise with date, so the first one decides.
+			if (derived >= later) return null;
+			break;
 		}
 		return derived;
 	}

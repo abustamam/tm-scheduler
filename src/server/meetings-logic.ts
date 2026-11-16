@@ -1004,8 +1004,8 @@ export async function applyCompleteMeeting(input: {
 	// The meeting is history now, so its number stops being provisional and is
 	// frozen onto the row (#358) — becoming the anchor the next meetings count
 	// from. Deliberately AFTER the commit and non-fatal (#1639): a failure (a
-	// unique violation from a concurrent freeze) is logged and the number stays
-	// null; the completion already happened and must not report an error.
+	// unique violation from a concurrent freeze) is logged and the stored column
+	// stays null, and the display is still derived by the same rule; the completion already happened and must not report an error.
 	if (!meeting.alreadyCompleted) {
 		try {
 			await freezeMeetingNumber(input.meetingId);
