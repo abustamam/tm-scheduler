@@ -35,10 +35,15 @@
  * ## Locks
  *
  * The meeting row first (`lockMeetingForSlotEdit`), then the club's archive
- * gate, then whatever the cores lock (the pair's rows). Every step re-takes the
- * meeting lock, a no-op in the same transaction.
+ * gate, then EVERY speaker and evaluator slot of the meeting `FOR UPDATE` in
+ * ascending id, before the first step (`lockLineupSlots`, #1641), then whatever
+ * the cores lock, which are re-locks of rows already held. Every step re-takes
+ * the meeting lock, a no-op in the same transaction. The id-order guarantee
+ * holds for a whole batch, not just a single move (#1327): a member's End locks
+ * their slots in id order without the meeting lock, and a batch that locked its
+ * pairs in request order could deadlock with it.
  */
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, guests, members, roleSlots } from "#/db/schema";
@@ -69,6 +74,38 @@ import type { McpToolDefinition } from "../tool";
 export const EDIT_SPEAKER_SLOTS_TOOL = "edit_speaker_slots";
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
+
+/**
+ * Lock every speaker and evaluator slot of the meeting `FOR UPDATE`, ascending
+ * id, before the first step (#1641). A step core locks its pair's rows as it
+ * runs, so across a batch the locks piled up in REQUEST order, against a
+ * member's End, which locks that member's slots in id order and takes no
+ * meeting lock: a batch moving the higher-id pair first deadlocked with it
+ * (40P01). With the whole set held in id order up front, every later lock a
+ * core asks for is a re-lock of a row this transaction already holds.
+ */
+async function lockLineupSlots(
+	tx: Tx,
+	meetingId: string,
+	speakerRoleId: string | null,
+	evaluatorRoleId: string | null,
+): Promise<void> {
+	const roleIds = [speakerRoleId, evaluatorRoleId].filter(
+		(id): id is string => id !== null,
+	);
+	if (roleIds.length === 0) return;
+	await tx
+		.select({ id: roleSlots.id })
+		.from(roleSlots)
+		.where(
+			and(
+				eq(roleSlots.meetingId, meetingId),
+				inArray(roleSlots.roleDefinitionId, roleIds),
+			),
+		)
+		.orderBy(asc(roleSlots.id))
+		.for("update");
+}
 
 const PLAN_STALE_MESSAGE =
 	"This meeting's speaker line-up changed since that preview. Show the user the fresh plan and ask again.";
@@ -294,6 +331,12 @@ async function runSteps(
 	actorMemberId: string | null,
 ): Promise<Plan> {
 	const roles = await clubRoles(tx, meeting.clubId, meeting.templateId);
+	await lockLineupSlots(
+		tx,
+		meeting.id,
+		roles.speakerRoleId,
+		roles.evaluatorRoleId,
+	);
 	const read = () =>
 		loadLineup(tx, meeting.id, roles.speakerRoleId, roles.evaluatorRoleId);
 	const before = await read();
