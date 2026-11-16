@@ -194,6 +194,7 @@ describe.each(CASES)("$name expectedHolder routing (#1638)", (c) => {
 			ok: false,
 			reason: "holder-changed",
 			currentHolderName: "Ana",
+			holderPresent: true,
 		});
 		await expect(c.call(HOLDER)).resolves.toMatchObject({
 			ok: false,

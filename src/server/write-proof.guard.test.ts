@@ -268,7 +268,9 @@ const SLOT_FILL_BLANK: Record<
 					"await assertClaimActorGates(tx, { memberId: args.memberId, actorMemberId: args.actorMemberId, proof: args.proof, meetingId: slot.meetingId, });",
 					"proof: args.proof,",
 				],
-				mustPrecede: [["await assertClaimActorGates(tx,", ".update(roleSlots)"]],
+				mustPrecede: [
+					["await assertClaimActorGates(tx,", ".update(roleSlots)"],
+				],
 			},
 			{
 				// The expected-holder path (#1638) runs the same gates before it
@@ -284,8 +286,11 @@ const SLOT_FILL_BLANK: Record<
 						'assertMeetingAccepts(pre.meetingStatus, "plan", PLAN_ACCEPTING_CANCELLED);',
 						"await assertClaimActorGates(tx,",
 					],
-					["await assertClaimActorGates(tx,", 'assertMeetingAccepts(pre.meetingStatus, "plan");'],
-					['assertMeetingAccepts(pre.meetingStatus, "plan");', ".for(\"update\""],
+					[
+						"await assertClaimActorGates(tx,",
+						'assertMeetingAccepts(pre.meetingStatus, "plan");',
+					],
+					['assertMeetingAccepts(pre.meetingStatus, "plan");', '.for("update"'],
 				],
 			},
 			{

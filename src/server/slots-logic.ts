@@ -21,6 +21,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { holderKey } from "#/lib/holder-key";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	assertMeetingAccepts,
@@ -57,6 +58,7 @@ import { meetingAcceptsWrite, meetingRowAccepts } from "./meeting-write-gate";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
 import { lockMembershipsAgainstMerge } from "./membership-merge-lock";
 import { resolveProjectDisplay } from "./project-picker-logic";
+import { SLOT_GONE } from "./slot-write-answers";
 import { resolveWriteActorWithProof } from "./write-actor-logic";
 
 // Either the main db client or a drizzle transaction — so speech helpers can run
@@ -2694,17 +2696,32 @@ export async function releaseSlotCore(
 	return { clubId: slot.clubId };
 }
 
-/** What an expected-holder write answers (#1638). `ok` covers an applied write
- *  AND an already-applied one; a skip is a normal answer, not an error. */
-export type ExpectedHolderResult =
-	| { ok: true }
-	| {
-			ok: false;
-			reason: "holder-changed" | "slot-gone";
-			/** Who holds the slot now (members and guests alike); null when nobody
-			 *  does, and always null for `slot-gone`. */
-			currentHolderName: string | null;
-	  };
+import type { ExpectedHolderResult } from "./slot-write-answers";
+export type { ExpectedHolderResult };
+
+/** The name of whoever holds a slot, a member or a guest; null when nobody does. */
+async function holderNameOf(
+	tx: Tx,
+	slot: { assignedMemberId: string | null; assignedGuestId: string | null },
+): Promise<string | null> {
+	if (slot.assignedGuestId) {
+		const [g] = await tx
+			.select({ name: guests.name })
+			.from(guests)
+			.where(eq(guests.id, slot.assignedGuestId))
+			.limit(1);
+		return g?.name ?? null;
+	}
+	if (slot.assignedMemberId) {
+		const [m] = await tx
+			.select({ name: members.name })
+			.from(members)
+			.where(eq(members.id, slot.assignedMemberId))
+			.limit(1);
+		return m?.name ?? null;
+	}
+	return null;
+}
 
 /**
  * A queued role write, decided against whoever holds the slot NOW (#1638).
@@ -2741,11 +2758,6 @@ export async function applyRoleOpExpectingHolder(
 		expectedHolder: string | null;
 	},
 ): Promise<ExpectedHolderResult> {
-	const gone = {
-		ok: false,
-		reason: "slot-gone",
-		currentHolderName: null,
-	} as const;
 	if (args.kind !== "release") {
 		if (!args.memberId) throw new Error("A member is required.");
 		await lockMembershipsAgainstMerge(tx, [args.memberId]);
@@ -2761,7 +2773,7 @@ export async function applyRoleOpExpectingHolder(
 		.innerJoin(meetings, eq(meetings.id, roleSlots.meetingId))
 		.where(eq(roleSlots.id, args.slotId))
 		.limit(1);
-	if (!pre) return gone;
+	if (!pre) return SLOT_GONE;
 	await assertClubNotArchived(pre.clubId, tx);
 	if (args.kind === "claim") {
 		// The order of `claimSlotCore` (#1135): the early refusal accepts a
@@ -2786,12 +2798,8 @@ export async function applyRoleOpExpectingHolder(
 		.where(eq(roleSlots.id, args.slotId))
 		.limit(1)
 		.for("update", { of: roleSlots });
-	if (!locked) return gone;
-	const current = locked.assignedGuestId
-		? `g:${locked.assignedGuestId}`
-		: locked.assignedMemberId
-			? `m:${locked.assignedMemberId}`
-			: null;
+	if (!locked) return SLOT_GONE;
+	const current = holderKey(locked.assignedMemberId, locked.assignedGuestId);
 
 	const target = args.memberId ? `m:${args.memberId}` : null;
 	// Already what the write would leave: a clear of an empty slot, or an assign
@@ -2799,27 +2807,12 @@ export async function applyRoleOpExpectingHolder(
 	if (current === target) return { ok: true };
 
 	if (current !== args.expectedHolder) {
-		let currentHolderName: string | null = null;
-		if (locked.assignedGuestId) {
-			currentHolderName =
-				(
-					await tx
-						.select({ name: guests.name })
-						.from(guests)
-						.where(eq(guests.id, locked.assignedGuestId))
-						.limit(1)
-				)[0]?.name ?? null;
-		} else if (locked.assignedMemberId) {
-			currentHolderName =
-				(
-					await tx
-						.select({ name: members.name })
-						.from(members)
-						.where(eq(members.id, locked.assignedMemberId))
-						.limit(1)
-				)[0]?.name ?? null;
-		}
-		return { ok: false, reason: "holder-changed", currentHolderName };
+		return {
+			ok: false,
+			reason: "holder-changed",
+			currentHolderName: await holderNameOf(tx, locked),
+			holderPresent: current !== null,
+		};
 	}
 
 	if (args.kind === "release") {

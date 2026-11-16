@@ -23,9 +23,8 @@ export type NewGuestPayload = {
 	phone?: string;
 };
 
-/** "m:<memberId>" | "g:<guestId>" | null. A member or a guest can hold a slot;
- *  null is an open one (#1638). */
-export type HolderKey = string | null;
+export type { HolderKey } from "#/lib/holder-key";
+import type { HolderKey } from "#/lib/holder-key";
 
 /**
  * A single queued minutes edit. Mirrors one server mutation each. Every op

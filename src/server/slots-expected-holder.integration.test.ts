@@ -13,10 +13,8 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clubs, guests, meetings, roleSlots } from "#/db/schema";
 import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
-import {
-	MEETING_CANCELLED_MESSAGE,
-	MEETING_LOCKED_MESSAGE,
-} from "#/lib/meeting-lifecycle";
+import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
+import { MEETING_LOCKED_MESSAGE } from "#/lib/meeting-lifecycle";
 import { SIGN_IN_REQUIRED_MESSAGE } from "#/lib/write-proof";
 import {
 	cleanup,
@@ -99,6 +97,7 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			ok: false,
 			reason: "holder-changed",
 			currentHolderName: expect.any(String),
+			holderPresent: true,
 		});
 		expect((await holder(s.slotId))?.m).toBe(s.adminMemberId);
 	});
@@ -145,6 +144,9 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			ok: false,
 			reason: "holder-changed",
 			currentHolderName: null,
+			// Empty now: a cleared slot, which the toast words differently from a
+			// holder whose name is unreadable (W3).
+			holderPresent: false,
 		});
 		expect((await holder(s.slotId))?.m).toBeNull();
 	});
@@ -215,6 +217,7 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			ok: false,
 			reason: "holder-changed",
 			currentHolderName: "Offline Guest",
+			holderPresent: true,
 		});
 		const right = await run({
 			kind: "release",
@@ -345,6 +348,7 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 			ok: false,
 			reason: "holder-changed",
 			currentHolderName: "Walk In",
+			holderPresent: true,
 		});
 		expect((await holder(s.slotId))?.g).toBe(g!.id);
 	});
@@ -356,9 +360,9 @@ describe.skipIf(!hasTestDb)("applyRoleOpExpectingHolder (#1638)", () => {
 	// no_claim=a meeting cancelled between this check and the write (the core's
 	//   UPDATE guards that).
 	it.each([
-		["claim", "already applied"],
-		["release", "already applied"],
-	] as const)("a cancelled meeting refuses a %s even when %s", async (kind) => {
+		"claim",
+		"release",
+	] as const)("a cancelled meeting refuses an already-applied %s", async (kind) => {
 		const s = await seedLiveClub();
 		await setHolder(s.slotId, kind === "claim" ? s.memberId : null);
 		await testDb

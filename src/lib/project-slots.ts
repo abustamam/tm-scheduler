@@ -26,11 +26,8 @@
 // they belong to whoever held the slot before.
 //
 // Client-safe: this file imports nothing from the server.
-import type {
-	HolderKey,
-	QueuedOp,
-	RoleSlotOp,
-} from "#/lib/offline-minutes-queue";
+import { type HolderKey, holderKey } from "#/lib/holder-key";
+import type { QueuedOp, RoleSlotOp } from "#/lib/offline-minutes-queue";
 import { isRoleSlotOp } from "#/lib/role-slot-op";
 
 /** The slot fields a projection reads and writes. Every real slot shape (the
@@ -70,9 +67,7 @@ const HOLDER_FIELDS = [
 export function holderKeyOf(
 	slot: Pick<ProjectableSlot, "assigneeId" | "assigneeGuestId">,
 ): HolderKey {
-	if (slot.assigneeGuestId) return `g:${slot.assigneeGuestId}`;
-	if (slot.assigneeId) return `m:${slot.assigneeId}`;
-	return null;
+	return holderKey(slot.assigneeId, slot.assigneeGuestId);
 }
 
 function setNulls<S extends object>(
@@ -148,14 +143,22 @@ export function projectSlots<S extends ProjectableSlot>(
 export type DrainedRoleOp = {
 	op: RoleSlotOp;
 	outcome: "applied" | "skipped";
-	/** Who holds the slot now, from the server's answer to a skipped op. */
+	/** Why a skipped op was skipped. */
+	reason?: "holder-changed" | "slot-gone";
+	/** Who holds the slot now, from the server's answer to a skipped op. Not
+	 *  projected: see `projectDrained`. */
 	currentHolderName: string | null;
 };
 
 /**
  * Drained ops over a server copy that may predate them. An applied op keeps
- * projecting. A skipped op projects what the server said holds the slot: the
- * name, or open when the answer was nobody.
+ * projecting, so the deck does not flash back to the old holder.
+ *
+ * A SKIPPED op projects nothing: the answer carries only the new holder's NAME,
+ * and a name over the old holder's speech, confirmation and ids would be a slot
+ * that never existed. The slot keeps whatever the server copy says, and the
+ * refetch the drain's broadcast triggers brings the real holder. The one
+ * exception is `slot-gone`: that row no longer exists, so it is hidden.
  */
 export function projectDrained<S extends ProjectableSlot>(
 	slots: S[],
@@ -166,27 +169,9 @@ export function projectDrained<S extends ProjectableSlot>(
 	for (const d of drained) {
 		if (d.outcome === "applied") {
 			out = out.map((s) => applyOp(s, d.op));
-			continue;
+		} else if (d.reason === "slot-gone") {
+			out = out.filter((s) => s.id !== d.op.slotId);
 		}
-		out = out.map((s) => {
-			if (s.id !== d.op.slotId) return s;
-			if (d.currentHolderName === null) {
-				return applyOp(s, {
-					type: "releaseSlot",
-					opId: d.op.opId,
-					queuedAt: d.op.queuedAt,
-					slotId: d.op.slotId,
-					roleName: d.op.roleName,
-					expectedHolder: holderKeyOf(s),
-					expectedHolderName: null,
-				});
-			}
-			return {
-				...s,
-				assigneeName: d.currentHolderName,
-				status: s.status === "open" ? "claimed" : s.status,
-			};
-		});
 	}
 	return out;
 }

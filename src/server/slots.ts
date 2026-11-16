@@ -16,6 +16,7 @@ import {
 	requireUser,
 } from "./guards";
 import { PLAN_ACCEPTING_CANCELLED } from "./meeting-write-options";
+import { type ExpectedHolderResult, SLOT_GONE } from "./slot-write-answers";
 import {
 	applyAddRoleSlot,
 	applyAddSpeakerSlot,
@@ -26,7 +27,6 @@ import {
 	applyRoleOpExpectingHolder,
 	claimSlotCore,
 	confirmSlotCore,
-	type ExpectedHolderResult,
 	reassignSlotCore,
 	releaseSlotCore,
 	saveSpeakerDetailsCore,
@@ -50,12 +50,6 @@ const expectedHolderSchema = z
 	.regex(/^[mg]:[0-9a-f-]{36}$/i)
 	.nullable()
 	.optional();
-
-const SLOT_GONE = {
-	ok: false,
-	reason: "slot-gone",
-	currentHolderName: null,
-} as const;
 
 /** What the three role writes answer. `proof` / `reason` are optional on the
  *  arm that lacks them so a caller destructuring `{ proof }` still types. */
