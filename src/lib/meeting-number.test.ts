@@ -59,4 +59,31 @@ describe("deriveMeetingNumber", () => {
 	it("returns null for a meeting that is not in the list", () => {
 		expect(deriveMeetingNumber([m("a", 56)], "nope")).toBeNull();
 	});
+
+	describe("a later stored number caps the derived one (#1639)", () => {
+		it("is null when the derivation lands on a later stored number", () => {
+			const rows = [m("a", 9), m("t"), m("b", 10)];
+			expect(deriveMeetingNumber(rows, "t")).toBeNull();
+		});
+
+		it("is null when the derivation passes a later stored number", () => {
+			const rows = [m("a", 9), m("x"), m("t"), m("b", 10)];
+			expect(deriveMeetingNumber(rows, "t")).toBeNull();
+		});
+
+		it("keeps the number when a gap leaves room (#9, target, #11)", () => {
+			const rows = [m("a", 9), m("t"), m("b", 11)];
+			expect(deriveMeetingNumber(rows, "t")).toBe(10);
+		});
+
+		it("is unchanged when no later meeting is numbered", () => {
+			const rows = [m("a", 9), m("t"), m("b")];
+			expect(deriveMeetingNumber(rows, "t")).toBe(10);
+		});
+
+		it("is still null for a cancelled target", () => {
+			const rows = [m("a", 9), m("t", null, "cancelled"), m("b", 12)];
+			expect(deriveMeetingNumber(rows, "t")).toBeNull();
+		});
+	});
 });

@@ -150,4 +150,61 @@ describe.skipIf(!hasTestDb)("meeting numbers (#358)", () => {
 		await freezeMeetingNumber(only);
 		expect(await storedNumber(only)).toBeNull();
 	});
+
+	describe("a back-dated meeting behind numbered history (#1639)", () => {
+		async function backdated() {
+			await addMeeting(-20, { meetingNumber: 9, status: "completed" });
+			await addMeeting(-5, { meetingNumber: 10, status: "completed" });
+			return addMeeting(-10);
+		}
+
+		it("has no number before or after completion, and completing succeeds", async () => {
+			const held = await backdated();
+			expect(await resolveMeetingNumber(held)).toBeNull();
+
+			const result = await applyCompleteMeeting({
+				meetingId: held,
+				actorMemberId: null,
+			});
+
+			expect(result.alreadyCompleted).toBe(false);
+			const [row] = await testDb
+				.select({ status: meetings.status, n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, held));
+			expect(row).toEqual({ status: "completed", n: null });
+			expect(await resolveMeetingNumber(held)).toBeNull();
+		});
+
+		it("still freezes a meeting completed in date order", async () => {
+			await addMeeting(-20, { meetingNumber: 9, status: "completed" });
+			const held = await addMeeting(-1);
+			await applyCompleteMeeting({ meetingId: held, actorMemberId: null });
+			expect(await storedNumber(held)).toBe(10);
+		});
+
+		it("completes even when the freeze write fails", async () => {
+			await addMeeting(-20, { meetingNumber: 9, status: "completed" });
+			const held = await addMeeting(-1);
+			const err = vi.spyOn(console, "error").mockImplementation(() => {});
+			const upd = vi.spyOn(testDb, "update").mockImplementationOnce(() => {
+				throw new Error("meetings_club_number_unique");
+			});
+			try {
+				const result = await applyCompleteMeeting({
+					meetingId: held,
+					actorMemberId: null,
+				});
+				expect(result.alreadyCompleted).toBe(false);
+			} finally {
+				upd.mockRestore();
+				err.mockRestore();
+			}
+			const [row] = await testDb
+				.select({ status: meetings.status, n: meetings.meetingNumber })
+				.from(meetings)
+				.where(eq(meetings.id, held));
+			expect(row).toEqual({ status: "completed", n: null });
+		});
+	});
 });
