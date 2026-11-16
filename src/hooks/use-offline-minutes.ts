@@ -394,7 +394,7 @@ export function useOfflineMinutes(input: {
 				// as the online write.
 				// A role op the server skipped (#1638): the online change stays, and
 				// the officer hears which of their offline changes did not land.
-				for (const r of result.roleOutcomes) {
+				for (const r of result.roleOutcomes ?? []) {
 					if (r.outcome === "skipped") toast.warning(roleSkipMessage(r));
 				}
 				for (const r of result.released) {

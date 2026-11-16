@@ -384,7 +384,7 @@ async function dispatchRoleOp(
 
 /** Only present when a role op ended, so a minutes-only result keeps its shape. */
 const withRoles = (o: RoleDrainOutcome[]) =>
-	oo.length > 0 ? { roleOutcomes: o } : {};
+	o.length > 0 ? { roleOutcomes: o } : {};
 
 /** Outcome of a drain pass. `remaining` is what is still queued afterwards. */
 export type DrainResult<Op extends QueuedOp = QueuedOp> = {

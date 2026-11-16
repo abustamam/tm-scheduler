@@ -163,7 +163,7 @@ describe("drainMinutesQueue with role ops (#1638)", () => {
 			"removed:r1:applied",
 		]);
 		expect(result.remaining).toEqual([]);
-		expect(result.roleOutcomes.map((r) => r.outcome)).toEqual([
+		expect(result.roleOutcomes?.map((r) => r.outcome)).toEqual([
 			"applied",
 			"skipped",
 			"applied",
