@@ -1,5 +1,5 @@
 import { Loader2, Trash2 } from "lucide-react";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { SuggestFillsDialog } from "#/components/agenda/suggest-fills-dialog";
 import { AssignSlotSheet } from "#/components/club/assign-slot-sheet";
@@ -11,6 +11,7 @@ import {
 	NudgeRecruitPicker,
 } from "#/components/club/nudge-recruit-picker";
 import type { OfflineMinutesHandle } from "#/components/club/offline-role-writes";
+import { useQueuedWriteFlag } from "#/components/club/queued-write-flag";
 import { ProjectPicker } from "#/components/pathways/project-picker";
 import { useProjectOptions } from "#/components/pathways/use-project-options";
 import { Badge } from "#/components/ui/badge";
@@ -258,7 +259,7 @@ export function MeetingAgenda({
 	onOwnLateRelease,
 	slotExtra,
 	speechIntroductions = null,
-	offlineMinutes: queue,
+	offlineMinutes: rawOfflineMinutes,
 }: MeetingAgendaProps) {
 	const { currentMemberId } = viewer;
 	// Claiming an open slot requires the capability AND either an identity or a
@@ -378,35 +379,23 @@ export function MeetingAgenda({
 		if (!categories.includes(s.category)) categories.push(s.category);
 	}
 
-	// The assign sheet's own queue calls, watched (#1648): `mutate` only runs the
-	// direct call when it does not queue, so a call that never resolved was
-	// queued. Same handle otherwise, so the sheet behaves as before.
-	const assignQueuedRef = useRef(false);
+	// The assign sheet's own queue calls, watched (#1648): the sheet is not
+	// edited, so it cannot report that its write was queued. It still receives a
+	// handle named `offlineMinutes` (the wiring guard reads that text), but this
+	// one wraps `mutate` with the shared queued-write flag.
+	const assignQueued = useQueuedWriteFlag();
 	const offlineMinutes = useMemo(() => {
-		if (!queue) return undefined;
+		if (!rawOfflineMinutes) return undefined;
 		return {
-			...queue,
-			mutate: async (
+			...rawOfflineMinutes,
+			mutate: (
 				...[direct, makeOp, options]: Parameters<OfflineMinutesHandle["mutate"]>
-			) => {
-				assignQueuedRef.current = true;
-				try {
-					await queue.mutate(
-						async () => {
-							const result = await direct();
-							assignQueuedRef.current = false;
-							return result;
-						},
-						makeOp,
-						options,
-					);
-				} catch (err) {
-					assignQueuedRef.current = false;
-					throw err;
-				}
-			},
+			) =>
+				assignQueued.run((track) =>
+					rawOfflineMinutes.mutate(track(direct), makeOp, options),
+				),
 		};
-	}, [queue]);
+	}, [rawOfflineMinutes, assignQueued]);
 
 	async function run(slotKey: string, fn: () => Promise<void>) {
 		setBusySlotId(slotKey);
@@ -1102,10 +1091,7 @@ export function MeetingAgenda({
 					// A QUEUED assignment changed nothing on the server: re-running the
 					// route loader offline replaces the page with the error screen
 					// (#1648). The queue refreshes the route when it drains.
-					if (assignQueuedRef.current) {
-						assignQueuedRef.current = false;
-						return;
-					}
+					if (assignQueued.consume()) return;
 					await actions.onMutated();
 				}}
 			/>

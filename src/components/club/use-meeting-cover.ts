@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import type {
 	MeetingAgendaActions,
@@ -30,6 +30,7 @@ import {
 	type OfflineMinutesHandle,
 	releaseRoleViaQueue,
 } from "./offline-role-writes";
+import { useQueuedWriteFlag } from "./queued-write-flag";
 import type { MeetingDetail } from "./use-meeting-types";
 
 /**
@@ -161,37 +162,12 @@ export function useMeetingCover(args: {
 	// whether that call is made now or queued (see `offline-role-writes.ts`).
 	// Absent, they are the bare calls.
 	type RoleSlot = MeetingDetail["slots"][number];
-	// Whether the role write that just returned was QUEUED rather than sent
-	// (#1648). A queued write changed nothing on the server, so the agenda's
-	// `onMutated` must not re-run the route loader: offline that fetch fails and
-	// the route's error screen replaces the page. The queue refreshes the route
-	// itself once it drains (`useOfflineMinutes`' own `onMutated`), and a write
-	// that went direct was already refreshed by `mutate`. Set before a write,
-	// cleared the moment its direct call resolves, consumed by `refreshRoute`.
-	const roleWriteQueuedRef = useRef(false);
-	function trackQueued(direct: () => Promise<unknown>) {
-		return async () => {
-			const result = await direct();
-			roleWriteQueuedRef.current = false;
-			return result;
-		};
-	}
-	// Runs one queue-capable role write. A throw (busy, an unqueueable op, a
-	// refused direct call) queued nothing, so it leaves the flag clear.
-	async function viaQueue(write: () => Promise<void>) {
-		roleWriteQueuedRef.current = true;
-		try {
-			await write();
-		} catch (err) {
-			roleWriteQueuedRef.current = false;
-			throw err;
-		}
-	}
+	// A QUEUED role write must not refresh the route (#1648); see
+	// `queued-write-flag.ts`. A direct write still refreshes through
+	// `refreshRoute`.
+	const queuedWrite = useQueuedWriteFlag();
 	function refreshRoute() {
-		if (roleWriteQueuedRef.current) {
-			roleWriteQueuedRef.current = false;
-			return;
-		}
+		if (queuedWrite.consume()) return;
 		return router.invalidate();
 	}
 	async function claimOrQueue(
@@ -203,13 +179,13 @@ export function useMeetingCover(args: {
 			await claimAs(me, slot, speakerDetails);
 			return;
 		}
-		await viaQueue(() =>
+		await queuedWrite.run((track) =>
 			assignRoleViaQueue(offlineMinutes, {
 				slot,
 				member: me,
 				actorMemberId: me.id,
 				speakerDetails,
-				direct: trackQueued(() => claimAs(me, slot, speakerDetails)),
+				direct: track(() => claimAs(me, slot, speakerDetails)),
 			}),
 		);
 	}
@@ -223,14 +199,14 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await viaQueue(() =>
+		await queuedWrite.run((track) =>
 			assignRoleViaQueue(offlineMinutes, {
 				slot,
 				member: me,
 				// Today's reassign carries no actor on the wire (#763), so the op
 				// carries none either.
 				actorMemberId: null,
-				direct: trackQueued(direct),
+				direct: track(direct),
 			}),
 		);
 	}
@@ -240,10 +216,10 @@ export function useMeetingCover(args: {
 			await direct();
 			return;
 		}
-		await viaQueue(() =>
+		await queuedWrite.run((track) =>
 			releaseRoleViaQueue(offlineMinutes, {
 				slot,
-				direct: trackQueued(direct),
+				direct: track(direct),
 			}),
 		);
 	}
