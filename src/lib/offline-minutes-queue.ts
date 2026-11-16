@@ -208,8 +208,7 @@ export type RoleSlotOp =
 /** Everything the offline queue can hold for a meeting. */
 export type QueuedOp = MinutesOp | RoleSlotOp;
 
-export const isRoleSlotOp = (op: QueuedOp): op is RoleSlotOp =>
-	op.type === "assignSlot" || op.type === "releaseSlot";
+export { isRoleSlotOp } from "#/lib/role-slot-op";
 
 /**
  * Minimal async key/value storage the queue is built on. IndexedDB in the

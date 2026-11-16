@@ -13,7 +13,6 @@ import { postRoleOpsDrained } from "#/lib/drained-roles";
 import { listRoles } from "#/lib/list-roles";
 import {
 	enqueue,
-	isRoleSlotOp,
 	type MinutesOp,
 	type QueuedOp,
 	type RoleSlotOp,
@@ -26,6 +25,7 @@ import {
 	ONLINE_WRITE_TIMEOUT_MS,
 	raceWithDeadline,
 } from "#/lib/offline-write-deadline";
+import { isRoleSlotOp } from "#/lib/role-slot-op";
 import type { MinutesData } from "#/server/minutes-logic";
 
 /** The receipt for an Absent release (#1256): the online write and the drain
@@ -320,13 +320,19 @@ export function useOfflineMinutes(input: {
 					setMinutesAward,
 					clearMinutesAward,
 				} = await import("#/server/minutes");
-				const { claimSlot, reassignSlot, releaseSlot } = await import(
-					"#/server/slots"
-				);
-				const fns: MinutesServerFns & RoleServerFns = {
-					claimSlot,
-					reassignSlot,
-					releaseSlot,
+				// The slot writers load only when the queue holds a role op: a pure
+				// minutes drain must not pull them in.
+				const roleFns: Partial<RoleServerFns> = ops.some(isRoleSlotOp)
+					? await import("#/server/slots").then(
+							({ claimSlot, reassignSlot, releaseSlot }) => ({
+								claimSlot,
+								reassignSlot,
+								releaseSlot,
+							}),
+						)
+					: {};
+				const fns: MinutesServerFns & Partial<RoleServerFns> = {
+					...roleFns,
 					setAttendance,
 					addGuest: addMinutesGuest,
 					removeGuest: removeMinutesGuest,

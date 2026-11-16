@@ -382,6 +382,10 @@ async function dispatchRoleOp(
 			};
 }
 
+/** Only present when a role op ended, so a minutes-only result keeps its shape. */
+const withRoles = (o: RoleDrainOutcome[]) =>
+	oo.length > 0 ? { roleOutcomes: o } : {};
+
 /** Outcome of a drain pass. `remaining` is what is still queued afterwards. */
 export type DrainResult<Op extends QueuedOp = QueuedOp> = {
 	/** How many ops were successfully replayed + removed this pass. */
@@ -396,7 +400,7 @@ export type DrainResult<Op extends QueuedOp = QueuedOp> = {
 	released: { memberId: string; labels: string[] }[];
 	/** How each role op that left the queue ended (#1638), in drain order, the
 	 *  skipped ones included. Includes ops that drained before a later one failed. */
-	roleOutcomes: RoleDrainOutcome[];
+	roleOutcomes?: RoleDrainOutcome[];
 };
 
 /**
@@ -437,7 +441,7 @@ export async function drainMinutesQueue<
 				remaining: ops.slice(i),
 				error,
 				released,
-				roleOutcomes,
+				...withRoles(roleOutcomes),
 			};
 		}
 		// Recorded BEFORE the queue removal: the release has happened either way,
@@ -459,7 +463,7 @@ export async function drainMinutesQueue<
 				remaining: ops.slice(i),
 				error,
 				released,
-				roleOutcomes,
+				...withRoles(roleOutcomes),
 			};
 		}
 		drainedCount += 1;
@@ -470,6 +474,6 @@ export async function drainMinutesQueue<
 		remaining: [],
 		error: undefined,
 		released,
-		roleOutcomes,
+		...withRoles(roleOutcomes),
 	};
 }

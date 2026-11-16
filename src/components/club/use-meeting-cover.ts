@@ -22,15 +22,15 @@ import {
 	unconfirmSlot,
 } from "#/server/slots";
 import { coverChipsFor, coverMeetingOver } from "./cover-chip";
+import { coverLandingView, takeCoveredSlot } from "./cover-landing-card";
+import type { CoverSlot } from "./cover-sheet";
+import type { useRequireIdentity } from "./identity-gate";
 import {
 	assignRoleViaQueue,
 	hasSpeakerDetails,
 	type OfflineMinutesHandle,
 	releaseRoleViaQueue,
 } from "./offline-role-writes";
-import { coverLandingView, takeCoveredSlot } from "./cover-landing-card";
-import type { CoverSlot } from "./cover-sheet";
-import type { useRequireIdentity } from "./identity-gate";
 import type { MeetingDetail } from "./use-meeting-types";
 
 /**

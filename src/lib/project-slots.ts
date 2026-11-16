@@ -31,7 +31,7 @@ import type {
 	QueuedOp,
 	RoleSlotOp,
 } from "#/lib/offline-minutes-queue";
-import { isRoleSlotOp } from "#/lib/offline-minutes-queue";
+import { isRoleSlotOp } from "#/lib/role-slot-op";
 
 /** The slot fields a projection reads and writes. Every real slot shape (the
  *  meeting loader's, the deck's) satisfies it; the rest rides along untouched. */
