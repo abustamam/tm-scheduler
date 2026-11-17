@@ -41,7 +41,10 @@ describe("slideLayout headers (no 'Session', title-only)", () => {
 			}),
 		).toBe("General Evaluation");
 		expect(
-			contentHeader({ kind: "awards", categories: ["Best Speaker"] }),
+			contentHeader({
+				kind: "awards",
+				categories: [{ key: "best_speaker", label: "Best Speaker" }],
+			}),
 		).toBe("Award Presentation");
 	});
 
@@ -455,7 +458,10 @@ describe("slideLayout bodies", () => {
 					owner: "General Evaluator",
 					time: "5 minutes",
 				},
-				awards: { kind: "awards", categories: ["Best Speaker"] },
+				awards: {
+					kind: "awards",
+					categories: [{ key: "best_speaker", label: "Best Speaker" }],
+				},
 				guestComments: { kind: "guestComments" },
 				reminders: { kind: "reminders", text: "Dues are due." },
 				// The two templated-meeting kinds (#agenda-templates). Their headers
@@ -1184,7 +1190,11 @@ describe("slideLayout bodies", () => {
 		const l = slideLayout(
 			{
 				kind: "awards",
-				categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
+				categories: [
+					{ key: "best_table_topics", label: "Best Table Topics" },
+					{ key: "best_evaluator", label: "Best Evaluator" },
+					{ key: "best_speaker", label: "Best Speaker" },
+				],
 			},
 			null,
 		);
@@ -1631,5 +1641,28 @@ describe("the (V) key on a deck slide (#1164)", () => {
 		expect(l.body.items[0]).toBe("Table Topic Master: Jane Doe (V)");
 		expect(l.body.note).toBe("impetus gained by a moving object");
 		expect(l.body.legend).toBe(VISITING_TOASTMASTER_LEGEND);
+	});
+});
+
+describe("the awards slide's numbered list (#1654)", () => {
+	// protects=the static slide and the .pptx (one layout) list the LABELS, not
+	// the {key, label} objects; fails_when=the list renders keys or objects;
+	// no_claim=the reveal view, which does not go through slideLayout.
+	it("maps each category to its label", () => {
+		const l = slideLayout(
+			{
+				kind: "awards",
+				categories: [
+					{ key: "best_table_topics", label: "Best Table Topics" },
+					{ key: "best_speaker", label: "Best Speaker" },
+				],
+			},
+			null,
+		);
+		if (l.chrome !== "content" || l.body.form !== "numbered") {
+			throw new Error("expected a numbered content layout");
+		}
+		expect(l.header).toBe("Award Presentation");
+		expect(l.body.items).toEqual(["Best Table Topics", "Best Speaker"]);
 	});
 });

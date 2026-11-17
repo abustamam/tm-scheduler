@@ -1539,13 +1539,19 @@ describe("buildSlideDeck awards + reminders", () => {
 			(s) => s.kind === "awards",
 		);
 		expect(slide).toMatchObject({
-			categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
+			categories: [
+				{ key: "best_table_topics", label: "Best Table Topics" },
+				{ key: "best_evaluator", label: "Best Evaluator" },
+				{ key: "best_speaker", label: "Best Speaker" },
+			],
 		});
 
 		const speakerOnly = build({ slots: [speaker] }).find(
 			(s) => s.kind === "awards",
 		);
-		expect(speakerOnly).toMatchObject({ categories: ["Best Speaker"] });
+		expect(speakerOnly).toMatchObject({
+			categories: [{ key: "best_speaker", label: "Best Speaker" }],
+		});
 	});
 
 	it("no awards slide when no scored sections exist", () => {
@@ -2133,7 +2139,7 @@ describe("buildSlideDeck open speech slots (#1484)", () => {
 		];
 		const deck = build({ slots });
 		expect(deck.find((s) => s.kind === "awards")).toMatchObject({
-			categories: ["Best Table Topics"],
+			categories: [{ key: "best_table_topics", label: "Best Table Topics" }],
 		});
 		expect(deck.some((s) => s.kind === "evaluatorEvaluation")).toBe(false);
 		// The control: booked, the same meeting offers both and the slide.
@@ -2145,7 +2151,11 @@ describe("buildSlideDeck open speech slots (#1484)", () => {
 			],
 		});
 		expect(booked.find((s) => s.kind === "awards")).toMatchObject({
-			categories: ["Best Table Topics", "Best Evaluator", "Best Speaker"],
+			categories: [
+				{ key: "best_table_topics", label: "Best Table Topics" },
+				{ key: "best_evaluator", label: "Best Evaluator" },
+				{ key: "best_speaker", label: "Best Speaker" },
+			],
 		});
 		expect(booked.some((s) => s.kind === "evaluatorEvaluation")).toBe(true);
 	});

@@ -131,7 +131,10 @@
 	},
 	{
 		"kind": "awards",
-		"categories": ["Best Evaluator", "Best Speaker"]
+		"categories": [
+			{ "key": "best_evaluator", "label": "Best Evaluator" },
+			{ "key": "best_speaker", "label": "Best Speaker" }
+		]
 	},
 	{
 		"kind": "guestComments"

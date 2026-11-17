@@ -21,6 +21,7 @@ import {
 	visitingFlag,
 } from "./agenda-runsheet";
 import type { BeatTiming } from "./agenda-template-slides";
+import type { BeatAwardCategory as AwardCategory } from "./award-categories";
 import type {
 	NextMeetingRole,
 	NextMeetingSummary,
@@ -325,7 +326,7 @@ type SlideShape =
 			owner: string;
 			time: string;
 	  } & FeedbackInvitation)
-	| { kind: "awards"; categories: string[] }
+	| { kind: "awards"; categories: { key: AwardCategory; label: string }[] }
 	| {
 			/** The guest-comments beat (#352): the President invites them, between
 			 *  the awards and the closing announcements. Carries no data — a first
@@ -992,12 +993,25 @@ export function buildSlideDeck({
 		});
 	}
 
+	// The label is what the room reads; the key is what the reveal (#1654) matches
+	// a winner by. Three fixed pairs, so a label-keyed lookup cannot miss.
+	const AWARD_KEY: Record<string, AwardCategory> = {
+		"Best Table Topics": "best_table_topics",
+		"Best Evaluator": "best_evaluator",
+		"Best Speaker": "best_speaker",
+	};
 	const awardCategories: string[] = [];
 	if (ttOwner) awardCategories.push("Best Table Topics");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {
-		deck.push({ kind: "awards", categories: awardCategories });
+		deck.push({
+			kind: "awards",
+			categories: awardCategories.map((label) => ({
+				key: AWARD_KEY[label],
+				label,
+			})),
+		});
 	}
 
 	// Announcements before guest comments (#442), matching the run sheet's
