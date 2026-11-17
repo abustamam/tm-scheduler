@@ -1066,9 +1066,9 @@ function MeetingView() {
 			{!online && shell ? (
 				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-semibold text-warning-foreground">
 					<WifiOff className="size-4 shrink-0" aria-hidden />
-					You're offline — minutes edits are saved on this device and sync when
-					you reconnect. Other changes (meeting details, roles) need a
-					connection.
+					You're offline — minutes edits, attendance, and assigning or clearing
+					roles are saved on this device and sync when you reconnect. Other
+					changes (meeting details, other role changes) need a connection.
 				</div>
 			) : null}
 			{cancelled ? (
@@ -1455,6 +1455,20 @@ function MeetingView() {
 									firstTime={firstTimeContext}
 								/>
 							) : null}
+
+							{/* #1651: a role change queued offline (#1638) reports here, from
+							    the route's one `useOfflineMinutes` instance. Renders nothing
+							    while online with an empty queue. */}
+							<SyncStatus
+								online={online}
+								queueCount={offlineMinutes.pendingCount}
+								draining={offlineMinutes.draining}
+								syncError={offlineMinutes.syncError}
+								justSynced={offlineMinutes.justSynced}
+								onRetry={() => void offlineMinutes.retryDrain()}
+								heldCount={offlineMinutes.heldOps.length}
+								onDiscardHeld={() => void offlineMinutes.discardHeld()}
+							/>
 
 							{/* Keeps a shared `#agenda` link working on any day (the strip now
 					    links to the digital agenda route). Always rendered. */}
