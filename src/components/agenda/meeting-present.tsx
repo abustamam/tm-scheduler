@@ -161,6 +161,12 @@ export function MeetingPresent({
 	let i = iState;
 	let cursor = cursorState;
 	const [reveal, setReveal] = useState<RevealState>(REVEAL_INITIAL);
+	const [revealMeeting, setRevealMeeting] = useState(meetingId);
+	if (revealMeeting !== meetingId) {
+		// Another meeting's winners are not this one's snapshot.
+		setRevealMeeting(meetingId);
+		setReveal(REVEAL_INITIAL);
+	}
 	if (seen.sig !== keySig) {
 		i = remapSlideIndex(seen.keys, keys, iState);
 		cursor = remapSlideIndex(seen.keys, keys, cursorState);
@@ -236,6 +242,12 @@ export function MeetingPresent({
 	const entryCount = entries.length;
 	const revealOn = entryCount > 0;
 	const step = revealOn ? clampStep(reveal.step, entryCount) : 0;
+	// A live rebuild that shrank the step count lands on the new last step; keep
+	// it there, so a later regrowth does not jump to a name the presenter has not
+	// stepped to. Render-phase adjustment, no confetti.
+	if (awardsSlide && clampStep(reveal.step, entryCount) !== reveal.step) {
+		setReveal({ ...reveal, step: clampStep(reveal.step, entryCount) });
+	}
 
 	/** Move to slide `target`. The awards slide starts its reveal here: step 0
 	 *  going forward, the last winner (frozen, no confetti) coming back. */
@@ -281,10 +293,12 @@ export function MeetingPresent({
 	}, [i]);
 	const jumpTo = useCallback(
 		(n: number) => {
-			enter(n, "forward");
+			// Closing the overview without moving is not an entry: it must not
+			// restart the reveal or fire its confetti again.
+			if (n !== i) enter(n, "forward");
 			setOverview(false);
 		},
-		[enter],
+		[enter, i],
 	);
 
 	const labels = useMemo(() => deck.map(slideLabel), [deck]);

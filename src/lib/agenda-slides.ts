@@ -994,23 +994,26 @@ export function buildSlideDeck({
 	}
 
 	// The label is what the room reads; the key is what the reveal (#1654) matches
-	// a winner by. Three fixed pairs, so a label-keyed lookup cannot miss.
-	const AWARD_KEY: Record<string, AwardCategory> = {
-		"Best Table Topics": "best_table_topics",
-		"Best Evaluator": "best_evaluator",
-		"Best Speaker": "best_speaker",
-	};
-	const awardCategories: string[] = [];
+	// a winner by. The table is typed over the label union, so a label with no key
+	// is a compile error, never `key: undefined`. (`award-wording.guard.test.ts`
+	// pins the `awardCategories.push("<label>")` literals, so the labels are
+	// pushed as strings and the table pairs each with its key.)
+	const AWARD_TABLE = [
+		{ key: "best_table_topics", label: "Best Table Topics" },
+		{ key: "best_evaluator", label: "Best Evaluator" },
+		{ key: "best_speaker", label: "Best Speaker" },
+	] as const satisfies readonly { key: AwardCategory; label: string }[];
+	type AwardLabel = (typeof AWARD_TABLE)[number]["label"];
+	const awardCategories: AwardLabel[] = [];
 	if (ttOwner) awardCategories.push("Best Table Topics");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {
 		deck.push({
 			kind: "awards",
-			categories: awardCategories.map((label) => ({
-				key: AWARD_KEY[label],
-				label,
-			})),
+			categories: AWARD_TABLE.filter((a) =>
+				awardCategories.includes(a.label),
+			).map(({ key, label }) => ({ key, label })),
 		});
 	}
 

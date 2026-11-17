@@ -49,14 +49,15 @@ const setOp = (
 	isGuest: false,
 });
 
-function mount(onSlide = true) {
-	const qc = new QueryClient();
+function mount(onSlide = true, qc = new QueryClient(), meetingId = "m1") {
 	const wrapper = ({ children }: { children: ReactNode }) =>
 		createElement(QueryClientProvider, { client: qc }, children);
-	return renderHook(
-		({ onSlide }) => useAwardWinners("m1", { enabled: true, onSlide }),
-		{ wrapper, initialProps: { onSlide } },
+	const view = renderHook(
+		({ onSlide, meetingId }) =>
+			useAwardWinners(meetingId, { enabled: true, onSlide }),
+		{ wrapper, initialProps: { onSlide, meetingId } },
 	);
+	return Object.assign(view, { qc });
 }
 const flush = (ms = 10) =>
 	act(async () => {
@@ -195,8 +196,169 @@ describe("useAwardWinners (#1654)", () => {
 		expect(view.result.current).toEqual([
 			{ category: "best_speaker", name: "Sam" },
 		]);
-		view.rerender({ onSlide: false });
+		view.rerender({ onSlide: false, meetingId: "m1" });
 		await flush();
+		expect(view.result.current).toEqual([]);
+	});
+
+	// protects=item 1: a reopened deck never shows the previous session's cached
+	// winners (an in-app sign-out keeps the QueryClient), not while its own fetch
+	// is pending and not when it rejects (offline); fails_when=the hook consumes
+	// data this mount did not fetch; no_claim=the cache's lifetime (next test).
+	it.each([
+		["is still pending", () => new Promise(() => {})],
+		["rejects", () => Promise.reject(new Error("offline"))],
+	])("does not show the last session's cached winners while its own fetch %s", async (_n, second) => {
+		getAwardReveal.mockResolvedValueOnce({
+			winners: [{ category: "best_speaker", name: "Last Session" }],
+		});
+		const first = mount();
+		await flush();
+		expect(first.result.current).toEqual([
+			{ category: "best_speaker", name: "Last Session" },
+		]);
+		first.unmount(); // sign-out: the deck closes, the QueryClient lives on
+		getAwardReveal.mockImplementation(second);
+		const again = mount(true, first.qc);
+		await flush();
+		expect(again.result.current).toEqual([]);
+		await flush(5100);
+		expect(again.result.current).toEqual([]);
+	});
+
+	// protects=item 1: nothing is kept in the cache once the deck closes;
+	// fails_when=gcTime is not 0; no_claim=what a mount does with data.
+	it("keeps nothing in the cache after the deck closes", async () => {
+		getAwardReveal.mockResolvedValue({
+			winners: [{ category: "best_speaker", name: "Sam" }],
+		});
+		const view = mount();
+		await flush();
+		expect(view.qc.getQueryData(["award-reveal", "m1"])).toBeDefined();
+		view.unmount();
+		await flush();
+		expect(view.qc.getQueryData(["award-reveal", "m1"])).toBeUndefined();
+	});
+
+	// protects=item 3 / AC16: a fetch that STARTS after the drain's queue read
+	// began but before it resolved cannot have seen the op, so it must not clear
+	// the overlay; fails_when=the overlay is stamped before the read resolves;
+	// no_claim=a fetch that starts after the read (the later-fetch test).
+	it("a fetch that starts while the drain read is pending does not clear the overlay", async () => {
+		readQueue.mockResolvedValue([setOp("best_table_topics", "New")]);
+		getAwardReveal.mockReturnValueOnce(new Promise(() => {}));
+		const view = mount();
+		await flush();
+		expect(view.result.current).toEqual([
+			{ category: "best_table_topics", name: "New" },
+		]);
+		let resolveRead: (v: QueuedOp[]) => void = () => {};
+		readQueue.mockImplementationOnce(
+			() =>
+				new Promise<QueuedOp[]>((r) => {
+					resolveRead = r;
+				}),
+		);
+		let resolveFetch: (v: unknown) => void = () => {};
+		getAwardReveal.mockReturnValueOnce(
+			new Promise((r) => {
+				resolveFetch = r;
+			}),
+		);
+		await act(async () => {
+			broadcast(); // the drain read starts and hangs
+			await vi.advanceTimersByTimeAsync(5);
+		});
+		await act(async () => {
+			void view.qc.refetchQueries({ queryKey: ["award-reveal", "m1"] });
+			await vi.advanceTimersByTimeAsync(5);
+		});
+		readQueue.mockResolvedValue([]);
+		await act(async () => {
+			resolveRead([]); // the drain: the op is gone
+			await vi.advanceTimersByTimeAsync(1);
+		});
+		await act(async () => {
+			resolveFetch({
+				winners: [{ category: "best_table_topics", name: "Old" }],
+			});
+			await vi.advanceTimersByTimeAsync(1);
+		});
+		expect(view.result.current).toEqual([
+			{ category: "best_table_topics", name: "New" },
+		]);
+	});
+
+	// protects=item 4: leaving the slide clears only what a null answer was
+	// holding; an entry nothing has answered survives leave and re-entry; fails_when=
+	// every exit clears the overlay; no_claim=the null case (above).
+	it("keeps an unconfirmed drained award across leaving and re-entering the slide", async () => {
+		getAwardReveal.mockReturnValue(new Promise(() => {}));
+		readQueue.mockResolvedValue([setOp("best_speaker", "Sam")]);
+		const view = mount();
+		await flush();
+		readQueue.mockResolvedValue([]);
+		await act(async () => {
+			broadcast();
+			await vi.advanceTimersByTimeAsync(5);
+		});
+		expect(view.result.current).toEqual([
+			{ category: "best_speaker", name: "Sam" },
+		]);
+		view.rerender({ onSlide: false, meetingId: "m1" });
+		await flush();
+		view.rerender({ onSlide: true, meetingId: "m1" });
+		await flush();
+		expect(view.result.current).toEqual([
+			{ category: "best_speaker", name: "Sam" },
+		]);
+	});
+
+	// protects=item 5: another meeting starts from nothing; fails_when=the old
+	// meeting's queue or overlay is shown under the new id; no_claim=the new
+	// meeting's own queue (its read hangs here).
+	it("resets its queue and overlay when the meeting changes", async () => {
+		getAwardReveal.mockReturnValue(new Promise(() => {}));
+		readQueue.mockResolvedValue([setOp("best_speaker", "Sam")]);
+		const view = mount();
+		await flush();
+		expect(view.result.current).toHaveLength(1);
+		readQueue.mockReturnValue(new Promise(() => {}));
+		view.rerender({ onSlide: true, meetingId: "m2" });
+		await flush();
+		expect(view.result.current).toEqual([]);
+		// And the new meeting's own queue is read.
+		readQueue.mockResolvedValue([setOp("best_evaluator", "Eve")]);
+		await act(async () => {
+			broadcast();
+			await vi.advanceTimersByTimeAsync(5);
+		});
+		expect(view.result.current).toEqual([
+			{ category: "best_evaluator", name: "Eve" },
+		]);
+	});
+
+	// protects=item 6: a queue read that throws is an EMPTY queue, and the
+	// previous ops are not treated as drained into the overlay; fails_when=the
+	// old queue is kept or projected from the overlay; no_claim=a throw on mount
+	// (the earlier test).
+	it("a later queue read that throws empties the queue without a ghost overlay", async () => {
+		getAwardReveal.mockReturnValue(new Promise(() => {}));
+		readQueue.mockResolvedValue([setOp("best_speaker", "Sam")]);
+		const view = mount();
+		await flush();
+		expect(view.result.current).toHaveLength(1);
+		readQueue.mockRejectedValue(new Error("no indexedDB"));
+		await act(async () => {
+			broadcast();
+			await vi.advanceTimersByTimeAsync(5);
+		});
+		expect(view.result.current).toEqual([]);
+		readQueue.mockResolvedValue([]);
+		await act(async () => {
+			broadcast();
+			await vi.advanceTimersByTimeAsync(5);
+		});
 		expect(view.result.current).toEqual([]);
 	});
 });

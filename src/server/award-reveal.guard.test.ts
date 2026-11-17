@@ -20,7 +20,13 @@ describe("the award reveal stays session-gated and off the public payload (#1654
 		const meetings = readSource("src/server/meetings.ts");
 		const start = meetings.indexOf("export const getPublicMeetingByKey");
 		expect(start).toBeGreaterThan(-1);
-		const body = meetings.slice(start, meetings.indexOf("});", start));
+		const end = meetings.indexOf("});", start);
+		expect(end).toBeGreaterThan(start);
+		const body = meetings.slice(start, end);
+		// The slice is the handler itself, not an empty or mis-anchored span.
+		expect(body.length).toBeGreaterThan(100);
+		expect(body).toContain("resolvePublicMeetingKey(data.clubId, data.key)");
+		expect(body).toContain("loadMeetingDetail(meetingId, null)");
 		expect(body).not.toMatch(/award/i);
 	});
 });

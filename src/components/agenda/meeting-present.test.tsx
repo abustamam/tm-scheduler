@@ -1318,17 +1318,16 @@ describe("the awards slide's drum-roll reveal (#1654)", () => {
 	let qc: QueryClient;
 	function mountDeck(d: Slide[]) {
 		qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const ui = (deckNow: Slide[]) => (
+		const ui = (deckNow: Slide[], id: string) => (
 			<QueryClientProvider client={qc}>
-				<MeetingPresent
-					deck={deckNow}
-					clubName={CLUB_NAME}
-					meetingId={MEETING_ID}
-				/>
+				<MeetingPresent deck={deckNow} clubName={CLUB_NAME} meetingId={id} />
 			</QueryClientProvider>
 		);
-		const view = render(ui(d));
-		return { ...view, rebuild: (n: Slide[]) => view.rerender(ui(n)) };
+		const view = render(ui(d, MEETING_ID));
+		return {
+			...view,
+			rebuild: (n: Slide[], id = MEETING_ID) => view.rerender(ui(n, id)),
+		};
 	}
 	const settle = () =>
 		act(async () => {
@@ -1423,14 +1422,20 @@ describe("the awards slide's drum-roll reveal (#1654)", () => {
 		expect(screen.getByText("Best Speaker")).toBeTruthy();
 	});
 
-	// protects=SSR/hydration: the server render and first client render are the
-	// static slide because the query is enabled only after a mount effect;
-	// fails_when=the query runs during render; no_claim=hydration itself (the
-	// hydration gate).
-	it("server-renders the static numbered list", () => {
-		getAwardReveal.mockResolvedValue(TWO);
+	// protects=SSR/hydration: the server render shows the static slide even when
+	// the cache already holds winners (a client that navigated here), because the
+	// reveal is gated behind the mount effect; fails_when=the winners reach the
+	// first render, or the query runs during render; no_claim=hydration itself
+	// (the hydration gate).
+	it("server-renders the static numbered list even with winners in the cache", () => {
+		const seeded = new QueryClient();
+		seeded.setQueryData(["award-reveal", MEETING_ID], {
+			token: 0,
+			startSeq: 0,
+			res: TWO,
+		});
 		const html = renderToString(
-			<QueryClientProvider client={new QueryClient()}>
+			<QueryClientProvider client={seeded}>
 				<MeetingPresent
 					deck={[awardsSlide(), THANKS]}
 					clubName={CLUB_NAME}
@@ -1441,7 +1446,48 @@ describe("the awards slide's drum-roll reveal (#1654)", () => {
 		expect(html).toContain("Award Presentation");
 		expect(html).toContain("Best Evaluator");
 		expect(html).not.toContain("award-reveal");
+		expect(html).not.toContain("Tess Topics");
 		expect(getAwardReveal).not.toHaveBeenCalled();
+	});
+
+	// protects=the first client render is the static slide too: a cache seeded
+	// with a previous session's winners shows them only after this mount's own
+	// fetch answers; fails_when=a stale entry is revealed, or never replaced;
+	// no_claim=the fetch's timing.
+	it("ignores winners cached by a previous session until this mount's fetch answers", async () => {
+		let answer: (v: unknown) => void = () => {};
+		getAwardReveal.mockReturnValue(
+			new Promise((r) => {
+				answer = r;
+			}),
+		);
+		const seeded = new QueryClient();
+		seeded.setQueryData(["award-reveal", MEETING_ID], {
+			token: -1,
+			startSeq: 0,
+			res: { winners: [{ category: "best_speaker", name: "Stale Sam" }] },
+		});
+		render(
+			<QueryClientProvider client={seeded}>
+				<MeetingPresent
+					deck={awardsDeck()}
+					clubName={CLUB_NAME}
+					meetingId={MEETING_ID}
+				/>
+			</QueryClientProvider>,
+		);
+		await settle();
+		await stepNext();
+		expect(screen.queryByTestId("award-reveal")).toBeNull();
+		expect(screen.getByText("Best Evaluator")).toBeTruthy();
+		await act(async () => {
+			answer(TWO);
+		});
+		await settle();
+		expect(text()).toContain("And the winners are");
+		for (let n = 0; n < 6; n++) await stepNext();
+		expect(text()).not.toContain("Stale Sam");
+		expect(text()).toContain("Sam Speaker");
 	});
 
 	// protects=AC5/AC6: Back never fires confetti, and entering the slide
@@ -1572,13 +1618,122 @@ describe("the awards slide's drum-roll reveal (#1654)", () => {
 		expect(screen.getByText("3 / 3")).toBeTruthy();
 	});
 
-	// protects=Overview jump starts at step 0; fails_when=the jump lands
-	// mid-reveal; no_claim=keyboard cursor behaviour.
-	it("an overview jump to the awards slide starts at step 0", async () => {
-		mountDeck(awardsDeck());
+	/** Onto the awards slide and through to step 3 (Tess's name shown). */
+	const toTessName = async () => {
 		await settle();
+		await stepNext();
+		for (let n = 0; n < 3; n++) await stepNext();
+		expect(text()).toContain("Tess Topics");
+		await settle();
+	};
+
+	// protects=an overview jump AWAY and back starts the reveal at step 0 with a
+	// fresh snapshot; fails_when=jumpTo is a bare setI and the reveal survives the
+	// round trip; no_claim=closing without moving (next test).
+	it("an overview jump back onto the awards slide starts at step 0", async () => {
+		mountDeck(awardsDeck());
+		await toTessName();
+		press("b");
+		fireEvent.click(screen.getByRole("button", { name: /^Slide 3:/ }));
+		await settle();
+		expect(screen.getByText("3 / 3")).toBeTruthy();
 		press("b");
 		fireEvent.click(screen.getByRole("button", { name: /^Slide 2:/ }));
+		await settle();
+		expect(text()).toContain("And the winners are");
+	});
+
+	// protects=item 2: closing the overview without moving (b, o, Enter) is not
+	// an entry: same step, same frozen winners, no second burst; fails_when=
+	// jumpTo to the current slide resets the reveal or re-fires confetti;
+	// no_claim=a jump to another slide (previous test).
+	it.each([
+		"b",
+		"o",
+		"Enter",
+	])("closing the overview with %s without moving keeps the reveal and fires no confetti", async (key) => {
+		mountDeck(awardsDeck());
+		await toTessName();
+		expect(confetti).toHaveBeenCalledTimes(1);
+		getAwardReveal.mockResolvedValue({
+			winners: [{ category: "best_table_topics", name: "Someone Else" }],
+		});
+		await refetch();
+		press("b");
+		await settle();
+		press(key);
+		await settle();
+		expect(screen.queryByRole("button", { name: /^Slide 2:/ })).toBeNull();
+		expect(text()).toContain("Tess Topics"); // same step, same frozen winners
+		expect(text()).not.toContain("Someone Else");
+		expect(confetti).toHaveBeenCalledTimes(1);
+	});
+
+	// protects=AC15: queued clearAward ops remove every fetched winner, so the
+	// numbered list shows and one Next advances; fails_when=a cleared winner
+	// still reveals; no_claim=a partial clear.
+	it("falls back to the numbered list when queued clearAward ops remove every winner", async () => {
+		for (const [n, category] of [
+			[1, "best_table_topics"],
+			[2, "best_speaker"],
+		] as const) {
+			await enqueue(MEETING_ID, {
+				type: "clearAward",
+				opId: `c${n}`,
+				queuedAt: n,
+				category,
+			});
+		}
+		mountDeck(awardsDeck());
+		await settle();
+		await stepNext();
+		expect(screen.queryByTestId("award-reveal")).toBeNull();
+		expect(screen.getByText("Best Table Topics")).toBeTruthy();
+		await stepNext();
+		expect(screen.getByText("3 / 3")).toBeTruthy();
+	});
+
+	// protects=AC13 offline after data: a fetch that succeeded and later rejects
+	// keeps the deck on the winners it had; fails_when=an error blanks them;
+	// no_claim=never-connected (its own test).
+	it("keeps the old winners when a later fetch rejects", async () => {
+		mountDeck(awardsDeck());
+		await settle();
+		getAwardReveal.mockRejectedValue(new Error("offline"));
+		await refetch();
+		await stepNext();
+		expect(text()).toContain("And the winners are");
+		for (let n = 0; n < 6; n++) await stepNext();
+		expect(text()).toContain("Sam Speaker");
+	});
+
+	// protects=item 7: after a rebuild clamps the step, the clamped step is the
+	// presenter's place, so regrowth does not jump to a name without input;
+	// fails_when=the old step returns on regrowth; no_claim=confetti (the clamp
+	// test).
+	it("keeps the clamped step when a later rebuild regrows the categories", async () => {
+		const view = mountDeck(awardsDeck());
+		await settle();
+		await stepNext();
+		for (let n = 0; n < 6; n++) await stepNext(); // step 6, Sam
+		confetti.mockClear();
+		view.rebuild(awardsDeck([CATS[0]])); // clamped to Tess's name (step 3)
+		await settle();
+		expect(text()).toContain("Tess Topics");
+		view.rebuild(awardsDeck()); // regrown
+		await settle();
+		expect(text()).toContain("Tess Topics");
+		expect(text()).not.toContain("Sam Speaker");
+		expect(confetti).not.toHaveBeenCalled();
+	});
+
+	// protects=item 5: a different meeting starts its reveal at step 0; fails_when=
+	// the previous meeting's step and snapshot carry over; no_claim=the hook's own
+	// reset (hook tests).
+	it("resets the reveal when the meeting changes", async () => {
+		const view = mountDeck(awardsDeck());
+		await toTessName();
+		view.rebuild(awardsDeck(), "other-meeting");
 		await settle();
 		expect(text()).toContain("And the winners are");
 	});
