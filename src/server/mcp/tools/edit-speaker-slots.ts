@@ -75,6 +75,10 @@ import {
 import { authorizeDelegateForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
+import {
+	type DroppedCoverRequest,
+	loadOpenCoverRequests,
+} from "./dropped-cover-requests";
 
 export const EDIT_SPEAKER_SLOTS_TOOL = "edit_speaker_slots";
 
@@ -199,6 +203,10 @@ type Plan = {
 	};
 	before: Lineup;
 	after: { speakers: AfterSlot[]; evaluators: AfterSlot[] };
+	/** The OPEN cover requests on slots the steps deleted, which the FK cascade
+	 *  deletes with them (#1640). Absent, not empty, when there are none, so the
+	 *  hash of a plan without one is what it was before. */
+	droppedCoverRequests?: DroppedCoverRequest[];
 	blocking: McpBlockingItem[];
 };
 
@@ -345,6 +353,20 @@ async function runSteps(
 	const read = () =>
 		loadLineup(tx, meeting.id, roles.speakerRoleId, roles.evaluatorRoleId);
 	const before = await read();
+	// The open cover requests on every line-up slot, read NOW: a removal step
+	// deletes them through the cascade, so after it there is nothing to read.
+	// Under the lineup lock above, so none can appear before the delete.
+	const labelOf = new Map<string, string>([
+		...before.speakers.map((s) => [s.slotId, `Speaker ${s.position}`] as const),
+		...before.evaluators.map(
+			(s) => [s.slotId, `Evaluator ${s.position}`] as const,
+		),
+	]);
+	const openCovers = await loadOpenCoverRequests(
+		tx,
+		[...labelOf.keys()],
+		(id) => labelOf.get(id) ?? "That slot",
+	);
 	const blocking: McpBlockingItem[] = [];
 	const request: Plan["request"] = {
 		addSpeakers: args.addSpeakers ?? null,
@@ -352,14 +374,23 @@ async function runSteps(
 		moveSpeakers: args.moveSpeakers ?? [],
 		moveEvaluators: args.moveEvaluators ?? [],
 	};
-	const plan = (after: Lineup): Plan => ({
-		meetingId: meeting.id,
-		status: meeting.status,
-		request,
-		before,
-		after: stripIds(after),
-		blocking,
-	});
+	const plan = (after: Lineup): Plan => {
+		// A slot in `before` and not in `after` was deleted by a step, and its
+		// open cover requests went with it.
+		const kept = new Set(
+			[...after.speakers, ...after.evaluators].map((s) => s.slotId),
+		);
+		const dropped = openCovers.filter((c) => !kept.has(c.slotId));
+		return {
+			meetingId: meeting.id,
+			status: meeting.status,
+			request,
+			before,
+			after: stripIds(after),
+			...(dropped.length > 0 ? { droppedCoverRequests: dropped } : {}),
+			blocking,
+		};
+	};
 
 	if (isMeetingLocked(meeting.status)) {
 		blocking.push({
