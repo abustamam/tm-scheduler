@@ -28,16 +28,23 @@
  * are `AMBIGUOUS_MEMBER` with the candidates listed, never a pick. The club
  * comes from the meeting (`authorizeTokenForMeeting`), as in every meeting tool.
  *
+ * ## Cover requests (#1640)
+ *
+ * Removing an open slot deletes its cover requests through the FK cascade. The
+ * plan lists each OPEN one per removal (`removals[].coverRequests`) and the hash
+ * covers them, so one opened, covered or withdrawn since the preview is stale.
+ *
  * Lock order: the target members' merge lock (shared) first, then the meeting
- * row, then the club's archive gate, then the slots (`removeRoleSlotCore` locks
- * each slot it removes). A member's ROW is locked later still, inside
+ * row, then the club's archive gate, then the slots a removal names, in id order
+ * (so the cover-request read is under their lock; `removeRoleSlotCore` locks
+ * each slot it removes again). A member's ROW is locked later still, inside
  * `reassignSlotCore`, after the meeting lock; `assign_roles` takes the same
  * order for the same calls.
  *
  * An empty `operations` list is valid: a preview returns just the club's
  * addable roles, and an apply of that (empty) plan writes nothing.
  */
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import {
@@ -77,6 +84,10 @@ import {
 import { authorizeTokenForMeeting } from "../authz-logic";
 import { type McpBlockingItem, McpError } from "../errors";
 import type { McpToolDefinition } from "../tool";
+import {
+	type DroppedCoverRequest,
+	loadOpenCoverRequests,
+} from "./dropped-cover-requests";
 
 export const EDIT_ROLE_SLOTS_TOOL = "edit_role_slots";
 
@@ -174,6 +185,10 @@ type PlanRemoval = {
 	slotId: string;
 	role: string;
 	slotIndex: number;
+	/** The OPEN cover requests the removal deletes with the slot (#1640). Absent,
+	 *  not empty, when there are none, so the plan hash of a removal without one
+	 *  is what it was before. */
+	coverRequests?: DroppedCoverRequest[];
 };
 
 type Plan = {
@@ -468,6 +483,21 @@ async function buildPlan(
 		}
 	}
 
+	// The open cover requests the removals delete with their slots. Read after
+	// the loop so one query serves every removal.
+	const dropped = await loadOpenCoverRequests(
+		conn,
+		removals.map((r) => r.slotId),
+		(id) => {
+			const r = removals.find((x) => x.slotId === id);
+			return r ? `${r.role} ${r.slotIndex + 1}` : "That slot";
+		},
+	);
+	for (const removal of removals) {
+		const mine = dropped.filter((d) => d.slotId === removal.slotId);
+		if (mine.length > 0) removal.coverRequests = mine;
+	}
+
 	return {
 		plan: {
 			meetingId: meeting.id,
@@ -585,6 +615,26 @@ export const editRoleSlotsTool: McpToolDefinition = {
 			if (!clubRow) throw new McpError("NOT_FOUND", "Club not found.");
 			if (isClubArchived(clubRow)) {
 				throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+			}
+			// The slots a removal will delete, locked in id order BEFORE the plan
+			// reads their cover requests (#1640): a request cannot be opened or
+			// covered between that read and the delete. `removeRoleSlotCore` takes
+			// the same locks again, which are re-locks.
+			const removeIds = [
+				...new Set(ops.flatMap((o) => (o.op === "remove" ? [o.slotId] : []))),
+			];
+			if (removeIds.length > 0) {
+				await tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(
+						and(
+							eq(roleSlots.meetingId, meeting.id),
+							inArray(roleSlots.id, removeIds),
+						),
+					)
+					.orderBy(asc(roleSlots.id))
+					.for("update");
 			}
 			const { plan, steps } = await buildPlan(tx, meeting, ops);
 			const freshHash = hashOf(plan);

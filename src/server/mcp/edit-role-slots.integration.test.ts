@@ -13,6 +13,7 @@ import {
 	people,
 	roleDefinitions,
 	roleSlots,
+	slotCoverRequests,
 } from "#/db/schema";
 import { MEETING_LOCKED_BLOCKING_MESSAGE } from "#/lib/assign-roles-plan";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
@@ -678,6 +679,202 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 			expect(
 				rows.map((r) => (r.detail as { change: string }).change).sort(),
 			).toEqual(["role_added", "role_removed"]);
+		});
+	});
+
+	describe("cover requests on a removed slot (#1640)", () => {
+		const removeOps = () => [{ op: "remove", slotId: seed.slotId }];
+
+		async function openCover(
+			kind: "finding_cover" | "dropped",
+			releasedBy: string | null,
+			slotId = seed.slotId,
+		) {
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId,
+				kind,
+				releasedByMemberId: releasedBy,
+				priorStatus: "confirmed",
+			});
+		}
+		const coverRows = () =>
+			testDb
+				.select({ id: slotCoverRequests.id })
+				.from(slotCoverRequests)
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+		type Cover = {
+			slotId: string;
+			kind: string;
+			releasedByName: string | null;
+			slotLabel: string;
+			note: string;
+		};
+		const coversOf = (p: Preview) =>
+			(p.plan.removals[0] as { coverRequests?: Cover[] }).coverRequests;
+
+		it("the preview lists the open cover request: slot, who released it, kind", async () => {
+			await openCover("finding_cover", seed.memberId);
+			const p = await preview(removeOps());
+			const covers = coversOf(p);
+			expect(covers).toHaveLength(1);
+			expect(covers?.[0]).toMatchObject({
+				slotId: seed.slotId,
+				kind: "finding_cover",
+				releasedByName: "Member User",
+				slotLabel: expect.any(String),
+			});
+			expect(covers?.[0]?.note).toMatch(
+				/Removing the slot deletes that request/,
+			);
+		});
+
+		it("names a released-by member who is gone", async () => {
+			await openCover("dropped", null);
+			const covers = coversOf(await preview(removeOps()));
+			expect(covers?.[0]).toMatchObject({
+				kind: "dropped",
+				releasedByName: null,
+			});
+			expect(covers?.[0]?.note).toMatch(/no longer in the club/);
+		});
+
+		it("a covered (closed) request is not listed", async () => {
+			await openCover("dropped", seed.memberId);
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+			const p = await preview(removeOps());
+			expect(coversOf(p)).toBeUndefined();
+		});
+
+		it("applying with an unchanged hash deletes the slot and its request", async () => {
+			await openCover("finding_cover", seed.memberId);
+			const p = await preview(removeOps());
+			await call({
+				meetingId: seed.meetingId,
+				operations: removeOps(),
+				planHash: p.planHash,
+			});
+			expect(await slots()).toEqual([]);
+			expect(await coverRows()).toEqual([]);
+		});
+
+		it("a request opened after the preview is PLAN_STALE; the slot and the request survive", async () => {
+			const p = await preview(removeOps());
+			await openCover("finding_cover", seed.memberId);
+			const err = (await call({
+				meetingId: seed.meetingId,
+				operations: removeOps(),
+				planHash: p.planHash,
+			}).catch((e: unknown) => e)) as {
+				code: string;
+				detail: { plan: Preview["plan"] };
+			};
+			expect(err).toMatchObject({ code: "PLAN_STALE" });
+			expect(
+				(err.detail.plan.removals[0] as { coverRequests?: unknown[] })
+					.coverRequests,
+			).toHaveLength(1);
+			expect(await slots()).toHaveLength(1);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("a request covered after the preview is PLAN_STALE too", async () => {
+			await openCover("dropped", seed.memberId);
+			const p = await preview(removeOps());
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+			const err = await call({
+				meetingId: seed.meetingId,
+				operations: removeOps(),
+				planHash: p.planHash,
+			}).catch((e: unknown) => e);
+			expect(err).toMatchObject({ code: "PLAN_STALE" });
+			expect(await slots()).toHaveLength(1);
+		});
+
+		it("reads the cover requests under the slot lock: one committed while the apply waits is PLAN_STALE", async () => {
+			const p = await preview(removeOps());
+			let applied: Promise<unknown> | undefined;
+			await testDb.transaction(async (tx) => {
+				await tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, seed.slotId))
+					.for("update");
+				applied = call({
+					meetingId: seed.meetingId,
+					operations: removeOps(),
+					planHash: p.planHash,
+				}).catch((e: unknown) => e);
+				// Let the apply reach the slot lock and wait on it.
+				await new Promise((r) => setTimeout(r, 400));
+				await tx.insert(slotCoverRequests).values({
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					slotId: seed.slotId,
+					kind: "finding_cover",
+					releasedByMemberId: seed.memberId,
+					priorStatus: "confirmed",
+				});
+			});
+			expect(await applied).toMatchObject({ code: "PLAN_STALE" });
+			expect(await slots()).toHaveLength(1);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("a removal with no cover request hashes exactly as before the change", async () => {
+			const p = await preview(removeOps());
+			const [slot] = await slots();
+			const [def] = await testDb
+				.select({ name: roleDefinitions.name })
+				.from(roleDefinitions)
+				.where(eq(roleDefinitions.id, seed.roleDefinitionId));
+			const [meeting] = await testDb
+				.select({ status: meetings.status })
+				.from(meetings)
+				.where(eq(meetings.id, seed.meetingId));
+			const { planHash } = await import("#/lib/mcp-plan");
+			// The pre-change plan shape, written out: no coverRequests key.
+			const legacy = {
+				meetingId: seed.meetingId,
+				status: meeting?.status,
+				operations: removeOps(),
+				additions: [],
+				removals: [
+					{
+						opIndex: 0,
+						slotId: seed.slotId,
+						role: def?.name,
+						slotIndex: slot?.slotIndex,
+					},
+				],
+				slots: [
+					{
+						id: seed.slotId,
+						roleDefinitionId: seed.roleDefinitionId,
+						roleName: def?.name,
+						slotIndex: slot?.slotIndex,
+						open: true,
+						holderMemberId: null,
+						holderGuestId: null,
+					},
+				],
+				blocking: [],
+			};
+			expect(p.planHash).toBe(
+				planHash({
+					tool: "edit_role_slots",
+					clubId: seed.clubId,
+					userId: seed.adminUserId,
+					plan: legacy,
+				}),
+			);
 		});
 	});
 });

@@ -11,7 +11,7 @@
  * authorization table (`delegate-authz`).
  */
 import { randomUUID } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import {
@@ -22,6 +22,7 @@ import {
 	people,
 	roleDefinitions,
 	roleSlots,
+	slotCoverRequests,
 	user,
 } from "#/db/schema";
 import {
@@ -764,6 +765,232 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 				const at = await preview({ [key]: moves(MAX_MOVES) });
 				expect(at.blocking).toHaveLength(MAX_MOVES);
 			}
+		});
+	});
+
+	describe("cover requests on a removed pair (#1640)", () => {
+		async function openCover(
+			slotId: string,
+			kind: "finding_cover" | "dropped",
+			releasedBy: string | null,
+		) {
+			await testDb.insert(slotCoverRequests).values({
+				clubId: seed.clubId,
+				meetingId: seed.meetingId,
+				slotId,
+				kind,
+				releasedByMemberId: releasedBy,
+				priorStatus: "confirmed",
+			});
+		}
+		const coverRows = () =>
+			testDb
+				.select({ slotId: slotCoverRequests.slotId })
+				.from(slotCoverRequests)
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+		type Cover = {
+			slotId: string;
+			kind: string;
+			releasedByName: string | null;
+			slotLabel: string;
+			note: string;
+		};
+		const droppedOf = (p: unknown) =>
+			(p as { plan: { droppedCoverRequests?: Cover[] } }).plan
+				.droppedCoverRequests;
+
+		it("lists the speaker's and the paired evaluator's open cover requests", async () => {
+			await seedPairs(2);
+			const { speakers, evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			const [sp, ev] = [speakers[1]!, evaluators[1]!];
+			await openCover(sp.id, "finding_cover", seed.memberId);
+			await openCover(ev.id, "dropped", null);
+			const p = await preview({ removeSpeakers: 1 });
+			const dropped = droppedOf(p);
+			expect(dropped).toHaveLength(2);
+			expect(dropped).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						slotId: sp.id,
+						kind: "finding_cover",
+						releasedByName: "Member User",
+						slotLabel: "Speaker 2",
+						note: expect.stringContaining("Speaker 2"),
+					}),
+					expect.objectContaining({
+						slotId: ev.id,
+						kind: "dropped",
+						releasedByName: null,
+						slotLabel: "Evaluator 2",
+						note: expect.stringContaining("Evaluator 2"),
+					}),
+				]),
+			);
+		});
+
+		it("does not list a request on a slot that stays, or a covered one", async () => {
+			await seedPairs(2);
+			const { speakers, evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(speakers[0]!.id, "dropped", seed.memberId);
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(evaluators[1]!.id, "dropped", seed.memberId);
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				// biome-ignore lint/style/noNonNullAssertion: seeded above
+				.where(eq(slotCoverRequests.slotId, evaluators[1]!.id));
+			expect(droppedOf(await preview({ removeSpeakers: 1 }))).toBeUndefined();
+		});
+
+		it("applying with an unchanged hash deletes the pair and its request", async () => {
+			await seedPairs(2);
+			const { speakers } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(speakers[1]!.id, "finding_cover", seed.memberId);
+			const p = await preview({ removeSpeakers: 1 });
+			await call({
+				meetingId: seed.meetingId,
+				removeSpeakers: 1,
+				planHash: p.planHash,
+			});
+			expect((await stored()).speakers).toHaveLength(1);
+			expect(await coverRows()).toEqual([]);
+		});
+
+		it("a request opened after the preview is PLAN_STALE; slots and request survive", async () => {
+			await seedPairs(2);
+			const p = await preview({ removeSpeakers: 1 });
+			expect(droppedOf(p)).toBeUndefined();
+			const { evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(evaluators[1]!.id, "finding_cover", seed.memberId);
+			const err = await call({
+				meetingId: seed.meetingId,
+				removeSpeakers: 1,
+				planHash: p.planHash,
+			}).catch((e: unknown) => e);
+			expect(err).toMatchObject({ code: "PLAN_STALE" });
+			expect((await stored()).speakers).toHaveLength(2);
+			expect((await stored()).evaluators).toHaveLength(2);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("a request covered after the preview is PLAN_STALE; slots and request survive", async () => {
+			await seedPairs(2);
+			const { evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(evaluators[1]!.id, "finding_cover", seed.memberId);
+			const p = await preview({ removeSpeakers: 1 });
+			expect(droppedOf(p)).toHaveLength(1);
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+			const err = await call({
+				meetingId: seed.meetingId,
+				removeSpeakers: 1,
+				planHash: p.planHash,
+			}).catch((e: unknown) => e);
+			expect(err).toMatchObject({ code: "PLAN_STALE" });
+			expect((await stored()).speakers).toHaveLength(2);
+			expect((await stored()).evaluators).toHaveLength(2);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("reads the cover requests under the lineup lock: one committed while the apply waits is PLAN_STALE", async () => {
+			await seedPairs(2);
+			const p = await preview({ removeSpeakers: 1 });
+			const { evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			const target = evaluators[1]!.id;
+			let applied: Promise<unknown> | undefined;
+			await testDb.transaction(async (tx) => {
+				await tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, target))
+					.for("update");
+				applied = call({
+					meetingId: seed.meetingId,
+					removeSpeakers: 1,
+					planHash: p.planHash,
+				}).catch((e: unknown) => e);
+				// Wait until some backend is blocked on a row lock: the apply.
+				for (let i = 0; i < 200; i++) {
+					const waiting = await tx.execute(
+						sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`,
+					);
+					if (waiting.rows.length > 0) break;
+					await new Promise((r) => setTimeout(r, 25));
+				}
+				await tx.insert(slotCoverRequests).values({
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					slotId: target,
+					kind: "finding_cover",
+					releasedByMemberId: seed.memberId,
+					priorStatus: "confirmed",
+				});
+			});
+			expect(await applied).toMatchObject({ code: "PLAN_STALE" });
+			expect((await stored()).speakers).toHaveLength(2);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("a removal with no cover request hashes exactly as before the change", async () => {
+			await seedPairs(2);
+			const p = await preview({ removeSpeakers: 1 });
+			const { speakers, evaluators } = await stored();
+			const [meeting] = await testDb
+				.select({ status: meetings.status })
+				.from(meetings)
+				.where(eq(meetings.id, seed.meetingId));
+			const line = (rows: typeof speakers, withEvaluates: boolean) =>
+				rows.map((r, i) => ({
+					slotId: r.id,
+					position: i + 1,
+					holder: null,
+					...(withEvaluates
+						? {
+								evaluates:
+									speakers.findIndex((s) => s.id === r.evaluatesSlotId) + 1,
+							}
+						: {}),
+				}));
+			const noId = <T extends { slotId: string }>(xs: T[]) =>
+				xs.map(({ slotId: _s, ...rest }) => rest);
+			const before = {
+				speakers: line(speakers, false),
+				evaluators: line(evaluators, true),
+			};
+			const { planHash } = await import("#/lib/mcp-plan");
+			// The pre-change plan shape, written out: no droppedCoverRequests key.
+			const legacy = {
+				meetingId: seed.meetingId,
+				status: meeting?.status,
+				request: {
+					addSpeakers: null,
+					removeSpeakers: 1,
+					moveSpeakers: [],
+					moveEvaluators: [],
+				},
+				before,
+				after: {
+					speakers: noId(before.speakers.slice(0, 1)),
+					evaluators: noId(before.evaluators.slice(0, 1)),
+				},
+				blocking: [],
+			};
+			expect(p.planHash).toBe(
+				planHash({
+					tool: "edit_speaker_slots",
+					clubId: seed.clubId,
+					userId: seed.adminUserId,
+					plan: legacy,
+				}),
+			);
 		});
 	});
 });
