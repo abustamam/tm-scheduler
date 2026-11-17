@@ -51,7 +51,11 @@ import {
 import { MeetingYourJobs } from "#/components/club/meeting-your-jobs";
 import { OpenActionItems } from "#/components/club/open-action-items";
 import { refreshAfterMeetingWrite } from "#/components/club/refresh-after-meeting-write";
-import { SyncStatus } from "#/components/club/sync-status";
+import { RolesSyncStatus } from "#/components/club/roles-sync-status";
+import {
+	SyncStatus,
+	type SyncStatusProps,
+} from "#/components/club/sync-status";
 import { TableTopicsCapture } from "#/components/club/table-topics-capture";
 import { useMeetingCover } from "#/components/club/use-meeting-cover";
 import { useMeetingLifecycle } from "#/components/club/use-meeting-lifecycle";
@@ -410,6 +414,18 @@ function MeetingView() {
 		sessionMemberId: authCtx?.user ? (effectiveMemberId ?? null) : null,
 		sessionUserId: authCtx?.user?.id ?? null,
 	});
+	// ONE `SyncStatusProps` for the Roles and Ballots indicators (#1651). The
+	// attendance panel's `sync={{…}}` below stays inline: its guard pins that text.
+	const syncStatusProps: SyncStatusProps = {
+		online,
+		queueCount: offlineMinutes.pendingCount,
+		draining: offlineMinutes.draining,
+		syncError: offlineMinutes.syncError,
+		justSynced: offlineMinutes.justSynced,
+		onRetry: () => void offlineMinutes.retryDrain(),
+		heldCount: offlineMinutes.heldOps.length,
+		onDiscardHeld: () => void offlineMinutes.discardHeld(),
+	};
 	// A role change queued offline shows at once (#1638): every consumer below
 	// reads the projected slots, not the loader's.
 	const slots = useMemo(
@@ -1066,9 +1082,10 @@ function MeetingView() {
 			{!online && shell ? (
 				<div className="flex items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm font-semibold text-warning-foreground">
 					<WifiOff className="size-4 shrink-0" aria-hidden />
-					You're offline — minutes edits are saved on this device and sync when
-					you reconnect. Other changes (meeting details, roles) need a
-					connection.
+					You're offline — minutes edits, roll call, and taking, assigning or
+					clearing a role are saved on this device and sync when you reconnect.
+					Other changes (meeting details, guest assignments, speech details)
+					need a connection.
 				</div>
 			) : null}
 			{cancelled ? (
@@ -1446,6 +1463,9 @@ function MeetingView() {
 
 							{effectiveCanManage ? null : <GuestResources clubId={clubId} />}
 
+							{/* #1651: a role change queued offline (#1638) reports here, members only. */}
+							<RolesSyncStatus shell={shell} sync={syncStatusProps} />
+
 							{readiness ? (
 								<MeetingReadinessPanel
 									readiness={readiness}
@@ -1713,16 +1733,7 @@ function MeetingView() {
 									) : null}
 									{awardsEditable && minutes.data ? (
 										<>
-											<SyncStatus
-												online={online}
-												queueCount={offlineMinutes.pendingCount}
-												draining={offlineMinutes.draining}
-												syncError={offlineMinutes.syncError}
-												justSynced={offlineMinutes.justSynced}
-												onRetry={() => void offlineMinutes.retryDrain()}
-												heldCount={offlineMinutes.heldOps.length}
-												onDiscardHeld={() => void offlineMinutes.discardHeld()}
-											/>
+											<SyncStatus {...syncStatusProps} />
 											<AwardsSection
 												meetingId={meeting.id}
 												minutes={minutes.data}
