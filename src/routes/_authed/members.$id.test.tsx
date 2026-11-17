@@ -542,6 +542,25 @@ describe("member profile — speech log evaluators (#681)", () => {
 		).toBeTruthy();
 	});
 
+	// protects=the profile row's three badge lines, year included, in the club
+	// zone from loader data; fails_when=the year line is missing or read in
+	// UTC (this instant is 2025-01-01 in UTC, 2024 in Los Angeles);
+	// no_claim=the dashboard row, or any row of another year.
+	it("shows day, month and year on a row, in the club's zone", async () => {
+		await renderRoute(
+			{},
+			{
+				timezone: "America/Los_Angeles",
+				speechLog: [
+					speechRow({ scheduledAt: new Date("2025-01-01T07:30:00Z") }),
+				],
+			},
+		);
+		expect(screen.getByText("31")).toBeTruthy();
+		expect(screen.getByText("DEC")).toBeTruthy();
+		expect(screen.getByText("2024")).toBeTruthy();
+	});
+
 	it("offers Show all only when the log was truncated", async () => {
 		await renderRoute({}, { speechLog: [speechRow()] });
 		expect(screen.queryByRole("link", { name: "Show all" })).toBeNull();

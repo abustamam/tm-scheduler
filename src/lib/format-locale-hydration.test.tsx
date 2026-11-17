@@ -114,7 +114,11 @@ describe("date and currency formatters under a non-English runtime (#708)", () =
 		expect(formatMeetingDate(AT, ZONE)).toBe("Thu, Aug 20");
 		expect(formatCents(4500)).toBe("$45.00");
 		// The badge lines the dashboard and member profile share: AUG, not AGO.
-		expect(formatDayMonth(AT, ZONE)).toEqual({ day: "20", mon: "AUG" });
+		expect(formatDayMonth(AT, ZONE)).toEqual({
+			day: "20",
+			mon: "AUG",
+			year: "2026",
+		});
 	});
 
 	it("restoreIntl undoes the NumberFormat pin as well as the DateTimeFormat one", () => {

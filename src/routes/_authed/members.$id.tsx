@@ -405,7 +405,10 @@ function MemberDetail() {
 						</p>
 					) : (
 						speechLog.map((l) => {
-							const { day, mon } = formatDayMonth(l.scheduledAt, timezone);
+							const { day, mon, year } = formatDayMonth(
+								l.scheduledAt,
+								timezone,
+							);
 							const state = speechScheduleState({
 								scheduledAt: l.scheduledAt,
 								now,
@@ -432,6 +435,9 @@ function MemberDetail() {
 										</div>
 										<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
 											{mon}
+										</div>
+										<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
+											{year}
 										</div>
 									</div>
 									<div className="min-w-0">

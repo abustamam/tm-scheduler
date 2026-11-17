@@ -271,6 +271,40 @@ describe("SpeechLogEditButton", () => {
 	});
 });
 
+describe("SpeechLogEditButton dialog title year (#1655)", () => {
+	// protects=the year in the edit dialog title, in the club zone;
+	// fails_when=the title falls back to the year-less formatMeetingDate;
+	// no_claim=the save flow (covered above) or the rest of the sheet.
+	it("names the year of the speech in the title", async () => {
+		render(
+			<SpeechLogEditButton
+				timezone="America/Los_Angeles"
+				row={{
+					slotId: "slot-1",
+					memberId: "member-1",
+					scheduledAt: new Date("2025-01-01T07:30:00Z"),
+					roleName: "Speaker",
+					speechTitle: "Real Job",
+					pathwayPath: null,
+					projectName: null,
+					projectLevel: null,
+					projectId: null,
+					minMinutes: null,
+					maxMinutes: null,
+					presentationUrl: null,
+					introduction: null,
+				}}
+			/>,
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: "Edit speech details" }),
+		);
+		expect(
+			await screen.findByText(/Edit speech — Real Job · Tue, Dec 31, 2024/),
+		).toBeTruthy();
+	});
+});
+
 describe("the profile route's wiring", () => {
 	// The button is a PREDICTION of the server's gate, and swapping what feeds
 	// it (the member's id for the viewer's, say) survives every other test.

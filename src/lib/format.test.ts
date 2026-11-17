@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	formatCalendarDay,
+	formatDayMonth,
 	formatHistoryDate,
 	formatMeetingTime,
 	formatMeetingTimeRange,
@@ -204,5 +205,33 @@ describe("formatCalendarDay (#529)", () => {
 		expect(formatCalendarDay("2026-08-10T00:00:00Z")).toBe(
 			"2026-08-10T00:00:00Z",
 		);
+	});
+});
+
+describe("formatDayMonth year (#1655)", () => {
+	// protects=the third badge line a speech log row prints under the month;
+	// fails_when=the year is missing or is not the 4-digit year of the date;
+	// no_claim=nothing about zones or about how a row lays the lines out.
+	it("returns the four-digit year beside the day and month", () => {
+		expect(formatDayMonth("2024-08-22T18:00:00Z", "UTC")).toEqual({
+			day: "22",
+			mon: "AUG",
+			year: "2024",
+		});
+	});
+
+	// protects=the year is picked by the club's zone, like the day;
+	// fails_when=the year is read in the runtime's/UTC zone, so a 23:30 Dec 31
+	// Los Angeles meeting prints 2025 beside Dec 31;
+	// no_claim=the runtime zone when no zone is passed.
+	it("picks the year in the given zone at a New Year's Eve boundary", () => {
+		// 2024-12-31 23:30 in Los Angeles is 2025-01-01 07:30 UTC.
+		const at = "2025-01-01T07:30:00Z";
+		expect(formatDayMonth(at, "America/Los_Angeles")).toEqual({
+			day: "31",
+			mon: "DEC",
+			year: "2024",
+		});
+		expect(formatDayMonth(at, "UTC").year).toBe("2025");
 	});
 });

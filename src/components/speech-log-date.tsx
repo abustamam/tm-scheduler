@@ -20,7 +20,7 @@ import { formatDayMonth } from "#/lib/format";
 
 /**
  * The box the date sits in, empty. Non-breaking spaces rather than empty
- * strings so the two lines keep their height and the 64px grid column does not
+ * strings so the three lines keep their height and the 64px grid column does not
  * collapse and reflow the row when the real date lands.
  */
 const BLANK = "\u00A0";
@@ -61,6 +61,9 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 			</div>
 			<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
 				{parts ? parts.mon : BLANK}
+			</div>
+			<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
+				{parts ? parts.year : BLANK}
 			</div>
 		</div>
 	);
