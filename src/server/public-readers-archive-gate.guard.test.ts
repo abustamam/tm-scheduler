@@ -295,6 +295,17 @@ const WIRINGS: Wiring[] = [
 			"the full minutes — the roster by attendance status, guest names, awards and action items",
 	},
 	{
+		// #1654. Reads a session but never throws for a missing one, so it trips no
+		// `require*` and the sweep calls it session-less. The seam answers null for
+		// no session, an unreadable club and a non-member
+		// (`award-reveal.integration.test.ts` executes each).
+		file: "server/award-reveal.ts",
+		fn: "getAwardReveal",
+		mustCall: "loadAwardReveal",
+		leaks:
+			"an archived club's award winners, including guest and write-in names",
+	},
+	{
 		file: "server/promo.ts",
 		fn: "getPublicFlyer",
 		mustCall: "loadPublicFlyer",
