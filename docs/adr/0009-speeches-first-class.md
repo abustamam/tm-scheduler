@@ -61,3 +61,15 @@ issue will explore modeling Pathways paths/projects as first-class entities the 
 - Deriving scheduling state means the "unscheduled speeches" surface (a follow-up) is a query,
   not a status filter; an `archived` flag (also a follow-up) is the only non-derivable state.
 - #79 is blocked on #64 Phase A landing first.
+
+## Addendum (#1656): a speech given outside any meeting
+
+Officers know of speeches the app never saw (before the club used GavelUp, at a meeting nobody
+entered, or one an import missed). Such a speech has no slot to derive a state from, so it carries
+the one other stored state besides `archived`: `delivered_off_schedule`. It also carries an optional
+loose date (`delivered_year`, `delivered_month`, both nullable, a month needing a year) and
+`recorded_club_id`, which decides whose profile shows it and whose officers may edit it (SET NULL on a
+club delete, after which only the Person can). A past speech appears only in the speech log, is never
+offered for scheduling, and stays invisible to every slot-based reader (onboarding, Pathways, reporting,
+export). Three check constraints keep the shape honest; the "year not in the future" rule lives in the
+app, in the recording club's timezone.

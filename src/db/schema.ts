@@ -3148,6 +3148,22 @@ export const speeches = pgTable(
 		// linkage; `archived` is orthogonal — an archived speech is simply hidden
 		// from the reschedule pool by default. Default false.
 		archived: boolean("archived").notNull().default(false),
+		// A speech given outside any meeting here (#1656): before the club used the
+		// app, at a meeting nobody entered, or one an import missed. The one stored
+		// exception to "status is derived" (ADR-0009): there is no slot to derive
+		// from. Such a speech is never schedulable and appears only in the speech
+		// log. The loose date is optional at every level (year alone, or year and
+		// month); `recorded_club_id` decides whose profile shows it and whose
+		// officers may edit it, and is SET NULL on a club delete (the speech then
+		// belongs to the person alone).
+		deliveredOffSchedule: boolean("delivered_off_schedule")
+			.notNull()
+			.default(false),
+		deliveredYear: smallint("delivered_year"),
+		deliveredMonth: smallint("delivered_month"),
+		recordedClubId: uuid("recorded_club_id").references(() => clubs.id, {
+			onDelete: "set null",
+		}),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").defaultNow().notNull(),
 	},
@@ -3157,6 +3173,18 @@ export const speeches = pgTable(
 		check(
 			"speeches_single_owner",
 			sql`(${t.personId} is null) <> (${t.guestId} is null)`,
+		),
+		check(
+			"speeches_delivered_date_valid",
+			sql`(${t.deliveredMonth} is null or (${t.deliveredYear} is not null and ${t.deliveredMonth} between 1 and 12)) and (${t.deliveredYear} is null or ${t.deliveredYear} between 1900 and 2100)`,
+		),
+		check(
+			"speeches_delivered_date_only_off_schedule",
+			sql`${t.deliveredOffSchedule} or (${t.deliveredYear} is null and ${t.deliveredMonth} is null and ${t.recordedClubId} is null)`,
+		),
+		check(
+			"speeches_off_schedule_member_only",
+			sql`not ${t.deliveredOffSchedule} or ${t.personId} is not null`,
 		),
 	],
 );

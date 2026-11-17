@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 import { DashboardGreeting } from "#/components/dashboard-greeting";
 import {
@@ -19,7 +19,12 @@ import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
-import { SpeechLogDate } from "#/components/speech-log-date";
+import {
+	EarlierDivider,
+	PastBadge,
+	PastSpeechDate,
+	SpeechLogDate,
+} from "#/components/speech-log-date";
 import { SpeechLogEditButton } from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
@@ -206,6 +211,14 @@ function Dashboard() {
 		milestones,
 	} = Route.useLoaderData();
 	const router = useRouter();
+	// The first undated past row sits under an "Earlier" divider (#1656).
+	let firstUndatedId: string | null = null;
+	for (const r of speeches) {
+		if (r.kind === "past" && r.deliveredYear === null) {
+			firstUndatedId = r.speechId;
+			break;
+		}
+	}
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
 	// The server fns return the fresh list, but the Pathways panel above is
@@ -334,6 +347,40 @@ function Dashboard() {
 							</Link>
 						) : (
 							speeches.map((l) => {
+								if (l.kind === "past") {
+									return (
+										<Fragment key={l.speechId}>
+											{l.speechId === firstUndatedId ? (
+												<EarlierDivider />
+											) : null}
+											<div className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft">
+												<PastSpeechDate
+													year={l.deliveredYear}
+													month={l.deliveredMonth}
+												/>
+												<div className="min-w-0">
+													<div className="truncate text-sm font-bold">
+														{l.speechTitle}
+													</div>
+													<div className="truncate text-xs text-muted-foreground">
+														{[
+															[l.projectName, l.pathwayPath]
+																.filter(Boolean)
+																.join(" · "),
+															"Not at a meeting",
+														]
+															.filter(Boolean)
+															.join(" · ")}
+													</div>
+												</div>
+												<div className="flex items-center gap-1">
+													<PastBadge />
+													<SpeechLogEditButton row={l} />
+												</div>
+											</div>
+										</Fragment>
+									);
+								}
 								const state = speechScheduleState({
 									scheduledAt: l.scheduledAt,
 									now,

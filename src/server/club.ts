@@ -242,11 +242,14 @@ export const listMySpeeches = createServerFn({ method: "GET" })
 		// Legacy shape for a pre-#681 tab: a bare array, and each row still
 		// carries `evaluatorName` (the field that render reads) so the stale
 		// dashboard keeps showing the evaluator rather than silently dropping it.
+		// A past speech (#1656) has no slot and no date a pre-#681 tab could render;
+		// that tab reads `scheduledAt`, so it gets the meeting rows only.
 		if (data === undefined) {
-			return rows.map((r) => ({
-				...r,
-				evaluatorName: speechLogEvaluatorNames(r.evaluators),
-			}));
+			return rows.flatMap((r) =>
+				r.kind === "meeting"
+					? [{ ...r, evaluatorName: speechLogEvaluatorNames(r.evaluators) }]
+					: [],
+			);
 		}
 		return { speeches: rows, speechLogTruncated: truncated };
 	});

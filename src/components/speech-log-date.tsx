@@ -68,3 +68,64 @@ export function SpeechLogDate({ value }: { value: Date | string }) {
 		</div>
 	);
 }
+
+const PAST_MONTHS = [
+	"JAN",
+	"FEB",
+	"MAR",
+	"APR",
+	"MAY",
+	"JUN",
+	"JUL",
+	"AUG",
+	"SEP",
+	"OCT",
+	"NOV",
+	"DEC",
+];
+
+/**
+ * The date stamp of a past speech (#1656): `MAR` / `2023`, the year alone, or
+ * `—`. A loose calendar date with no instant and no timezone, so unlike
+ * `SpeechLogDate` it renders the same on the server and the client with no
+ * pre-mount guard; the month names are fixed, not `Intl`.
+ */
+export function PastSpeechDate({
+	year,
+	month,
+}: {
+	year: number | null;
+	month: number | null;
+}) {
+	return (
+		<div className="text-center leading-[1.1]">
+			<div className="font-display text-lg font-semibold">
+				{year === null ? "—" : BLANK}
+			</div>
+			<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
+				{year !== null && month !== null ? PAST_MONTHS[month - 1] : BLANK}
+			</div>
+			<div className="text-xs font-bold tracking-[0.05em] text-muted-foreground">
+				{year ?? BLANK}
+			</div>
+		</div>
+	);
+}
+
+/** The muted badge a past speech wears where a meeting row has its state pill. */
+export function PastBadge() {
+	return (
+		<span className="inline-flex shrink-0 items-center rounded-full border border-border bg-surface-soft px-2.5 py-1 text-xs font-semibold text-muted-foreground">
+			Past
+		</span>
+	);
+}
+
+/** The divider above the undated rows of a speech log. */
+export function EarlierDivider() {
+	return (
+		<div className="border-t border-border px-5 pt-3 pb-1 text-xs text-muted-foreground">
+			Earlier
+		</div>
+	);
+}

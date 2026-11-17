@@ -13,7 +13,7 @@ import {
 	Mail,
 	ShieldCheck,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MemberAvatar } from "#/components/club/member-avatar";
 import { CONTACT_METHOD_ICONS } from "#/components/contact-method-icon";
@@ -24,7 +24,15 @@ import {
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
-import { SpeechLogEditButton } from "#/components/speech-log-edit";
+import {
+	EarlierDivider,
+	PastBadge,
+	PastSpeechDate,
+} from "#/components/speech-log-date";
+import {
+	AddPastSpeechButton,
+	SpeechLogEditButton,
+} from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -290,6 +298,15 @@ function MemberDetail() {
 		officerPositions,
 	});
 
+	// The first undated past row sits under an "Earlier" divider (#1656).
+	let firstUndatedId: string | null = null;
+	for (const r of speechLog) {
+		if (r.kind === "past" && r.deliveredYear === null) {
+			firstUndatedId = r.speechId;
+			break;
+		}
+	}
+
 	// The speech log's edit pencil (#1159): an admin or officer of this club, or
 	// the speaker. A prediction; `applySpeechLogEdit` is the gate.
 	const showSpeechEdit = mayShowSpeechLogEdit({
@@ -405,6 +422,40 @@ function MemberDetail() {
 						</p>
 					) : (
 						speechLog.map((l) => {
+							if (l.kind === "past") {
+								return (
+									<Fragment key={l.speechId}>
+										{l.speechId === firstUndatedId ? <EarlierDivider /> : null}
+										<div className="grid grid-cols-[54px_1fr_auto] items-center gap-3 border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft">
+											<PastSpeechDate
+												year={l.deliveredYear}
+												month={l.deliveredMonth}
+											/>
+											<div className="min-w-0">
+												<div className="truncate text-sm font-bold">
+													{l.speechTitle}
+												</div>
+												<div className="truncate text-xs text-muted-foreground">
+													{[
+														[l.projectName, l.pathwayPath, l.projectLevel]
+															.filter(Boolean)
+															.join(" · "),
+														"Not at a meeting",
+													]
+														.filter(Boolean)
+														.join(" · ")}
+												</div>
+											</div>
+											<div className="flex items-center gap-1">
+												<PastBadge />
+												{showSpeechEdit ? (
+													<SpeechLogEditButton row={l} />
+												) : null}
+											</div>
+										</div>
+									</Fragment>
+								);
+							}
 							const { day, mon, year } = formatDayMonth(
 								l.scheduledAt,
 								timezone,
@@ -463,6 +514,14 @@ function MemberDetail() {
 							);
 						})
 					)}
+					{showSpeechEdit && member ? (
+						<div className="border-t border-border px-5 py-2.5">
+							<AddPastSpeechButton
+								memberId={member.id}
+								memberName={member.name}
+							/>
+						</div>
+					) : null}
 					<SpeechLogToggle
 						truncated={speechLogTruncated}
 						allSpeeches={allSpeeches}

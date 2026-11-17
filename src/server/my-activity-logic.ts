@@ -13,7 +13,18 @@
 // testable against a test db and never reaches the client bundle — see
 // CLAUDE.md "Data layer". The createServerFn wrappers stay in `club.ts`
 // (`listMySpeeches`) and `meetings.ts` (`listMyCommitments`).
-import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	ne,
+	or,
+	sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "#/db";
 import {
@@ -26,6 +37,7 @@ import {
 	roleSlots,
 	speeches,
 } from "#/db/schema";
+import { compareSpeechLogRows } from "#/lib/past-speech";
 import { userMemberIds } from "./person-identity-logic";
 
 /**
@@ -38,7 +50,39 @@ export interface SpeechLogEvaluator {
 	isGuest: boolean;
 }
 
-export interface SpeechLogRow {
+/** The speech fields both kinds of row carry. */
+interface SpeechLogRowCommon {
+	speechTitle: string | null;
+	projectName: string | null;
+	pathwayPath: string | null;
+	projectLevel: string | null;
+	projectId: string | null;
+	minMinutes: number | null;
+	maxMinutes: number | null;
+	presentationUrl: string | null;
+	/** The speaker's written introduction (member-only text; the log is members-only). */
+	introduction: string | null;
+	/** The speaker's member id; the edit sheet's picker offers THEIR paths. */
+	memberId: string | null;
+}
+
+/**
+ * A speech given outside any meeting here (#1656): no slot, no evaluators, and
+ * a loose date (year and month, year alone, or none).
+ */
+export interface PastSpeechLogRow extends SpeechLogRowCommon {
+	kind: "past";
+	speechId: string;
+	deliveredYear: number | null;
+	deliveredMonth: number | null;
+	recordedClubId: string | null;
+	createdAt: Date;
+}
+
+export type SpeechLogRow = MeetingSpeechLogRow | PastSpeechLogRow;
+
+export interface MeetingSpeechLogRow {
+	kind: "meeting";
 	slotId: string;
 	/** The speaker's member id (the slot's assignee); the edit sheet's picker
 	 *  offers THEIR paths (#1159). Null only if the slot was released. */
@@ -74,10 +118,8 @@ export interface SpeechLog {
  * speech HAS an evaluator slot (`hasEvaluatorSlot`), which is what lets an
  * upcoming speech say "Evaluator not yet assigned".
  */
-const HELD_EVALUATOR_STATUSES: ReadonlySet<SpeechLogRow["status"]> = new Set([
-	"claimed",
-	"confirmed",
-]);
+const HELD_EVALUATOR_STATUSES: ReadonlySet<MeetingSpeechLogRow["status"]> =
+	new Set(["claimed", "confirmed"]);
 
 /**
  * Speaker-slot history for a set of roster members (most recent first), with
@@ -159,33 +201,48 @@ export async function loadSpeechLog(
 		.orderBy(desc(meetings.scheduledAt), desc(roleSlots.id));
 
 	const fetched = limit === null ? await query : await query.limit(limit + 1);
-	const truncated = limit !== null && fetched.length > limit;
-	const speechRows = truncated ? fetched.slice(0, limit) : fetched;
-	if (speechRows.length === 0) return { rows: [], truncated: false };
+	const pastFetched = await loadPastSpeechRows(memberIds, clubId, limit);
+	// Merge, newest first, then cut: each side fetched `limit + 1`, so the top
+	// `limit + 1` of the union is inside the union of the two fetches and
+	// `truncated` stays exact.
+	const merged = [
+		...fetched.map((r) => ({ kind: "meeting" as const, ...r })),
+		...pastFetched,
+	].sort(compareSpeechLogRows);
+	const truncated = limit !== null && merged.length > limit;
+	const window = truncated ? merged.slice(0, limit ?? undefined) : merged;
+	if (window.length === 0) return { rows: [], truncated: false };
+	const speechRows = window.filter(
+		(r): r is Extract<typeof r, { kind: "meeting" }> => r.kind === "meeting",
+	);
 
-	// Step 2: every evaluator slot pointing at those speeches. Two plain
+	// Step 2: every evaluator slot pointing at those speeches (meeting rows only;
+	// a past speech has no slot and so no evaluator). Two plain
 	// `inArray` reads rather than a correlated `json_agg` subquery on purpose: a
 	// hand-written correlated `sql` subquery in Drizzle has emitted an
 	// unqualified, always-true WHERE here before. LEFT on both assignee tables,
 	// since a slot holds a member OR a guest (or, open, neither).
-	const evaluatorRows = await db
-		.select({
-			evaluatesSlotId: roleSlots.evaluatesSlotId,
-			status: roleSlots.status,
-			memberId: roleSlots.assignedMemberId,
-			guestId: roleSlots.assignedGuestId,
-			memberName: members.name,
-			guestName: guests.name,
-		})
-		.from(roleSlots)
-		.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
-		.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
-		.where(
-			inArray(
-				roleSlots.evaluatesSlotId,
-				speechRows.map((r) => r.slotId),
-			),
-		);
+	const evaluatorRows =
+		speechRows.length === 0
+			? []
+			: await db
+					.select({
+						evaluatesSlotId: roleSlots.evaluatesSlotId,
+						status: roleSlots.status,
+						memberId: roleSlots.assignedMemberId,
+						guestId: roleSlots.assignedGuestId,
+						memberName: members.name,
+						guestName: guests.name,
+					})
+					.from(roleSlots)
+					.leftJoin(members, eq(members.id, roleSlots.assignedMemberId))
+					.leftJoin(guests, eq(guests.id, roleSlots.assignedGuestId))
+					.where(
+						inArray(
+							roleSlots.evaluatesSlotId,
+							speechRows.map((r) => r.slotId),
+						),
+					);
 
 	// Step 3: group in JS.
 	// A key's PRESENCE is `hasEvaluatorSlot`; its map is the held evaluators.
@@ -215,7 +272,8 @@ export async function loadSpeechLog(
 	}
 
 	return {
-		rows: speechRows.map((r) => {
+		rows: window.map((r): SpeechLogRow => {
+			if (r.kind === "past") return r;
 			const held = bySpeech.get(r.slotId);
 			return {
 				...r,
@@ -227,6 +285,81 @@ export async function loadSpeechLog(
 		}),
 		truncated,
 	};
+}
+
+/**
+ * The past (off-schedule) speeches of these members' Persons (#1656), newest
+ * first by the loose date, undated last. With a `clubId` only speeches RECORDED
+ * at that club (a club's profile never shows another club's); without one every
+ * recording club counts, and one with no recording club (deleted) still shows.
+ * A speech recorded at an ARCHIVED club is dropped, as the meeting rows are.
+ * Fetches `limit + 1` for the merge.
+ */
+async function loadPastSpeechRows(
+	memberIds: string[],
+	clubId: string | null,
+	limit: number | null,
+): Promise<PastSpeechLogRow[]> {
+	const owners = await db
+		.select({
+			memberId: members.id,
+			personId: members.personId,
+			clubId: members.clubId,
+		})
+		.from(members)
+		.where(inArray(members.id, memberIds));
+	const personIds = [
+		...new Set(owners.flatMap((o) => (o.personId ? [o.personId] : []))),
+	];
+	if (personIds.length === 0) return [];
+
+	const query = db
+		.select({
+			speechId: speeches.id,
+			personId: speeches.personId,
+			speechTitle: speeches.title,
+			projectName: speeches.projectName,
+			pathwayPath: speeches.pathwayPath,
+			projectLevel: speeches.projectLevel,
+			projectId: speeches.projectId,
+			minMinutes: speeches.minMinutes,
+			maxMinutes: speeches.maxMinutes,
+			presentationUrl: speeches.presentationUrl,
+			introduction: speeches.introduction,
+			deliveredYear: speeches.deliveredYear,
+			deliveredMonth: speeches.deliveredMonth,
+			recordedClubId: speeches.recordedClubId,
+			createdAt: speeches.createdAt,
+		})
+		.from(speeches)
+		.leftJoin(clubs, eq(clubs.id, speeches.recordedClubId))
+		.where(
+			and(
+				eq(speeches.deliveredOffSchedule, true),
+				inArray(speeches.personId, personIds),
+				or(isNull(speeches.recordedClubId), isNull(clubs.archivedAt)),
+				clubId ? eq(speeches.recordedClubId, clubId) : undefined,
+			),
+		)
+		// Mirrors `compareSpeechLogRows`: dated first by year*12+month (year only
+		// is month 1), undated last, then newest created, then id.
+		.orderBy(
+			sql`${speeches.deliveredYear} is null`,
+			sql`(${speeches.deliveredYear} * 12 + coalesce(${speeches.deliveredMonth}, 1)) desc`,
+			desc(speeches.createdAt),
+			desc(speeches.id),
+		);
+	const rows = limit === null ? await query : await query.limit(limit + 1);
+	return rows.map(({ personId, ...r }) => {
+		const mine = owners.filter((o) => o.personId === personId);
+		const seat =
+			mine.find((o) => o.clubId === r.recordedClubId) ?? mine[0] ?? null;
+		return {
+			kind: "past" as const,
+			...r,
+			memberId: seat?.memberId ?? null,
+		};
+	});
 }
 
 /**

@@ -12,6 +12,11 @@ import {
 	requireMembership,
 	requireUser,
 } from "./guards";
+import {
+	addPastSpeech,
+	deletePastSpeech,
+	editPastSpeech,
+} from "./past-speeches-logic";
 import { speakerDetailsUpdateSchema } from "./speaker-details-schema";
 import { applySpeechLogEdit } from "./speech-log-edit-logic";
 import {
@@ -118,5 +123,68 @@ export const editSpeechFromLog = createServerFn({ method: "POST" })
 			actorUserId: user.id,
 			speakerDetails: data.speakerDetails,
 		});
+		return { ok: true as const };
+	});
+
+const pastDateFields = {
+	deliveredYear: z.number().int().nullable().optional(),
+	deliveredMonth: z.number().int().nullable().optional(),
+};
+
+const addPastSpeechSchema = z.object({
+	memberId: uuid,
+	speakerDetails: speakerDetailsUpdateSchema,
+	...pastDateFields,
+});
+
+/** Record a speech given outside any meeting (#1656), with an optional loose
+ *  date. The member themselves, or an admin or officer of the member's club.
+ *  AUTHED. */
+export const addPastSpeechFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => addPastSpeechSchema.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		const { speechId } = await addPastSpeech({
+			memberId: data.memberId,
+			actorUserId: user.id,
+			input: {
+				speakerDetails: data.speakerDetails,
+				deliveredYear: data.deliveredYear,
+				deliveredMonth: data.deliveredMonth,
+			},
+		});
+		return { ok: true as const, speechId };
+	});
+
+const editPastSpeechSchema = z.object({
+	speechId: uuid,
+	speakerDetails: speakerDetailsUpdateSchema,
+	...pastDateFields,
+});
+
+/** Edit a past speech (#1656): a full replace of its fields and loose date.
+ *  The speaker, or an officer of the club it was recorded at. AUTHED. */
+export const editPastSpeechFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => editPastSpeechSchema.parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await editPastSpeech({
+			speechId: data.speechId,
+			actorUserId: user.id,
+			input: {
+				speakerDetails: data.speakerDetails,
+				deliveredYear: data.deliveredYear,
+				deliveredMonth: data.deliveredMonth,
+			},
+		});
+		return { ok: true as const };
+	});
+
+/** Delete a past speech (#1656). Same gate as edit. AUTHED. */
+export const deletePastSpeechFn = createServerFn({ method: "POST" })
+	.validator((input: unknown) => z.object({ speechId: uuid }).parse(input))
+	.handler(async ({ data }) => {
+		const user = await requireUser();
+		await deletePastSpeech({ speechId: data.speechId, actorUserId: user.id });
 		return { ok: true as const };
 	});
