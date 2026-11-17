@@ -73,9 +73,10 @@ export function formatMeetingTimeRange(
 
 /**
  * A date as its three badge lines: the day of the month, the upper-cased short
- * month and the year, e.g. `{ day: "20", mon: "AUG", year: "2024" }`. The speech-log date stamp on the
- * dashboard and on a member's profile both render this; it lives here so a
- * locale change is one edit rather than two copies drifting (#708).
+ * month and the year, e.g. `{ day: "20", mon: "AUG", year: "2024" }`. The
+ * speech-log date stamp on the dashboard and on a member's profile both
+ * render this; it lives here so a locale change is one edit rather than two
+ * copies drifting (#708).
  *
  * `timeZone` omitted means the RUNTIME's zone, which is why the dashboard's
  * caller renders it after mount only (`SpeechLogDate`, #608).

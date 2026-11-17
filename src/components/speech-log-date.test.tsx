@@ -136,10 +136,10 @@ describe("SpeechLogDate hydration (#608)", () => {
 		const text = serverText(
 			renderToString(<SpeechLogDate value={SPEECH_AT} />),
 		);
-		// Exactly three non-breaking spaces, one per line (day, month, year). Empty divs would collapse
-		// to zero height and the 64px grid column would jump when the effect fills
-		// them in. Asserting the exact string also pins that BOTH slots are held,
-		// which a `toContain` would not.
+		// Exactly three non-breaking spaces, one per line (day, month, year). Empty
+		// divs would collapse to zero height and the 64px grid column would jump
+		// when the effect fills them in. Asserting the exact string also pins that
+		// all three slots are held, which a `toContain` would not.
 		expect(text).toBe("\u00A0\u00A0\u00A0");
 	});
 

@@ -556,9 +556,13 @@ describe("member profile — speech log evaluators (#681)", () => {
 				],
 			},
 		);
-		expect(screen.getByText("31")).toBeTruthy();
-		expect(screen.getByText("DEC")).toBeTruthy();
-		expect(screen.getByText("2024")).toBeTruthy();
+		// The badge is the day's parent; its three lines are its children, in order.
+		const badge = screen.getByText("31").parentElement as HTMLElement;
+		expect(
+			within(badge)
+				.getAllByText(/./)
+				.map((el) => el.textContent),
+		).toEqual(["31", "DEC", "2024"]);
 	});
 
 	it("offers Show all only when the log was truncated", async () => {
