@@ -707,7 +707,8 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 		type Cover = {
 			slotId: string;
 			kind: string;
-			releasedBy: string | null;
+			releasedByName: string | null;
+			slotLabel: string;
 			note: string;
 		};
 		const coversOf = (p: Preview) =>
@@ -721,7 +722,8 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 			expect(covers?.[0]).toMatchObject({
 				slotId: seed.slotId,
 				kind: "finding_cover",
-				releasedBy: expect.any(String),
+				releasedByName: "Member User",
+				slotLabel: expect.any(String),
 			});
 			expect(covers?.[0]?.note).toMatch(
 				/Removing the slot deletes that request/,
@@ -731,13 +733,19 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 		it("names a released-by member who is gone", async () => {
 			await openCover("dropped", null);
 			const covers = coversOf(await preview(removeOps()));
-			expect(covers?.[0]).toMatchObject({ kind: "dropped", releasedBy: null });
+			expect(covers?.[0]).toMatchObject({
+				kind: "dropped",
+				releasedByName: null,
+			});
 			expect(covers?.[0]?.note).toMatch(/no longer in the club/);
 		});
 
 		it("a covered (closed) request is not listed", async () => {
 			await openCover("dropped", seed.memberId);
-			await testDb.update(slotCoverRequests).set({ coveredAt: new Date() });
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
 			const p = await preview(removeOps());
 			expect(coversOf(p)).toBeUndefined();
 		});
@@ -777,7 +785,10 @@ describe.skipIf(!hasTestDb)("edit_role_slots (#1542)", () => {
 		it("a request covered after the preview is PLAN_STALE too", async () => {
 			await openCover("dropped", seed.memberId);
 			const p = await preview(removeOps());
-			await testDb.update(slotCoverRequests).set({ coveredAt: new Date() });
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
 			const err = await call({
 				meetingId: seed.meetingId,
 				operations: removeOps(),

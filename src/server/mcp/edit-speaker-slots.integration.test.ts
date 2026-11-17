@@ -11,7 +11,7 @@
  * authorization table (`delegate-authz`).
  */
 import { randomUUID } from "node:crypto";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import {
@@ -791,7 +791,8 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 		type Cover = {
 			slotId: string;
 			kind: string;
-			releasedBy: string | null;
+			releasedByName: string | null;
+			slotLabel: string;
 			note: string;
 		};
 		const droppedOf = (p: unknown) =>
@@ -813,13 +814,15 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 					expect.objectContaining({
 						slotId: sp.id,
 						kind: "finding_cover",
-						releasedBy: expect.any(String),
+						releasedByName: "Member User",
+						slotLabel: "Speaker 2",
 						note: expect.stringContaining("Speaker 2"),
 					}),
 					expect.objectContaining({
 						slotId: ev.id,
 						kind: "dropped",
-						releasedBy: null,
+						releasedByName: null,
+						slotLabel: "Evaluator 2",
 						note: expect.stringContaining("Evaluator 2"),
 					}),
 				]),
@@ -871,6 +874,68 @@ describe.skipIf(!hasTestDb)("edit_speaker_slots (#1576)", () => {
 			expect(err).toMatchObject({ code: "PLAN_STALE" });
 			expect((await stored()).speakers).toHaveLength(2);
 			expect((await stored()).evaluators).toHaveLength(2);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("a request covered after the preview is PLAN_STALE; slots and request survive", async () => {
+			await seedPairs(2);
+			const { evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			await openCover(evaluators[1]!.id, "finding_cover", seed.memberId);
+			const p = await preview({ removeSpeakers: 1 });
+			expect(droppedOf(p)).toHaveLength(1);
+			await testDb
+				.update(slotCoverRequests)
+				.set({ coveredAt: new Date() })
+				.where(eq(slotCoverRequests.meetingId, seed.meetingId));
+			const err = await call({
+				meetingId: seed.meetingId,
+				removeSpeakers: 1,
+				planHash: p.planHash,
+			}).catch((e: unknown) => e);
+			expect(err).toMatchObject({ code: "PLAN_STALE" });
+			expect((await stored()).speakers).toHaveLength(2);
+			expect((await stored()).evaluators).toHaveLength(2);
+			expect(await coverRows()).toHaveLength(1);
+		});
+
+		it("reads the cover requests under the lineup lock: one committed while the apply waits is PLAN_STALE", async () => {
+			await seedPairs(2);
+			const p = await preview({ removeSpeakers: 1 });
+			const { evaluators } = await stored();
+			// biome-ignore lint/style/noNonNullAssertion: seeded above
+			const target = evaluators[1]!.id;
+			let applied: Promise<unknown> | undefined;
+			await testDb.transaction(async (tx) => {
+				await tx
+					.select({ id: roleSlots.id })
+					.from(roleSlots)
+					.where(eq(roleSlots.id, target))
+					.for("update");
+				applied = call({
+					meetingId: seed.meetingId,
+					removeSpeakers: 1,
+					planHash: p.planHash,
+				}).catch((e: unknown) => e);
+				// Wait until some backend is blocked on a row lock: the apply.
+				for (let i = 0; i < 200; i++) {
+					const waiting = await tx.execute(
+						sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`,
+					);
+					if (waiting.rows.length > 0) break;
+					await new Promise((r) => setTimeout(r, 25));
+				}
+				await tx.insert(slotCoverRequests).values({
+					clubId: seed.clubId,
+					meetingId: seed.meetingId,
+					slotId: target,
+					kind: "finding_cover",
+					releasedByMemberId: seed.memberId,
+					priorStatus: "confirmed",
+				});
+			});
+			expect(await applied).toMatchObject({ code: "PLAN_STALE" });
+			expect((await stored()).speakers).toHaveLength(2);
 			expect(await coverRows()).toHaveLength(1);
 		});
 

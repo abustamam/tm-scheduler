@@ -15,7 +15,9 @@ export type DroppedCoverRequest = {
 	slotId: string;
 	kind: "finding_cover" | "dropped";
 	/** Display name of who released the slot, or null when that member is gone. */
-	releasedBy: string | null;
+	releasedByName: string | null;
+	/** The slot's readable name ("Speaker 2"). */
+	slotLabel: string;
 	/** Readable on its own: the plan is what the user is shown. */
 	note: string;
 };
@@ -56,13 +58,14 @@ export async function loadOpenCoverRequests(
 					.where(inArray(members.id, ids))
 			: [];
 	return rows.map((r) => {
-		const releasedBy =
+		const releasedByName =
 			names.find((n) => n.id === r.releasedByMemberId)?.name ?? null;
-		const who = releasedBy ?? "a member who is no longer in the club";
+		const who = releasedByName ?? "a member who is no longer in the club";
 		return {
 			slotId: r.slotId,
 			kind: r.kind,
-			releasedBy,
+			releasedByName,
+			slotLabel: label(r.slotId),
 			note:
 				r.kind === "finding_cover"
 					? `${label(r.slotId)} has an open request from ${who} for someone to cover it. Removing the slot deletes that request.`

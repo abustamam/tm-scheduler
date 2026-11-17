@@ -362,11 +362,16 @@ async function runSteps(
 			(s) => [s.slotId, `Evaluator ${s.position}`] as const,
 		),
 	]);
-	const openCovers = await loadOpenCoverRequests(
-		tx,
-		[...labelOf.keys()],
-		(id) => labelOf.get(id) ?? "That slot",
-	);
+	// Only removeSpeakers deletes a slot; a call without it drops nothing, so
+	// the read is skipped (the plan then has no droppedCoverRequests either way).
+	const openCovers =
+		args.removeSpeakers == null
+			? []
+			: await loadOpenCoverRequests(
+					tx,
+					[...labelOf.keys()],
+					(id) => labelOf.get(id) ?? "That slot",
+				);
 	const blocking: McpBlockingItem[] = [];
 	const request: Plan["request"] = {
 		addSpeakers: args.addSpeakers ?? null,
