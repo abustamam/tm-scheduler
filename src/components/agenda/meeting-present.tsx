@@ -10,10 +10,21 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { fireAwardConfetti } from "#/components/agenda/award-confetti";
 import { ClubLogo } from "#/components/agenda/club-logo";
 import { NextMeetingBodyView } from "#/components/agenda/next-meeting-body";
+import { useAwardWinners } from "#/components/agenda/use-award-winners";
 import { PptxDownloadButton } from "#/components/club/pptx-download-button";
 import type { Slide } from "#/lib/agenda-slides";
+import {
+	clampStep,
+	entryStep,
+	type RevealEntry,
+	revealEntries,
+	stepBack,
+	stepForward,
+	stepView,
+} from "#/lib/award-reveal-steps";
 import { TOASTMASTERS_DISCLAIMER } from "#/lib/brand";
 import {
 	type CallControlsEdge,
@@ -23,6 +34,7 @@ import {
 	readCallControlsEdge,
 	writeCallControlsEdge,
 } from "#/lib/call-controls-band";
+import type { AwardWinner } from "#/lib/project-awards";
 import { fitScale } from "#/lib/slide-fit";
 import {
 	footerDate,
@@ -98,6 +110,12 @@ function voteCategory(
 
 export { remapSlideIndex };
 
+/** Where the awards slide's reveal stands (#1654): the step, and the winners
+ *  frozen when it first moved past step 0 (`null` until then, and on every other
+ *  slide). */
+type RevealState = { step: number; frozen: AwardWinner[] | null };
+const REVEAL_INITIAL: RevealState = { step: 0, frozen: null };
+
 /** A slide's identity for re-mapping; the builders always set `key`. */
 function slideKey(s: Slide): string {
 	return s.key ?? s.kind;
@@ -142,12 +160,22 @@ export function MeetingPresent({
 	// indexing the new, shorter deck with the old index would throw.
 	let i = iState;
 	let cursor = cursorState;
+	const [reveal, setReveal] = useState<RevealState>(REVEAL_INITIAL);
+	const [revealMeeting, setRevealMeeting] = useState(meetingId);
+	if (revealMeeting !== meetingId) {
+		// Another meeting's winners are not this one's snapshot.
+		setRevealMeeting(meetingId);
+		setReveal(REVEAL_INITIAL);
+	}
 	if (seen.sig !== keySig) {
 		i = remapSlideIndex(seen.keys, keys, iState);
 		cursor = remapSlideIndex(seen.keys, keys, cursorState);
 		setSeen({ sig: keySig, keys });
 		setI(i);
 		setCursor(cursor);
+		// A rebuild that keeps the awards slide keeps its step (clamped at render,
+		// without confetti); one that moves the presenter onto another slide ends it.
+		if (keys[i] !== seen.keys[iState]) setReveal(REVEAL_INITIAL);
 	}
 	// A BARE COUNT, never per-candidate numbers (#510): a live leaderboard on
 	// the projector produces bandwagon voting and destroys the reveal —
@@ -196,17 +224,82 @@ export function MeetingPresent({
 	const insets = callControlsInset(band);
 
 	const last = deck.length - 1;
-	const next = useCallback(() => setI((n) => Math.min(n + 1, last)), [last]);
-	const prev = useCallback(() => setI((n) => Math.max(n - 1, 0)), []);
+
+	// The awards slide's drum-roll reveal (#1654). `live` is the session-gated
+	// winners with this browser's queued award edits projected over them; it is
+	// read at ENTRY and frozen at step 1, so a winner confirmed mid-reveal never
+	// reshuffles the step count.
+	const current = deck[i];
+	const awardsSlide = current?.kind === "awards" ? current : null;
+	const live = useAwardWinners(meetingId, {
+		enabled: deck.some((s) => s.kind === "awards"),
+		onSlide: awardsSlide !== null,
+	});
+	const frozen = reveal.frozen;
+	const entries: RevealEntry[] = awardsSlide
+		? revealEntries(frozen ?? live, awardsSlide.categories)
+		: [];
+	const entryCount = entries.length;
+	const revealOn = entryCount > 0;
+	const step = revealOn ? clampStep(reveal.step, entryCount) : 0;
+	// A live rebuild that shrank the step count lands on the new last step; keep
+	// it there, so a later regrowth does not jump to a name the presenter has not
+	// stepped to. Render-phase adjustment, no confetti.
+	if (awardsSlide && clampStep(reveal.step, entryCount) !== reveal.step) {
+		setReveal({ ...reveal, step: clampStep(reveal.step, entryCount) });
+	}
+
+	/** Move to slide `target`. The awards slide starts its reveal here: step 0
+	 *  going forward, the last winner (frozen, no confetti) coming back. */
+	const enter = useCallback(
+		(target: number, direction: "forward" | "back") => {
+			const s = deck[target];
+			const n =
+				s?.kind === "awards" ? revealEntries(live, s.categories).length : 0;
+			setReveal(
+				direction === "back" && n > 0
+					? { step: entryStep("back", n), frozen: live }
+					: REVEAL_INITIAL,
+			);
+			setI(target);
+		},
+		[deck, live],
+	);
+	const next = useCallback(() => {
+		if (revealOn) {
+			const r = stepForward(step, entryCount);
+			if (r.kind === "step") {
+				setReveal({ step: r.step, frozen: frozen ?? live });
+				if (r.fireConfetti) void fireAwardConfetti();
+				return;
+			}
+		}
+		if (i < last) enter(i + 1, "forward");
+	}, [revealOn, step, entryCount, frozen, live, i, last, enter]);
+	const prev = useCallback(() => {
+		if (revealOn) {
+			const r = stepBack(step, entryCount);
+			if (r.kind === "step") {
+				setReveal({ step: r.step, frozen });
+				return;
+			}
+		}
+		if (i > 0) enter(i - 1, "back");
+	}, [revealOn, step, entryCount, frozen, i, enter]);
 
 	const openOverview = useCallback(() => {
 		setCursor(i);
 		setOverview(true);
 	}, [i]);
-	const jumpTo = useCallback((n: number) => {
-		setI(n);
-		setOverview(false);
-	}, []);
+	const jumpTo = useCallback(
+		(n: number) => {
+			// Closing the overview without moving is not an entry: it must not
+			// restart the reveal or fire its confetti again.
+			if (n !== i) enter(n, "forward");
+			setOverview(false);
+		},
+		[enter, i],
+	);
 
 	const labels = useMemo(() => deck.map(slideLabel), [deck]);
 
@@ -382,6 +475,7 @@ export function MeetingPresent({
 							date={fdate}
 							vote={vote}
 							feedbackUrl={feedbackUrl}
+							reveal={revealOn ? { entries, step } : null}
 						/>
 					)}
 				</div>
@@ -704,6 +798,7 @@ function ContentSlide({
 	date,
 	vote,
 	feedbackUrl,
+	reveal,
 }: {
 	layout: Extract<SlideLayout, { chrome: "content" }>;
 	clubName: string;
@@ -713,8 +808,11 @@ function ContentSlide({
 	vote: { ballotUrl: string; label: string } | null;
 	/** Non-null only on the General Evaluation slide (#1282). */
 	feedbackUrl: string | null;
+	/** Non-null only on the awards slide while its drum-roll reveal is active
+	 *  (#1654); replaces the numbered list as the body. */
+	reveal: { entries: RevealEntry[]; step: number } | null;
 }) {
-	const { outer, inner } = useFitTransform([layout]);
+	const { outer, inner } = useFitTransform([layout, reveal?.step]);
 	return (
 		<div
 			className="flex h-full w-full flex-col"
@@ -809,6 +907,8 @@ function ContentSlide({
 							</div>
 							<FeedbackInvite url={feedbackUrl} />
 						</div>
+					) : reveal ? (
+						<AwardReveal entries={reveal.entries} step={reveal.step} />
 					) : (
 						<BodyView body={layout.body} />
 					)}
@@ -866,6 +966,54 @@ function ContentSlide({
 					{TOASTMASTERS_DISCLAIMER}
 				</p>
 			</footer>
+		</div>
+	);
+}
+
+/**
+ * The awards slide's presenter-paced reveal (#1654): "Best Table Topics is…",
+ * then a pulsing drum roll, then the name in gold. Drawn on a navy panel because
+ * GOLD does not read on the deck's light ground. The pulse is a Tailwind
+ * `animate-pulse`, which the global reduced-motion block already neutralises.
+ */
+function AwardReveal({
+	entries,
+	step,
+}: {
+	entries: RevealEntry[];
+	step: number;
+}) {
+	const view = stepView(step, entries);
+	return (
+		<div
+			data-testid="award-reveal"
+			className="flex min-h-[26cqw] flex-col items-center justify-center rounded-[1.6cqw] px-[4cqw] py-[3cqw] text-center text-white"
+			style={{ background: NAVY }}
+		>
+			{view.kind === "intro" ? (
+				<p className="text-[5.4cqw] font-bold leading-tight">
+					And the winners are…
+				</p>
+			) : (
+				<>
+					<p className="text-[4.4cqw] font-bold leading-tight">
+						{`${view.entry.label} is…`}
+						{view.phase === "drum" ? (
+							<span className="ml-[1cqw] animate-pulse">
+								<span aria-hidden>🥁</span> drum roll…
+							</span>
+						) : null}
+					</p>
+					{view.phase === "name" ? (
+						<p
+							className="mt-[2.4cqw] break-words text-[8.6cqw] font-bold leading-tight"
+							style={{ color: GOLD }}
+						>
+							{view.entry.name}
+						</p>
+					) : null}
+				</>
+			)}
 		</div>
 	);
 }

@@ -21,6 +21,7 @@ import {
 	visitingFlag,
 } from "./agenda-runsheet";
 import type { BeatTiming } from "./agenda-template-slides";
+import type { BeatAwardCategory as AwardCategory } from "./award-categories";
 import type {
 	NextMeetingRole,
 	NextMeetingSummary,
@@ -325,7 +326,7 @@ type SlideShape =
 			owner: string;
 			time: string;
 	  } & FeedbackInvitation)
-	| { kind: "awards"; categories: string[] }
+	| { kind: "awards"; categories: { key: AwardCategory; label: string }[] }
 	| {
 			/** The guest-comments beat (#352): the President invites them, between
 			 *  the awards and the closing announcements. Carries no data — a first
@@ -992,12 +993,28 @@ export function buildSlideDeck({
 		});
 	}
 
-	const awardCategories: string[] = [];
+	// The label is what the room reads; the key is what the reveal (#1654) matches
+	// a winner by. The table is typed over the label union, so a label with no key
+	// is a compile error, never `key: undefined`. (`award-wording.guard.test.ts`
+	// pins the `awardCategories.push("<label>")` literals, so the labels are
+	// pushed as strings and the table pairs each with its key.)
+	const AWARD_TABLE = [
+		{ key: "best_table_topics", label: "Best Table Topics" },
+		{ key: "best_evaluator", label: "Best Evaluator" },
+		{ key: "best_speaker", label: "Best Speaker" },
+	] as const satisfies readonly { key: AwardCategory; label: string }[];
+	type AwardLabel = (typeof AWARD_TABLE)[number]["label"];
+	const awardCategories: AwardLabel[] = [];
 	if (ttOwner) awardCategories.push("Best Table Topics");
 	if (evaluators.length > 0) awardCategories.push("Best Evaluator");
 	if (speakers.length > 0) awardCategories.push("Best Speaker");
 	if (awardCategories.length > 0) {
-		deck.push({ kind: "awards", categories: awardCategories });
+		deck.push({
+			kind: "awards",
+			categories: AWARD_TABLE.filter((a) =>
+				awardCategories.includes(a.label),
+			).map(({ key, label }) => ({ key, label })),
+		});
 	}
 
 	// Announcements before guest comments (#442), matching the run sheet's

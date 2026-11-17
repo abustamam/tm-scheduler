@@ -326,6 +326,42 @@ function oneLineGuestCaption(
 	return caption || null;
 }
 
+/** The award rows with their display name resolved. ONE derivation for the
+ *  minutes and the in-room reveal (#1654), so the coalesce below cannot drift. */
+async function selectAwardRows(meetingId: string) {
+	const awMember = alias(members, "aw_member");
+	const awGuest = alias(guests, "aw_guest");
+	return await db
+		.select({
+			category: meetingAwards.category,
+			memberId: meetingAwards.memberId,
+			guestId: meetingAwards.guestId,
+			writeInName: meetingAwards.writeInName,
+			// The write-in name is part of the COALESCE, not a field the callers
+			// have to know about (#582). A write-in winner has neither join row, so
+			// without it `name` comes back null and the award renders blank on the
+			// minutes, the emailed minutes, the minutes PDF and the printed awards
+			// beat — all four read this one derivation, which is why fixing it here
+			// covers them and why leaving it would have been silent on all four.
+			name: sql<
+				string | null
+			>`coalesce(${awMember.name}, ${awGuest.name}, ${meetingAwards.writeInName})`,
+		})
+		.from(meetingAwards)
+		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
+		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
+		.where(eq(meetingAwards.meetingId, meetingId));
+}
+
+/** Each confirmed award's category and display name (member, guest or write-in
+ *  name; null when none resolves). The reveal (#1654) reads this too. */
+export async function selectAwardWinners(
+	meetingId: string,
+): Promise<{ category: AwardCategory; name: string | null }[]> {
+	const rows = await selectAwardRows(meetingId);
+	return rows.map((r) => ({ category: r.category, name: r.name }));
+}
+
 /**
  * Load a meeting's minutes: the active-member roster each with a presence
  * status (the saved attendance row, or `null` — "unmarked" — when none exists;
@@ -547,28 +583,7 @@ export async function loadMinutes(meetingId: string): Promise<MinutesData> {
 	);
 
 	// Awards — always return all three categories, unset ones with name: null.
-	const awMember = alias(members, "aw_member");
-	const awGuest = alias(guests, "aw_guest");
-	const awRows = await db
-		.select({
-			category: meetingAwards.category,
-			memberId: meetingAwards.memberId,
-			guestId: meetingAwards.guestId,
-			writeInName: meetingAwards.writeInName,
-			// The write-in name is part of the COALESCE, not a field the callers
-			// have to know about (#582). A write-in winner has neither join row, so
-			// without it `name` comes back null and the award renders blank on the
-			// minutes, the emailed minutes, the minutes PDF and the printed awards
-			// beat — all four read this one derivation, which is why fixing it here
-			// covers them and why leaving it would have been silent on all four.
-			name: sql<
-				string | null
-			>`coalesce(${awMember.name}, ${awGuest.name}, ${meetingAwards.writeInName})`,
-		})
-		.from(meetingAwards)
-		.leftJoin(awMember, eq(awMember.id, meetingAwards.memberId))
-		.leftJoin(awGuest, eq(awGuest.id, meetingAwards.guestId))
-		.where(eq(meetingAwards.meetingId, meetingId));
+	const awRows = await selectAwardRows(meetingId);
 	const awByCategory = new Map(awRows.map((r) => [r.category, r]));
 	const awardList: MinutesAwardRow[] = AWARD_CATEGORIES.map((category) => {
 		const row = awByCategory.get(category);

@@ -539,7 +539,7 @@ export function slideLayout(
 		case "awards":
 			return page("Award Presentation", {
 				form: "numbered",
-				items: slide.categories,
+				items: slide.categories.map((c) => c.label),
 			});
 		case "guestComments":
 			// Addressed to the room rather than to named individuals (#352): the
