@@ -136,11 +136,26 @@ describe("SpeechLogDate hydration (#608)", () => {
 		const text = serverText(
 			renderToString(<SpeechLogDate value={SPEECH_AT} />),
 		);
-		// Exactly two non-breaking spaces, one per line. Empty divs would collapse
-		// to zero height and the 64px grid column would jump when the effect fills
-		// them in. Asserting the exact string also pins that BOTH slots are held,
-		// which a `toContain` would not.
-		expect(text).toBe("\u00A0\u00A0");
+		// Exactly three non-breaking spaces, one per line (day, month, year). Empty
+		// divs would collapse to zero height and the 64px grid column would jump
+		// when the effect fills them in. Asserting the exact string also pins that
+		// all three slots are held, which a `toContain` would not.
+		expect(text).toBe("\u00A0\u00A0\u00A0");
+	});
+
+	// protects=the dashboard row's third line, the year, after mount;
+	// fails_when=the year is dropped, or is read in a zone other than the
+	// viewer's (a 23:30 Dec 31 Los Angeles speech must read 2024);
+	// no_claim=the pre-mount blanks (pinned above) or the profile row.
+	it("shows the year as the third line once mounted, in the viewer's zone", () => {
+		pinIntlTo("en-US", "America/Los_Angeles");
+		const { container } = render(
+			<SpeechLogDate value={new Date("2025-01-01T07:30:00Z")} />,
+		);
+		const lines = Array.from(container.firstElementChild?.children ?? []).map(
+			(el) => el.textContent,
+		);
+		expect(lines).toEqual(["31", "DEC", "2024"]);
 	});
 
 	it("shows the viewer's own day and month once mounted", () => {
@@ -150,7 +165,7 @@ describe("SpeechLogDate hydration (#608)", () => {
 		// date the member's own calendar shows, and it is what this route rendered
 		// client-side before the change too — the POST-mount output is unchanged,
 		// only the server pass is.
-		expect(container.textContent).toBe("20AUG");
+		expect(container.textContent).toBe("20AUG2026");
 	});
 
 	// #708 pinned the locale app-wide: the zone is still the viewer's, the
@@ -158,7 +173,7 @@ describe("SpeechLogDate hydration (#608)", () => {
 	it("renders in APP_LOCALE once mounted, whatever the browser's locale", () => {
 		pinIntlTo("es-ES", "America/Los_Angeles");
 		const { container } = render(<SpeechLogDate value={SPEECH_AT} />);
-		expect(container.textContent).toBe("20AUG");
+		expect(container.textContent).toBe("20AUG2026");
 	});
 
 	it("accepts the ISO string the loader actually serializes", () => {

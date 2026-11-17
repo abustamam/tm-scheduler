@@ -3,7 +3,7 @@ import { Pencil } from "lucide-react";
 import { useState } from "react";
 import { EditSpeechSheet } from "#/components/club/edit-speech-sheet";
 import { Button } from "#/components/ui/button";
-import { formatMeetingDate } from "#/lib/format";
+import { formatArchiveDate } from "#/lib/format";
 import { speechLogHeadline } from "#/lib/speech-schedule-state";
 
 /** The speech-log row fields the editor needs (#1159): a structural subset of
@@ -59,7 +59,7 @@ export function SpeechLogEditButton({
 								label: `${speechLogHeadline({
 									speechTitle: row.speechTitle,
 									roleName: row.roleName,
-								})} · ${formatMeetingDate(row.scheduledAt, timezone)}`,
+								})} · ${formatArchiveDate(row.scheduledAt, timezone)}`,
 								speechTitle: row.speechTitle,
 								pathwayPath: row.pathwayPath,
 								projectName: row.projectName,

@@ -72,10 +72,11 @@ export function formatMeetingTimeRange(
 }
 
 /**
- * A date as its two badge lines: the day of the month and the upper-cased short
- * month, e.g. `{ day: "20", mon: "AUG" }`. The speech-log date stamp on the
- * dashboard and on a member's profile both render this; it lives here so a
- * locale change is one edit rather than two copies drifting (#708).
+ * A date as its three badge lines: the day of the month, the upper-cased short
+ * month and the year, e.g. `{ day: "20", mon: "AUG", year: "2024" }`. The
+ * speech-log date stamp on the dashboard and on a member's profile both
+ * render this; it lives here so a locale change is one edit rather than two
+ * copies drifting (#708).
  *
  * `timeZone` omitted means the RUNTIME's zone, which is why the dashboard's
  * caller renders it after mount only (`SpeechLogDate`, #608).
@@ -90,6 +91,11 @@ export function formatDayMonth(value: Date | string, timeZone?: string) {
 		mon: new Intl.DateTimeFormat(APP_LOCALE, { month: "short", timeZone })
 			.format(d)
 			.toUpperCase(),
+		// Same zone as the day, so the zone that picks the day picks the year.
+		year: new Intl.DateTimeFormat(APP_LOCALE, {
+			year: "numeric",
+			timeZone,
+		}).format(d),
 	};
 }
 
