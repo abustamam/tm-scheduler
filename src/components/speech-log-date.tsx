@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { formatDayMonth } from "#/lib/format";
 
 /**
@@ -127,5 +127,81 @@ export function EarlierDivider() {
 		<div className="border-t border-border px-5 pt-3 pb-1 text-xs text-muted-foreground">
 			Earlier
 		</div>
+	);
+}
+
+/**
+ * The id of the first undated past row, the one that sits under the "Earlier"
+ * divider (#1656). The log is already ordered with every undated row last.
+ */
+export function firstUndatedPastId(
+	rows: ReadonlyArray<
+		| { kind: "meeting" }
+		| { kind: "past"; speechId: string; deliveredYear: number | null }
+	>,
+): string | null {
+	for (const r of rows) {
+		if (r.kind === "past" && r.deliveredYear === null) return r.speechId;
+	}
+	return null;
+}
+
+/**
+ * A past speech's row in a speech log (#1656), shared by the dashboard and the
+ * member profile. `layout` carries each page's own meeting-row grid (the date
+ * column and gap), so a past row lines up with the meeting rows beside it;
+ * `showLevel` follows the same page's meeting-row subline. `edit` is the pencil,
+ * which each page gates itself.
+ */
+export function PastSpeechRow({
+	row,
+	layout,
+	showLevel,
+	showEarlierDivider,
+	edit,
+}: {
+	row: {
+		speechTitle: string | null;
+		projectName: string | null;
+		pathwayPath: string | null;
+		projectLevel: string | null;
+		deliveredYear: number | null;
+		deliveredMonth: number | null;
+	};
+	layout: "dashboard" | "profile";
+	showLevel: boolean;
+	showEarlierDivider: boolean;
+	edit: ReactNode;
+}) {
+	const project = [
+		row.projectName,
+		row.pathwayPath,
+		showLevel ? row.projectLevel : null,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	return (
+		<Fragment>
+			{showEarlierDivider ? <EarlierDivider /> : null}
+			<div
+				className={`grid items-center border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft ${
+					layout === "dashboard"
+						? "grid-cols-[64px_1fr_auto] gap-3.5"
+						: "grid-cols-[54px_1fr_auto] gap-3"
+				}`}
+			>
+				<PastSpeechDate year={row.deliveredYear} month={row.deliveredMonth} />
+				<div className="min-w-0">
+					<div className="truncate text-sm font-bold">{row.speechTitle}</div>
+					<div className="truncate text-xs text-muted-foreground">
+						{[project, "Not at a meeting"].filter(Boolean).join(" · ")}
+					</div>
+				</div>
+				<div className="flex items-center gap-1">
+					<PastBadge />
+					{edit}
+				</div>
+			</div>
+		</Fragment>
 	);
 }

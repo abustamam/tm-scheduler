@@ -8,26 +8,42 @@ export const PAST_SPEECH_TITLE_REQUIRED_MESSAGE =
 	"A past speech needs a title.";
 export const PAST_SPEECH_MONTH_NEEDS_YEAR_MESSAGE =
 	"Pick a year before a month.";
+export const PAST_SPEECH_FUTURE_MESSAGE =
+	"A past speech can't be dated in the future.";
 export const PAST_SPEECH_NOT_PAST_MESSAGE = "Not a past speech.";
+
+/** The calendar year and month (1-12) "now" falls in, in an IANA zone (UTC when none). */
+export function currentYearMonthIn(
+	now: Date,
+	timezone: string | null,
+): { year: number; month: number } {
+	const utc = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+	try {
+		const parts = new Intl.DateTimeFormat("en-CA", {
+			timeZone: timezone ?? "UTC",
+			year: "numeric",
+			month: "numeric",
+		}).formatToParts(now);
+		const year = Number(parts.find((p) => p.type === "year")?.value);
+		const month = Number(parts.find((p) => p.type === "month")?.value);
+		return Number.isInteger(year) && Number.isInteger(month)
+			? { year, month }
+			: utc;
+	} catch {
+		return utc;
+	}
+}
 
 /** The calendar year "now" falls in, in an IANA zone (UTC when none). */
 export function currentYearIn(now: Date, timezone: string | null): number {
-	try {
-		const year = new Intl.DateTimeFormat("en-CA", {
-			timeZone: timezone ?? "UTC",
-			year: "numeric",
-		}).format(now);
-		const n = Number(year);
-		return Number.isInteger(n) ? n : now.getUTCFullYear();
-	} catch {
-		return now.getUTCFullYear();
-	}
+	return currentYearMonthIn(now, timezone).year;
 }
 
 /**
  * Validate and normalize a loose delivery date. Both parts are optional; a
  * month needs a year; a year runs from 1900 to the current year in the
- * recording club's timezone (UTC when the club is gone).
+ * recording club's timezone (UTC when the club is gone), and in the current
+ * year the month may not be after the current month.
  */
 export function validatePastSpeechDate(args: {
 	year?: number | null;
@@ -44,12 +60,16 @@ export function validatePastSpeechDate(args: {
 		throw new Error("The month must be 1 to 12.");
 	}
 	if (year !== null) {
-		const max = currentYearIn(args.now, args.timezone);
+		const current = currentYearMonthIn(args.now, args.timezone);
+		const max = current.year;
 		if (!Number.isInteger(year) || year < PAST_SPEECH_MIN_YEAR) {
 			throw new Error(`The year must be ${PAST_SPEECH_MIN_YEAR} or later.`);
 		}
 		if (year > max) {
-			throw new Error("A past speech can't be dated in the future.");
+			throw new Error(PAST_SPEECH_FUTURE_MESSAGE);
+		}
+		if (year === max && month !== null && month > current.month) {
+			throw new Error(PAST_SPEECH_FUTURE_MESSAGE);
 		}
 	}
 	return { year, month };

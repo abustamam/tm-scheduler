@@ -10,7 +10,7 @@
 // deleted (SET NULL) only the Person can touch it. An archived recording club
 // refuses EVERY actor, the Person included. Edit and delete lock the speech row
 // and ask the gate again against `tx`.
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "#/db";
 import { clubs, members, people, speeches } from "#/db/schema";
 import {
@@ -33,7 +33,8 @@ import {
 } from "./slots-logic";
 
 type Tx = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
-type Conn = Pick<typeof db, "select">;
+/** The pooled client or a transaction: the one handle a step is passed. */
+type Conn = typeof db | Tx;
 
 export type PastSpeechInput = {
 	speakerDetails: SpeechInput;
@@ -56,7 +57,7 @@ async function clubTimezone(
 
 /** Validation shared by add and edit; returns the columns to write. */
 async function prepareWrite(
-	conn: DbConn,
+	conn: Conn,
 	input: PastSpeechInput,
 	recordedClubId: string | null,
 	now: Date,
@@ -69,14 +70,13 @@ async function prepareWrite(
 		timezone: await clubTimezone(conn, recordedClubId),
 	});
 	const { content } = normalizeSpeech(input.speakerDetails);
-	const values = await applyProjectDisplay(conn as Tx, content);
+	const values = await applyProjectDisplay(conn, content);
 	return {
 		...values,
 		deliveredYear: date.year,
 		deliveredMonth: date.month,
 	};
 }
-type DbConn = Conn;
 
 async function isPersonsUser(
 	conn: Conn,
@@ -117,15 +117,11 @@ export async function addPastSpeech(args: {
 
 	return db.transaction(async (tx) => {
 		await assertClubNotArchived(clubId, tx);
-		let actorMemberId: string | null;
-		if (await isPersonsUser(tx, args.actorUserId, personId)) {
-			actorMemberId =
-				(await getActiveMembership(args.actorUserId, clubId, tx))?.id ?? null;
-		} else {
+		if (!(await isPersonsUser(tx, args.actorUserId, personId))) {
 			await assertStillClubAdmin(tx, args.actorUserId, clubId);
-			actorMemberId =
-				(await getActiveMembership(args.actorUserId, clubId, tx))?.id ?? null;
 		}
+		const actorMemberId =
+			(await getActiveMembership(args.actorUserId, clubId, tx))?.id ?? null;
 		const values = await prepareWrite(
 			tx,
 			args.input,
@@ -185,34 +181,40 @@ async function readPast(conn: Conn, speechId: string, lock: boolean) {
 }
 
 /**
- * The gate for edit and delete. `tx` is given inside the transaction (the same
- * rules asked again against the locked row); null is the pooled first pass.
- * Returns the actor's active seat at the recording club, for the log.
+ * The gate for edit and delete, against `conn`: the pool on the first pass
+ * (`locked` false, which takes the full guard including impersonation), the
+ * transaction under the speech's row lock on the second (`locked` true, the
+ * same rules asked again). Returns the actor's active seat at the recording
+ * club, for the log.
  */
 async function authorize(
 	conn: Conn,
-	tx: Tx | null,
+	locked: boolean,
 	actorUserId: string,
 	row: PastRow,
 ): Promise<string | null> {
 	const { recordedClubId } = row;
-	if (recordedClubId) await assertClubNotArchived(recordedClubId, tx ?? db);
+	if (recordedClubId) await assertClubNotArchived(recordedClubId, conn);
 	const personId = row.personId as string;
-	if (await isPersonsUser(conn, actorUserId, personId)) {
-		return recordedClubId
-			? ((await getActiveMembership(actorUserId, recordedClubId, tx ?? db))
-					?.id ?? null)
-			: null;
+	if (!(await isPersonsUser(conn, actorUserId, personId))) {
+		if (!recordedClubId) throw new Error(NO_PERMISSION_MESSAGE);
+		if (locked) await assertStillClubAdmin(conn, actorUserId, recordedClubId);
+		else await requireClubRole(actorUserId, recordedClubId, ["admin"]);
 	}
-	if (!recordedClubId) throw new Error(NO_PERMISSION_MESSAGE);
-	if (tx) await assertStillClubAdmin(tx, actorUserId, recordedClubId);
-	else await requireClubRole(actorUserId, recordedClubId, ["admin"]);
-	return (
-		(await getActiveMembership(actorUserId, recordedClubId, tx ?? db))?.id ??
-		null
-	);
+	return recordedClubId
+		? ((await getActiveMembership(actorUserId, recordedClubId, conn))?.id ??
+				null)
+		: null;
 }
 
+/**
+ * One `activity_log` entry for an edit or delete, aimed at the speaker's seat
+ * at the recording club (the `member_edit` convention: target `member`). A
+ * speaker who has since left that club has no seat, so the entry then targets
+ * the club. A speech with NO recording club (it was deleted) cannot be logged:
+ * `activity_log.club_id` is NOT NULL and cascades from the club, so there is no
+ * club feed for the entry to live in.
+ */
 async function logPast(
 	tx: Tx,
 	row: PastRow,
@@ -220,14 +222,21 @@ async function logPast(
 	speechId: string,
 	change: "past_speech_edit" | "past_speech_delete",
 ) {
-	// A speech whose recording club is gone has no club feed to write to.
-	if (!row.recordedClubId) return;
+	const { recordedClubId, personId } = row;
+	if (!recordedClubId || !personId) return;
+	const [seat] = await tx
+		.select({ id: members.id })
+		.from(members)
+		.where(
+			and(eq(members.clubId, recordedClubId), eq(members.personId, personId)),
+		)
+		.limit(1);
 	await logActivity(tx, {
-		clubId: row.recordedClubId,
+		clubId: recordedClubId,
 		actorMemberId,
 		action: "member_edit",
-		targetType: "club",
-		targetId: row.recordedClubId,
+		targetType: seat ? "member" : "club",
+		targetId: seat?.id ?? recordedClubId,
 		detail: { change, speechId },
 	});
 }
@@ -239,11 +248,11 @@ export async function editPastSpeech(args: {
 	now?: Date;
 }): Promise<void> {
 	const first = await readPast(db, args.speechId, false);
-	await authorize(db, null, args.actorUserId, first);
+	await authorize(db, false, args.actorUserId, first);
 
 	await db.transaction(async (tx) => {
 		const row = await readPast(tx, args.speechId, true);
-		const actorMemberId = await authorize(tx, tx, args.actorUserId, row);
+		const actorMemberId = await authorize(tx, true, args.actorUserId, row);
 		// Full replace: every field is written, an empty optional one clears it.
 		const values = await prepareWrite(
 			tx,
@@ -264,11 +273,11 @@ export async function deletePastSpeech(args: {
 	actorUserId: string;
 }): Promise<void> {
 	const first = await readPast(db, args.speechId, false);
-	await authorize(db, null, args.actorUserId, first);
+	await authorize(db, false, args.actorUserId, first);
 
 	await db.transaction(async (tx) => {
 		const row = await readPast(tx, args.speechId, true);
-		const actorMemberId = await authorize(tx, tx, args.actorUserId, row);
+		const actorMemberId = await authorize(tx, true, args.actorUserId, row);
 		await tx.delete(speeches).where(eq(speeches.id, args.speechId));
 		await logPast(tx, row, actorMemberId, args.speechId, "past_speech_delete");
 	});

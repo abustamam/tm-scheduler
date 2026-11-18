@@ -134,6 +134,13 @@ export function EditSpeechSheet({
 					? null
 					: Number(earlierYear)
 				: Number(yearChoice);
+	// The server refuses a month after the current one in the current year (the
+	// club's timezone, which the sheet does not have), so the sheet does not offer
+	// one, by the browser's clock. A month picked under another year and left
+	// behind shows as "Not sure" and is not sent.
+	const monthLimit = pastYear === thisYear ? new Date().getMonth() + 1 : 12;
+	const shownMonth =
+		monthChoice !== "" && Number(monthChoice) <= monthLimit ? monthChoice : "";
 
 	async function removePast() {
 		const speechId = slot?.past?.speechId;
@@ -216,9 +223,7 @@ export function EditSpeechSheet({
 				const dates = {
 					deliveredYear: pastYear,
 					deliveredMonth:
-						pastYear !== null && monthChoice !== ""
-							? Number(monthChoice)
-							: null,
+						pastYear !== null && shownMonth !== "" ? Number(shownMonth) : null,
 				};
 				if (past.speechId) {
 					await editPastSpeechFn({
@@ -335,12 +340,12 @@ export function EditSpeechSheet({
 									<select
 										id="deliveredMonth"
 										className={SELECT_CLASS}
-										value={monthChoice}
+										value={shownMonth}
 										disabled={pastYear === null}
 										onChange={(e) => setMonthChoice(e.target.value)}
 									>
 										<option value="">Not sure</option>
-										{MONTH_NAMES.map((m, i) => (
+										{MONTH_NAMES.slice(0, monthLimit).map((m, i) => (
 											<option key={m} value={String(i + 1)}>
 												{m}
 											</option>

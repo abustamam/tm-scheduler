@@ -106,6 +106,35 @@ describe("validatePastSpeechDate / requirePastSpeechTitle", () => {
 			}),
 		).toThrow("future");
 	});
+	// protects=a month after this month is not a past date (#1656)
+	// fails_when=the month check is dropped, or runs in UTC not the club's zone
+	it("refuses a month after the current month in the current year only", () => {
+		const mid = new Date("2026-06-15T12:00:00Z");
+		const at = (year: number, month: number, timezone: string | null) =>
+			validatePastSpeechDate({ year, month, now: mid, timezone });
+		expect(at(2026, 6, "UTC")).toEqual({ year: 2026, month: 6 });
+		expect(() => at(2026, 7, "UTC")).toThrow("future");
+		// An earlier year is not bound by this year's month.
+		expect(at(2025, 12, "UTC")).toEqual({ year: 2025, month: 12 });
+		// 2026-06-30 23:00 UTC is already July 1 in Auckland, and still June in UTC.
+		const eom = new Date("2026-06-30T23:00:00Z");
+		expect(
+			validatePastSpeechDate({
+				year: 2026,
+				month: 7,
+				now: eom,
+				timezone: "Pacific/Auckland",
+			}).month,
+		).toBe(7);
+		expect(() =>
+			validatePastSpeechDate({
+				year: 2026,
+				month: 7,
+				now: eom,
+				timezone: null,
+			}),
+		).toThrow("future");
+	});
 	it("accepts no date at all and refuses a year before 1900", () => {
 		expect(v(null, null)).toEqual({ year: null, month: null });
 		expect(() => v(1899, null)).toThrow("1900");

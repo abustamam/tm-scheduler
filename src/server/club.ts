@@ -128,6 +128,10 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				// #681: the profile's speech log shows the newest 6 unless the page
 				// asks for all of them (`?speeches=all`).
 				allSpeeches: z.boolean().optional(),
+				// #1656: the client can render a `kind: "past"` row. A tab loaded
+				// before that deploy does not send this, and gets meeting rows only
+				// (the past query is not run), as it always did.
+				pastRows: z.boolean().optional(),
 			})
 			.parse(input),
 	)
@@ -168,6 +172,7 @@ export const getMemberProfile = createServerFn({ method: "GET" })
 				[member.id],
 				data.clubId,
 				data.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
+				{ includePast: data.pastRows === true },
 			);
 		const rolesServed = await loadRolesServed(member.id, data.clubId);
 		// The Person's unscheduled speeches (derived from slot linkage, ADR-0009 /
@@ -231,13 +236,23 @@ export const getMemberProfile = createServerFn({ method: "GET" })
  */
 export const listMySpeeches = createServerFn({ method: "GET" })
 	.validator((input: unknown) =>
-		z.object({ allSpeeches: z.boolean().optional() }).optional().parse(input),
+		z
+			.object({
+				allSpeeches: z.boolean().optional(),
+				// #1656: set by a client that can render a `kind: "past"` row. Without
+				// it (a tab loaded before that deploy, which already sends an input) the
+				// answer is meeting rows only and the past query is not run.
+				pastRows: z.boolean().optional(),
+			})
+			.optional()
+			.parse(input),
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
 		const { rows: log, truncated } = await loadMySpeechLog(
 			currentUser.id,
 			data?.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
+			{ includePast: data?.pastRows === true },
 		);
 		// Legacy shape for a pre-#681 tab: a bare array, and each row still
 		// carries `evaluatorName` (the field that render reads) so the stale

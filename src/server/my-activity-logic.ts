@@ -152,6 +152,13 @@ export async function loadSpeechLog(
 	memberIds: string[],
 	clubId: string | null,
 	limit: number | null,
+	/**
+	 * `includePast: false` leaves the past-speech query (#1656) unrun, for a
+	 * caller whose client predates `kind: "past"` rows and would throw rendering
+	 * one: its `limit` and `truncated` then count meeting rows alone, as they
+	 * always did. Defaults to true.
+	 */
+	options: { includePast?: boolean } = {},
 ): Promise<SpeechLog> {
 	if (memberIds.length === 0) return { rows: [], truncated: false };
 
@@ -201,7 +208,10 @@ export async function loadSpeechLog(
 		.orderBy(desc(meetings.scheduledAt), desc(roleSlots.id));
 
 	const fetched = limit === null ? await query : await query.limit(limit + 1);
-	const pastFetched = await loadPastSpeechRows(memberIds, clubId, limit);
+	const pastFetched =
+		options.includePast === false
+			? []
+			: await loadPastSpeechRows(memberIds, clubId, limit);
 	// Merge, newest first, then cut: each side fetched `limit + 1`, so the top
 	// `limit + 1` of the union is inside the union of the two fetches and
 	// `truncated` stays exact.
@@ -377,8 +387,9 @@ async function loadPastSpeechRows(
 export async function loadMySpeechLog(
 	userId: string,
 	limit: number | null,
+	options: { includePast?: boolean } = {},
 ): Promise<SpeechLog> {
-	return loadSpeechLog(await userMemberIds(userId), null, limit);
+	return loadSpeechLog(await userMemberIds(userId), null, limit, options);
 }
 
 /**

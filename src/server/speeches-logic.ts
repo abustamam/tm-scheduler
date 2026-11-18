@@ -70,6 +70,10 @@ export const SPEECH_NOT_IN_CLUB_MESSAGE =
 export const GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
 	"That speech belongs to a guest, not a member, so it can't be scheduled from here.";
 
+/** `setSpeechArchived` on a past speech (#1656). */
+export const PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE =
+	"A past speech is managed from the speech log, not archived here.";
+
 /** A past speech (#1656) was given outside any meeting; it is a record, not a draft. */
 export const PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
 	"That speech was given outside a meeting, so it can't be scheduled.";
@@ -219,11 +223,21 @@ export async function setSpeechArchived(
 	args: { speechId: string; clubId: string; archived: boolean },
 ): Promise<void> {
 	const [speech] = await conn
-		.select({ personId: speeches.personId, guestId: speeches.guestId })
+		.select({
+			personId: speeches.personId,
+			guestId: speeches.guestId,
+			deliveredOffSchedule: speeches.deliveredOffSchedule,
+		})
 		.from(speeches)
 		.where(eq(speeches.id, args.speechId))
 		.limit(1);
 	if (!speech) throw new Error("Speech not found.");
+	// A past speech (#1656) belongs to the club that recorded it and to its
+	// speaker; it is managed through `editPastSpeech` / `deletePastSpeech`, so
+	// no other club's member may flip its archived flag here.
+	if (speech.deliveredOffSchedule) {
+		throw new Error(PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE);
+	}
 
 	// Exactly one owner (#1046). A guest's speech belongs to the club the guest
 	// row does; a Person's speech to any club the Person is a member of.

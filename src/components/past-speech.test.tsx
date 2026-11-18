@@ -97,6 +97,37 @@ describe("the past-speech sheet", () => {
 		await userEvent.selectOptions(screen.getByLabelText(/Year \(/), "2023");
 		expect(month.disabled).toBe(false);
 	});
+	// protects=the sheet does not offer a month the server refuses (#1656)
+	// fails_when=Month lists months after the current one in the current year
+	it("lists only months up to this month in the current year, all twelve before it", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
+		try {
+			render(
+				<EditSpeechSheet
+					writer="past-speech"
+					slot={slot}
+					onOpenChange={() => {}}
+					onSaved={() => {}}
+				/>,
+			);
+			const month = screen.getByLabelText(/Month/) as HTMLSelectElement;
+			const year = screen.getByLabelText(/Year \(/);
+			await userEvent.selectOptions(year, "2026");
+			// "Not sure" plus Jan, Feb, Mar.
+			expect(month.options).toHaveLength(4);
+			await userEvent.selectOptions(month, "3");
+			await userEvent.selectOptions(year, "2025");
+			expect(month.options).toHaveLength(13);
+			// A month left over from another year that the current year refuses is
+			// dropped and not sent.
+			await userEvent.selectOptions(month, "11");
+			await userEvent.selectOptions(year, "2026");
+			expect(month.value).toBe("");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	// fails_when=Delete skips its inline confirmation
 	it("offers Delete only on an existing past speech, confirmed inline", async () => {
 		const { rerender } = render(

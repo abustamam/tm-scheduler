@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { BookOpen, CalendarDays } from "lucide-react";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { DashboardGreeting } from "#/components/dashboard-greeting";
 import {
@@ -20,9 +20,8 @@ import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resour
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
 import {
-	EarlierDivider,
-	PastBadge,
-	PastSpeechDate,
+	firstUndatedPastId,
+	PastSpeechRow,
 	SpeechLogDate,
 } from "#/components/speech-log-date";
 import { SpeechLogEditButton } from "#/components/speech-log-edit";
@@ -96,7 +95,9 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
 			// gets the legacy bare array (see `listMySpeeches`).
-			listMySpeeches({ data: { allSpeeches: deps.allSpeeches } }),
+			listMySpeeches({
+				data: { allSpeeches: deps.allSpeeches, pastRows: true },
+			}),
 			getMyPathways(),
 			getMyPathEnrollments(),
 			listPathwayOptions(),
@@ -212,13 +213,7 @@ function Dashboard() {
 	} = Route.useLoaderData();
 	const router = useRouter();
 	// The first undated past row sits under an "Earlier" divider (#1656).
-	let firstUndatedId: string | null = null;
-	for (const r of speeches) {
-		if (r.kind === "past" && r.deliveredYear === null) {
-			firstUndatedId = r.speechId;
-			break;
-		}
-	}
+	const firstUndatedId = firstUndatedPastId(speeches);
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
 	// The server fns return the fresh list, but the Pathways panel above is
@@ -349,36 +344,14 @@ function Dashboard() {
 							speeches.map((l) => {
 								if (l.kind === "past") {
 									return (
-										<Fragment key={l.speechId}>
-											{l.speechId === firstUndatedId ? (
-												<EarlierDivider />
-											) : null}
-											<div className="grid grid-cols-[64px_1fr_auto] items-center gap-3.5 border-t border-border px-5 py-3 transition-colors hover:bg-surface-soft">
-												<PastSpeechDate
-													year={l.deliveredYear}
-													month={l.deliveredMonth}
-												/>
-												<div className="min-w-0">
-													<div className="truncate text-sm font-bold">
-														{l.speechTitle}
-													</div>
-													<div className="truncate text-xs text-muted-foreground">
-														{[
-															[l.projectName, l.pathwayPath]
-																.filter(Boolean)
-																.join(" · "),
-															"Not at a meeting",
-														]
-															.filter(Boolean)
-															.join(" · ")}
-													</div>
-												</div>
-												<div className="flex items-center gap-1">
-													<PastBadge />
-													<SpeechLogEditButton row={l} />
-												</div>
-											</div>
-										</Fragment>
+										<PastSpeechRow
+											key={l.speechId}
+											row={l}
+											layout="dashboard"
+											showLevel={false}
+											showEarlierDivider={l.speechId === firstUndatedId}
+											edit={<SpeechLogEditButton row={l} />}
+										/>
 									);
 								}
 								const state = speechScheduleState({

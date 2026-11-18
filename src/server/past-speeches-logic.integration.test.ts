@@ -6,7 +6,9 @@
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	activityLog,
 	clubs,
+	guests,
 	meetings,
 	members,
 	roleDefinitions,
@@ -32,9 +34,12 @@ const { addPastSpeech, editPastSpeech, deletePastSpeech } = await import(
 	"./past-speeches-logic"
 );
 const { loadSpeechLog } = await import("./my-activity-logic");
-const { listUnscheduledSpeeches, attachSpeechToOpenSlot } = await import(
-	"./speeches-logic"
-);
+const {
+	listUnscheduledSpeeches,
+	attachSpeechToOpenSlot,
+	setSpeechArchived,
+	PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE,
+} = await import("./speeches-logic");
 
 const input = (over: Record<string, unknown> = {}) => ({
 	speakerDetails: { speechTitle: "Ice Breaker" },
@@ -59,6 +64,21 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 	async function row(id: string) {
 		const [r] = await testDb.select().from(speeches).where(eq(speeches.id, id));
 		return r;
+	}
+	/** The speaker (a's roster member) is also a member of club B. */
+	async function joinB() {
+		const [mb] = await testDb
+			.insert(members)
+			.values({
+				clubId: b.clubId,
+				personId: a.personId,
+				name: "Member User",
+				clubRole: "member",
+				status: "active",
+			})
+			.returning({ id: members.id });
+		if (!mb) throw new Error("member of B");
+		return mb.id;
 	}
 	const add = (actor: string, over: Record<string, unknown> = {}) =>
 		addPastSpeech({
@@ -114,6 +134,8 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 		// protects=edit/delete authority follows the RECORDING club
 		// fails_when=the gate falls back to any club the person belongs to
 		it("edit and delete: speaker and recording-club officer pass; another club's officer and a plain member are refused", async () => {
+			// AC6: the speaker is a member of club B too, and B's officer is still refused.
+			await joinB();
 			const { speechId } = await add(a.adminUserId);
 			await expect(
 				editPastSpeech({
@@ -196,6 +218,82 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 		});
 	});
 
+	describe("archive toggle", () => {
+		// protects=a past speech is not archivable from any club's surface (#1656)
+		// fails_when=setSpeechArchived accepts an off-schedule speech, so a member
+		//   of any club the person belongs to bypasses the recording-club gate
+		// no_claim=archiving a meeting speech (speeches.integration.test.ts)
+		it("refuses a past speech for the recording club's and another club's member", async () => {
+			await joinB();
+			const { speechId } = await add(a.adminUserId);
+			for (const clubId of [a.clubId, b.clubId]) {
+				await expect(
+					setSpeechArchived(testDb, { speechId, clubId, archived: true }),
+				).rejects.toThrow(PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE);
+			}
+			expect((await row(speechId))?.archived).toBe(false);
+		});
+	});
+
+	describe("activity log", () => {
+		async function logFor(clubId: string, speechId: string) {
+			const rows = await testDb
+				.select()
+				.from(activityLog)
+				.where(eq(activityLog.clubId, clubId));
+			return rows.filter(
+				(r) =>
+					(r.detail as { speechId?: string } | null)?.speechId === speechId,
+			);
+		}
+		// protects=one member_edit entry per write, same target type (spec: log one
+		//   activity_log entry per write)
+		// fails_when=a write skips its entry, or add and edit/delete disagree on target
+		it("logs add, edit and delete as member_edit on the speaker's seat", async () => {
+			const { speechId } = await add(a.adminUserId);
+			await editPastSpeech({
+				speechId,
+				actorUserId: a.adminUserId,
+				input: input(),
+			});
+			await deletePastSpeech({ speechId, actorUserId: a.adminUserId });
+			const rows = await logFor(a.clubId, speechId);
+			const byChange = new Map(
+				rows.map((r) => [(r.detail as { change: string }).change, r]),
+			);
+			expect([...byChange.keys()].sort()).toEqual([
+				"past_speech_add",
+				"past_speech_delete",
+				"past_speech_edit",
+			]);
+			for (const r of rows) {
+				expect(r).toMatchObject({
+					action: "member_edit",
+					targetType: "member",
+					targetId: a.memberId,
+					actorMemberId: a.adminMemberId,
+				});
+			}
+		});
+		// no_claim=a club-less speech: activity_log.club_id is NOT NULL, so no entry exists
+		it("targets the club when the speaker has left it, and writes nothing once the club is gone", async () => {
+			const { speechId } = await add(a.adminUserId);
+			await testDb.delete(members).where(eq(members.id, a.memberId));
+			await editPastSpeech({
+				speechId,
+				actorUserId: a.adminUserId,
+				input: input(),
+			});
+			const edit = (await logFor(a.clubId, speechId)).find(
+				(r) => (r.detail as { change: string }).change === "past_speech_edit",
+			);
+			expect(edit).toMatchObject({
+				targetType: "club",
+				targetId: a.clubId,
+			});
+		});
+	});
+
 	describe("validation", () => {
 		// fails_when=any of the three is accepted
 		it("refuses a month without a year, a future year and a blank title", async () => {
@@ -237,22 +335,13 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 		// fails_when=the recorded_club_id filter is dropped
 		it("filters by recording club on the profile, not on the dashboard", async () => {
 			// The same person is also a member of club B.
-			const [mb] = await testDb
-				.insert(members)
-				.values({
-					clubId: b.clubId,
-					personId: a.personId,
-					name: "Member User",
-					clubRole: "member",
-					status: "active",
-				})
-				.returning({ id: members.id });
+			const mbId = await joinB();
 			const { speechId } = await add(a.adminUserId);
 			const inA = await loadSpeechLog([a.memberId], a.clubId, 6);
 			expect(inA.rows.map((r) => r.kind)).toEqual(["past"]);
-			const inB = await loadSpeechLog([mb!.id], b.clubId, 6);
+			const inB = await loadSpeechLog([mbId], b.clubId, 6);
 			expect(inB.rows).toEqual([]);
-			const all = await loadSpeechLog([a.memberId, mb!.id], null, 6);
+			const all = await loadSpeechLog([a.memberId, mbId], null, 6);
 			expect(
 				all.rows.map((r) => (r.kind === "past" ? r.speechId : "")),
 			).toEqual([speechId]);
@@ -261,7 +350,7 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 				.update(clubs)
 				.set({ archivedAt: new Date() })
 				.where(eq(clubs.id, a.clubId));
-			expect((await loadSpeechLog([a.memberId, mb!.id], null, 6)).rows).toEqual(
+			expect((await loadSpeechLog([a.memberId, mbId], null, 6)).rows).toEqual(
 				[],
 			);
 			await testDb
@@ -270,7 +359,7 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 				.where(eq(clubs.id, a.clubId));
 			// A deleted recording club keeps it on the dashboard.
 			await testDb.delete(clubs).where(eq(clubs.id, a.clubId));
-			const after = await loadSpeechLog([mb!.id], null, 6);
+			const after = await loadSpeechLog([mbId], null, 6);
 			expect(after.rows).toHaveLength(1);
 			a = { ...a, clubId: b.clubId };
 		});
@@ -472,20 +561,57 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 				sql`insert into speeches (person_id, title, delivered_off_schedule, delivered_year, delivered_month, recorded_club_id)
 				values (${a.personId}, 'x', ${values.off ?? true}, ${values.year ?? null}, ${values.month ?? null}, ${values.club ?? null})`,
 			);
-		// fails_when=a check constraint is dropped from the migration
-		it("rejects each invalid shape", async () => {
-			await expect(bad({ month: 3 })).rejects.toThrow();
-			await expect(bad({ year: 2020, month: 13 })).rejects.toThrow();
-			await expect(bad({ year: 1899 })).rejects.toThrow();
-			await expect(bad({ year: 2101 })).rejects.toThrow();
-			await expect(bad({ off: false, year: 2020 })).rejects.toThrow();
-			await expect(bad({ off: false, club: a.clubId })).rejects.toThrow();
-			await expect(
-				testDb.execute(
-					sql`insert into speeches (title, delivered_off_schedule) values ('x', true)`,
-				),
-			).rejects.toThrow();
+		/** The name of the constraint Postgres says the insert violated. */
+		async function violated(p: Promise<unknown>): Promise<string | undefined> {
+			try {
+				await p;
+			} catch (err) {
+				for (let e: unknown = err, i = 0; e && i < 4; i++) {
+					const c = (e as { constraint?: unknown }).constraint;
+					if (typeof c === "string") return c;
+					e = (e as { cause?: unknown }).cause;
+				}
+			}
+			return undefined;
+		}
+		// protects=each speeches check constraint, by name
+		// fails_when=a check is dropped from the migration, or another check
+		//   rejects the row first (a bare toThrow could not tell)
+		// no_claim=the app-level validation, which has its own tests
+		it("rejects each invalid shape by the constraint that owns it", async () => {
+			const delivered = "speeches_delivered_date_valid";
+			const onlyOff = "speeches_delivered_date_only_off_schedule";
+			expect(await violated(bad({ month: 3 }))).toBe(delivered);
+			expect(await violated(bad({ year: 2020, month: 13 }))).toBe(delivered);
+			expect(await violated(bad({ year: 1899 }))).toBe(delivered);
+			expect(await violated(bad({ year: 2101 }))).toBe(delivered);
+			expect(await violated(bad({ off: false, year: 2020 }))).toBe(onlyOff);
+			expect(await violated(bad({ off: false, club: a.clubId }))).toBe(onlyOff);
 			await expect(bad({ year: 2020, month: 5 })).resolves.toBeDefined();
+		});
+		// A guest-owned row satisfies speeches_single_owner, so only the
+		// member-only check can reject it.
+		it("rejects an off-schedule speech owned by a guest, by speeches_off_schedule_member_only", async () => {
+			const [guest] = await testDb
+				.insert(guests)
+				.values({ clubId: a.clubId, name: "Guest G", personId: a.personId })
+				.returning({ id: guests.id });
+			expect(
+				await violated(
+					testDb.execute(
+						sql`insert into speeches (guest_id, title, delivered_off_schedule) values (${guest?.id}, 'x', true)`,
+					),
+				),
+			).toBe("speeches_off_schedule_member_only");
+		});
+		it("still rejects a speech with no owner, by speeches_single_owner", async () => {
+			expect(
+				await violated(
+					testDb.execute(
+						sql`insert into speeches (title, delivered_off_schedule) values ('x', false)`,
+					),
+				),
+			).toBe("speeches_single_owner");
 		});
 	});
 });
