@@ -823,7 +823,10 @@ async function keptGuestOnly(
  * membership anywhere. The Person-owned tables, and which of them can name a
  * club:
  * - `speeches`: via a surviving `role_slots.speech_id` (a speech given at
- *   another club's meeting);
+ *   another club's meeting), or a past speech (#1656, `delivered_off_schedule`)
+ *   still naming another club in `recorded_club_id`. A past speech this club
+ *   recorded was SET NULL with its row, and goes with the Person as a speech
+ *   given at this club's meeting does;
  * - `path_level_progress.credited_club_id`: a level credited to another club;
  * - `project_completion_marks.marked_by_member_id`: a project another club's
  *   officer signed off;
@@ -834,7 +837,7 @@ async function personsWithOtherClubHistory(
 	tx: Tx,
 	personIds: string[],
 ): Promise<string[]> {
-	const spoke = await tx
+	const spokeAtMeeting = await tx
 		.selectDistinct({ personId: speeches.personId })
 		.from(speeches)
 		.innerJoin(roleSlots, eq(roleSlots.speechId, speeches.id))
@@ -842,6 +845,22 @@ async function personsWithOtherClubHistory(
 		.where(
 			and(isNotNull(speeches.personId), inArray(speeches.personId, personIds)),
 		);
+	// A past speech (#1656) has no slot. Another club's record of it still names
+	// that club here, because the deleted club's own were SET NULL when its row
+	// went; a NULL one is this club's, and goes with the Person like a speech
+	// given at this club's meeting.
+	const spokeOffSchedule = await tx
+		.selectDistinct({ personId: speeches.personId })
+		.from(speeches)
+		.where(
+			and(
+				eq(speeches.deliveredOffSchedule, true),
+				isNotNull(speeches.recordedClubId),
+				isNotNull(speeches.personId),
+				inArray(speeches.personId, personIds),
+			),
+		);
+	const spoke = [...spokeAtMeeting, ...spokeOffSchedule];
 	const credited = await tx
 		.selectDistinct({ personId: pathEnrollments.personId })
 		.from(pathLevelProgress)

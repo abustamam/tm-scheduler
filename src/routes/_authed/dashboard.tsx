@@ -19,7 +19,11 @@ import { PageContainer } from "#/components/page-container";
 import { EvaluationResourceLinks } from "#/components/pathways/evaluation-resource-link";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
-import { SpeechLogDate } from "#/components/speech-log-date";
+import {
+	firstUndatedPastId,
+	PastSpeechRow,
+	SpeechLogDate,
+} from "#/components/speech-log-date";
 import { SpeechLogEditButton } from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { effectiveAdminClubFor } from "#/lib/effective-admin";
@@ -91,7 +95,9 @@ export const Route = createFileRoute("/_authed/dashboard")({
 			listMyCommitments(),
 			// Always WITH an input: no input is the pre-#681 stale-tab call, which
 			// gets the legacy bare array (see `listMySpeeches`).
-			listMySpeeches({ data: { allSpeeches: deps.allSpeeches } }),
+			listMySpeeches({
+				data: { allSpeeches: deps.allSpeeches, pastRows: true },
+			}),
 			getMyPathways(),
 			getMyPathEnrollments(),
 			listPathwayOptions(),
@@ -206,6 +212,8 @@ function Dashboard() {
 		milestones,
 	} = Route.useLoaderData();
 	const router = useRouter();
+	// The first undated past row sits under an "Earlier" divider (#1656).
+	const firstUndatedId = firstUndatedPastId(speeches);
 	const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
 
 	// The server fns return the fresh list, but the Pathways panel above is
@@ -334,6 +342,18 @@ function Dashboard() {
 							</Link>
 						) : (
 							speeches.map((l) => {
+								if (l.kind === "past") {
+									return (
+										<PastSpeechRow
+											key={l.speechId}
+											row={l}
+											layout="dashboard"
+											showLevel={false}
+											showEarlierDivider={l.speechId === firstUndatedId}
+											edit={<SpeechLogEditButton row={l} />}
+										/>
+									);
+								}
 								const state = speechScheduleState({
 									scheduledAt: l.scheduledAt,
 									now,

@@ -601,6 +601,7 @@ export async function scheduleSpeechRequest(
 					and(
 						eq(speeches.id, request.speechId),
 						eq(speeches.personId, owner.personId),
+						eq(speeches.deliveredOffSchedule, false),
 						notExists(
 							tx
 								.select({ one: sql`1` })

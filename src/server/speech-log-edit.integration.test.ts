@@ -637,7 +637,9 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			});
 
 			const { rows } = await loadSpeechLog([seed.memberId], seed.clubId, null);
-			expect(rows.find((r) => r.slotId === slotId)).toMatchObject({
+			expect(
+				rows.find((r) => r.kind === "meeting" && r.slotId === slotId),
+			).toMatchObject({
 				memberId: seed.memberId,
 				introduction: null,
 				projectId,
@@ -889,7 +891,10 @@ describe.skipIf(!hasTestDb)("edit a speech from the speech log (#1159)", () => {
 			});
 			expect(await storedIntroduction(speechId)).toBe("Hello");
 			const { rows } = await loadSpeechLog([seed.memberId], seed.clubId, null);
-			expect(rows.find((r) => r.slotId === slotId)?.introduction).toBe("Hello");
+			expect(
+				rows.find((r) => r.kind === "meeting" && r.slotId === slotId)
+					?.introduction,
+			).toBe("Hello");
 
 			// The sheet prefills and resubmits the stored value: it is kept.
 			await updateSpeakerDetails({

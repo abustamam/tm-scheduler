@@ -547,6 +547,9 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("speeches", "archiveSpeech", "member", { gap: true }),
 	row("speeches", "rescheduleSpeech", "member", { gap: true }),
 	row("speeches", "editSpeechFromLog", "self", { gap: true }),
+	row("speeches", "addPastSpeechFn", "self", { gap: true }),
+	row("speeches", "editPastSpeechFn", "self", { gap: true }),
+	row("speeches", "deletePastSpeechFn", "self", { gap: true }),
 	row("oauth-grants", "disconnectConnectedApp", "self", {
 		notOnConnector: {
 			category: "connector management",

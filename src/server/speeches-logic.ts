@@ -70,6 +70,14 @@ export const SPEECH_NOT_IN_CLUB_MESSAGE =
 export const GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
 	"That speech belongs to a guest, not a member, so it can't be scheduled from here.";
 
+/** `setSpeechArchived` on a past speech (#1656). */
+export const PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE =
+	"A past speech is managed from the speech log, not archived here.";
+
+/** A past speech (#1656) was given outside any meeting; it is a record, not a draft. */
+export const PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE =
+	"That speech was given outside a meeting, so it can't be scheduled.";
+
 /** The speech is still on a lineup in another club; this club's slot cannot take it. */
 export const SPEECH_SCHEDULED_ELSEWHERE_MESSAGE =
 	"That speech is scheduled in another club.";
@@ -111,7 +119,13 @@ export async function listUnscheduledSpeeches(
 			),
 		);
 
-	const conditions = [notExists(scheduled), isNotNull(speeches.personId)];
+	// A past speech (#1656) was given outside any meeting and is never offered
+	// for scheduling.
+	const conditions = [
+		notExists(scheduled),
+		isNotNull(speeches.personId),
+		eq(speeches.deliveredOffSchedule, false),
+	];
 	if (!filter.includeArchived) {
 		conditions.push(eq(speeches.archived, false));
 	}
@@ -209,11 +223,21 @@ export async function setSpeechArchived(
 	args: { speechId: string; clubId: string; archived: boolean },
 ): Promise<void> {
 	const [speech] = await conn
-		.select({ personId: speeches.personId, guestId: speeches.guestId })
+		.select({
+			personId: speeches.personId,
+			guestId: speeches.guestId,
+			deliveredOffSchedule: speeches.deliveredOffSchedule,
+		})
 		.from(speeches)
 		.where(eq(speeches.id, args.speechId))
 		.limit(1);
 	if (!speech) throw new Error("Speech not found.");
+	// A past speech (#1656) belongs to the club that recorded it and to its
+	// speaker; it is managed through `editPastSpeech` / `deletePastSpeech`, so
+	// no other club's member may flip its archived flag here.
+	if (speech.deliveredOffSchedule) {
+		throw new Error(PAST_SPEECH_NOT_ARCHIVABLE_MESSAGE);
+	}
 
 	// Exactly one owner (#1046). A guest's speech belongs to the club the guest
 	// row does; a Person's speech to any club the Person is a member of.
@@ -267,11 +291,17 @@ export async function attachSpeechToOpenSlot(
 	args: { speechId: string; slotId: string; actorMemberId: string | null },
 ): Promise<{ clubId: string; assignedMemberId: string }> {
 	const [speech] = await conn
-		.select({ id: speeches.id, personId: speeches.personId })
+		.select({
+			id: speeches.id,
+			personId: speeches.personId,
+			deliveredOffSchedule: speeches.deliveredOffSchedule,
+		})
 		.from(speeches)
 		.where(eq(speeches.id, args.speechId))
 		.limit(1);
 	if (!speech) throw new Error("Speech not found.");
+	if (speech.deliveredOffSchedule)
+		throw new Error(PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE);
 	if (speech.personId === null) {
 		throw new Error(GUEST_SPEECH_NOT_SCHEDULABLE_MESSAGE);
 	}

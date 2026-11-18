@@ -340,6 +340,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	it("speech log row carries every rendered field", async () => {
 		const log = (await loadMySpeechLog(userId, 6)).rows;
 		expect(log[0]).toEqual({
+			kind: "meeting",
 			slotId: inA.speechSlotId,
 			memberId: inA.memberId,
 			scheduledAt: inA.speechAt,
@@ -472,7 +473,9 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 		// instead — then agreement and correctness are the same assertion.
 		const expected = [inA.speechSlotId, inB.speechSlotId];
 		for (const run of runs) {
-			expect(run.map((r) => r.slotId)).toEqual(expected);
+			expect(
+				run.flatMap((r) => (r.kind === "meeting" ? [r.slotId] : [])),
+			).toEqual(expected);
 		}
 	});
 
@@ -1013,7 +1016,11 @@ describe.skipIf(!hasTestDb)("speech log evaluators (#681)", () => {
 	}
 
 	async function log(limit: number | null) {
-		return loadSpeechLog([club.memberId], club.clubId, limit);
+		const out = await loadSpeechLog([club.memberId], club.clubId, limit);
+		return {
+			...out,
+			rows: out.rows.flatMap((r) => (r.kind === "meeting" ? [r] : [])),
+		};
 	}
 
 	it("returns a guest evaluator, flagged as a guest", async () => {

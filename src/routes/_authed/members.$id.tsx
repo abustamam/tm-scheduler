@@ -24,7 +24,14 @@ import {
 import { PageContainer } from "#/components/page-container";
 import { PathEnrollmentManager } from "#/components/pathways/path-enrollment-manager";
 import { PathwaysProgress } from "#/components/pathways/pathways-progress";
-import { SpeechLogEditButton } from "#/components/speech-log-edit";
+import {
+	firstUndatedPastId,
+	PastSpeechRow,
+} from "#/components/speech-log-date";
+import {
+	AddPastSpeechButton,
+	SpeechLogEditButton,
+} from "#/components/speech-log-edit";
 import { SpeechLogToggle } from "#/components/speech-log-toggle";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
@@ -154,6 +161,7 @@ export const Route = createFileRoute("/_authed/members/$id")({
 					clubId,
 					memberId: params.id,
 					allSpeeches: deps.allSpeeches,
+					pastRows: true,
 				},
 			}),
 			getMemberPathways({ data: { clubId, memberId: params.id } }),
@@ -290,6 +298,9 @@ function MemberDetail() {
 		officerPositions,
 	});
 
+	// The first undated past row sits under an "Earlier" divider (#1656).
+	const firstUndatedId = firstUndatedPastId(speechLog);
+
 	// The speech log's edit pencil (#1159): an admin or officer of this club, or
 	// the speaker. A prediction; `applySpeechLogEdit` is the gate.
 	const showSpeechEdit = mayShowSpeechLogEdit({
@@ -405,6 +416,20 @@ function MemberDetail() {
 						</p>
 					) : (
 						speechLog.map((l) => {
+							if (l.kind === "past") {
+								return (
+									<PastSpeechRow
+										key={l.speechId}
+										row={l}
+										layout="profile"
+										showLevel
+										showEarlierDivider={l.speechId === firstUndatedId}
+										edit={
+											showSpeechEdit ? <SpeechLogEditButton row={l} /> : null
+										}
+									/>
+								);
+							}
 							const { day, mon, year } = formatDayMonth(
 								l.scheduledAt,
 								timezone,
@@ -463,6 +488,14 @@ function MemberDetail() {
 							);
 						})
 					)}
+					{showSpeechEdit && member ? (
+						<div className="border-t border-border px-5 py-2.5">
+							<AddPastSpeechButton
+								memberId={member.id}
+								memberName={member.name}
+							/>
+						</div>
+					) : null}
 					<SpeechLogToggle
 						truncated={speechLogTruncated}
 						allSpeeches={allSpeeches}
