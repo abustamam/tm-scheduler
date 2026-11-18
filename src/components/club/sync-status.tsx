@@ -1,7 +1,8 @@
-// The offline write-queue's sync indicator, shared by the two surfaces that
-// write through `useOfflineMinutes` (#176): the Minutes card, which queues its
-// own Table Topics / awards / action-item edits, and the attendance panel's ROLL
-// mode, which since PR 3 is the ONLY place attendance is recorded.
+// The offline write-queue's sync indicator, shared by every surface that
+// writes through `useOfflineMinutes` (#176): the Minutes card, which queues its
+// own Table Topics / awards / action-item edits, the attendance panel's ROLL
+// mode, which since PR 3 is the ONLY place attendance is recorded, and the
+// Roles tab.
 //
 // It lived inside `meeting-minutes.tsx` until the panel absorbed roll call, and
 // leaving it there was the bug: an officer took roll offline on the panel, every
@@ -188,7 +189,11 @@ function SyncStatusMain({
 		return (
 			<output className="flex items-center gap-2 text-muted-foreground text-sm">
 				<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-				Syncing {queueCount} change{queueCount === 1 ? "" : "s"}…
+				{/* The queue empties op by op BEFORE the post-drain refresh finishes, so
+				    a live count reaches 0 while `draining` is still true (#1653). */}
+				{queueCount > 0
+					? `Syncing ${queueCount} change${queueCount === 1 ? "" : "s"}…`
+					: "Syncing…"}
 			</output>
 		);
 	}
