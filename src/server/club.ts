@@ -235,7 +235,7 @@ export const listMySpeeches = createServerFn({ method: "GET" })
 	)
 	.handler(async ({ data }) => {
 		const currentUser = await requireUser();
-		const { rows, truncated } = await loadMySpeechLog(
+		const { rows: log, truncated } = await loadMySpeechLog(
 			currentUser.id,
 			data?.allSpeeches ? null : SPEECH_LOG_DEFAULT_LIMIT,
 		);
@@ -245,11 +245,11 @@ export const listMySpeeches = createServerFn({ method: "GET" })
 		// A past speech (#1656) has no slot and no date a pre-#681 tab could render;
 		// that tab reads `scheduledAt`, so it gets the meeting rows only.
 		if (data === undefined) {
-			return rows.flatMap((r) =>
-				r.kind === "meeting"
-					? [{ ...r, evaluatorName: speechLogEvaluatorNames(r.evaluators) }]
-					: [],
-			);
+			const rows = log.flatMap((r) => (r.kind === "meeting" ? [r] : []));
+			return rows.map((r) => ({
+				...r,
+				evaluatorName: speechLogEvaluatorNames(r.evaluators),
+			}));
 		}
-		return { speeches: rows, speechLogTruncated: truncated };
+		return { speeches: log, speechLogTruncated: truncated };
 	});

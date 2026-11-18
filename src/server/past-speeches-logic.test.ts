@@ -319,6 +319,68 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 		});
 	});
 
+	describe("merge order in the real log", () => {
+		// protects=AC1/AC2: a month-dated past speech lands between the meeting
+		//   speeches around it, a year-only one at Jan 1, an undated one last
+		// fails_when=past rows are appended instead of merged by their loose date
+		// no_claim=limit/truncated (see the limit test below)
+		it("puts MAR 2023 between 2023-04 and 2023-02, year-only below the year's meetings, undated last", async () => {
+			const [def] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: a.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			const meetingOn = async (at: Date) => {
+				const [m] = await testDb
+					.insert(meetings)
+					.values({ clubId: a.clubId, scheduledAt: at, status: "completed" })
+					.returning({ id: meetings.id });
+				await testDb.insert(roleSlots).values({
+					meetingId: m!.id,
+					roleDefinitionId: def!.id,
+					status: "confirmed",
+					assignedMemberId: a.memberId,
+				});
+			};
+			await meetingOn(new Date(Date.UTC(2023, 3, 15)));
+			await meetingOn(new Date(Date.UTC(2023, 1, 15)));
+			await meetingOn(new Date(Date.UTC(2022, 5, 15)));
+			const mar = await add(a.adminUserId);
+			const yearOnly = await add(a.adminUserId, {
+				deliveredYear: 2022,
+				deliveredMonth: null,
+			});
+			const undated = await add(a.adminUserId, {
+				deliveredYear: null,
+				deliveredMonth: null,
+			});
+			const { rows } = await loadSpeechLog([a.memberId], a.clubId, null);
+			const shape = rows.map((r) =>
+				r.kind === "meeting"
+					? `m:${r.scheduledAt.toISOString().slice(0, 7)}`
+					: r.speechId === mar.speechId
+						? "past:mar"
+						: r.speechId === yearOnly.speechId
+							? "past:year"
+							: r.speechId === undated.speechId
+								? "past:none"
+								: "?",
+			);
+			expect(shape).toEqual([
+				"m:2023-04",
+				"past:mar",
+				"m:2023-02",
+				"m:2022-06",
+				"past:year",
+				"past:none",
+			]);
+		});
+	});
+
 	describe("never schedulable", () => {
 		// fails_when=the off-schedule filter is dropped from the unscheduled list
 		it("is absent from the unscheduled list and refused by the slot-attach writer", async () => {
