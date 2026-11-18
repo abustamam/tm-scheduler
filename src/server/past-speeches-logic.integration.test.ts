@@ -276,7 +276,7 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 			}
 		});
 		// no_claim=a club-less speech: activity_log.club_id is NOT NULL, so no entry exists
-		it("targets the club when the speaker has left it, and writes nothing once the club is gone", async () => {
+		it("targets the club when the speaker's seat row no longer exists", async () => {
 			const { speechId } = await add(a.adminUserId);
 			await testDb.delete(members).where(eq(members.id, a.memberId));
 			await editPastSpeech({

@@ -128,6 +128,69 @@ describe("the past-speech sheet", () => {
 			vi.useRealTimers();
 		}
 	});
+	// protects=an edit never erases a stored month the browser clock thinks is in the future (#1656)
+	// fails_when=the Month select hides the stored month, or a save sends null for it
+	// no_claim=the server's own timezone check
+	it("keeps a stored month after the browser's current month and sends it unchanged", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-11-30T23:30:00Z"));
+		try {
+			render(
+				<EditSpeechSheet
+					writer="past-speech"
+					slot={{
+						...slot,
+						id: "s1",
+						past: {
+							speechId: "sp1",
+							memberId: "m1",
+							deliveredYear: 2026,
+							deliveredMonth: 12,
+						},
+					}}
+					onOpenChange={() => {}}
+					onSaved={() => {}}
+				/>,
+			);
+			const month = screen.getByLabelText(/Month/) as HTMLSelectElement;
+			expect(month.value).toBe("12");
+			await userEvent.click(screen.getByRole("button", { name: /save/i }));
+			await vi.waitFor(() =>
+				expect(server.editPastSpeechFn).toHaveBeenCalledTimes(1),
+			);
+			expect(server.editPastSpeechFn).toHaveBeenCalledWith({
+				data: expect.objectContaining({
+					deliveredYear: 2026,
+					deliveredMonth: 12,
+				}),
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	// protects=a NEW speech is not offered a month after the current one in the current year
+	// fails_when=the offered list ignores the current month
+	// no_claim=stored months (see the test above)
+	it("offers no month after the current one for a new speech in the current year", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-11-30T23:30:00Z"));
+		try {
+			render(
+				<EditSpeechSheet
+					writer="past-speech"
+					slot={slot}
+					onOpenChange={() => {}}
+					onSaved={() => {}}
+				/>,
+			);
+			await userEvent.selectOptions(screen.getByLabelText(/Year \(/), "2026");
+			const month = screen.getByLabelText(/Month/) as HTMLSelectElement;
+			// "Not sure" plus Jan..Nov.
+			expect(month.options).toHaveLength(12);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	// fails_when=Delete skips its inline confirmation
 	it("offers Delete only on an existing past speech, confirmed inline", async () => {
 		const { rerender } = render(

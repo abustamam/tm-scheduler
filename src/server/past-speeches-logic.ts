@@ -209,9 +209,10 @@ async function authorize(
 
 /**
  * One `activity_log` entry for an edit or delete, aimed at the speaker's seat
- * at the recording club (the `member_edit` convention: target `member`). A
- * speaker who has since left that club has no seat, so the entry then targets
- * the club. A speech with NO recording club (it was deleted) cannot be logged:
+ * at the recording club (the `member_edit` convention: target `member`). The
+ * lookup takes the Person's seat at that club in ANY status, so a former or
+ * inactive seat is kept and still targeted. Only when the Person has no seat
+ * row at that club at all does the entry target the club itself. A speech with NO recording club (it was deleted) cannot be logged:
  * `activity_log.club_id` is NOT NULL and cascades from the club, so there is no
  * club feed for the entry to live in.
  */

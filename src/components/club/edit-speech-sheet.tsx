@@ -134,13 +134,20 @@ export function EditSpeechSheet({
 					? null
 					: Number(earlierYear)
 				: Number(yearChoice);
-	// The server refuses a month after the current one in the current year (the
-	// club's timezone, which the sheet does not have), so the sheet does not offer
-	// one, by the browser's clock. A month picked under another year and left
-	// behind shows as "Not sure" and is not sent.
-	const monthLimit = pastYear === thisYear ? new Date().getMonth() + 1 : 12;
-	const shownMonth =
-		monthChoice !== "" && Number(monthChoice) <= monthLimit ? monthChoice : "";
+	// The server refuses a month after the current one in the current year, by
+	// the RECORDING club's timezone, which the sheet does not have. So the sheet
+	// only limits what it newly OFFERS (by the browser's clock) and never drops or
+	// hides a month already chosen or stored: the select always carries the
+	// current value and a save sends it as shown. A genuinely future month is
+	// refused by the server and surfaces as that error. A leftover month that the
+	// current year would refuse is cleared visibly when the YEAR is changed to it
+	// (an explicit action), never on render.
+	const currentMonth = new Date().getMonth() + 1;
+	const offeredMonths = Math.max(
+		pastYear === thisYear ? currentMonth : 12,
+		Number(monthChoice) || 0,
+	);
+	const shownMonth = monthChoice;
 
 	async function removePast() {
 		const speechId = slot?.past?.speechId;
@@ -310,8 +317,14 @@ export function EditSpeechSheet({
 										className={SELECT_CLASS}
 										value={yearChoice}
 										onChange={(e) => {
-											setYearChoice(e.target.value);
-											if (e.target.value === "") setMonthChoice("");
+											const next = e.target.value;
+											setYearChoice(next);
+											if (
+												next === "" ||
+												(next === String(thisYear) &&
+													Number(monthChoice) > currentMonth)
+											)
+												setMonthChoice("");
 										}}
 									>
 										<option value="">Not sure</option>
@@ -345,7 +358,7 @@ export function EditSpeechSheet({
 										onChange={(e) => setMonthChoice(e.target.value)}
 									>
 										<option value="">Not sure</option>
-										{MONTH_NAMES.slice(0, monthLimit).map((m, i) => (
+										{MONTH_NAMES.slice(0, offeredMonths).map((m, i) => (
 											<option key={m} value={String(i + 1)}>
 												{m}
 											</option>

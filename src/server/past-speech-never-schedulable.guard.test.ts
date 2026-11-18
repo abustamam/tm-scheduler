@@ -10,12 +10,15 @@
  * runs `.update(roleSlots).set(…)` with a `speechId` that is not literally
  * `null`, or `.insert(roleSlots).values(…)` carrying one.
  *
- * Each such file must either carry the refusal (an `if (…deliveredOffSchedule) throw new
- * Error(PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE)` in it) or be listed in
+ * Each write SITE is attributed to its enclosing top-level function (the last
+ * column-0 `function`/`const` before it) and that function's own body must carry
+ * the refusal (an `if (…deliveredOffSchedule) throw new
+ * Error(PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE)`), or `file#function` must be in
  * `REVIEWED_EXEMPT` with the reason it cannot be handed a past speech's id.
+ * A refusal in a helper the writer calls does not count; exempt it with a reason.
  *
- * Proves: structural presence of the refusal in a writer's file, and that the
- * exemption list names no file that stopped being a writer. Does not prove: the
+ * Proves: structural presence of the refusal in each writer function, and that the
+ * exemption list names no function that stopped being a writer. Does not prove: the
  * refusal runs before the write on every branch (the integration tests do), nor
  * a write through a variable holding the table or a dynamic `.set(obj)`; those
  * are reported as unreadable writers so they fail closed. Seeds and `scripts/`
@@ -67,13 +70,13 @@ function putsSpeechIdSomewhere(src: string): boolean {
 	});
 }
 
-type Finding = { writer: boolean; unreadable: boolean };
+type Site = { index: number; unreadable: boolean };
+type Finding = { writer: boolean; unreadable: boolean; sites: Site[] };
 
-/** Does this file attach an existing speech id to a role slot? */
+/** Does this file attach an existing speech id to a role slot, and where? */
 function scanSlotSpeechWriter(raw: string): Finding {
 	const src = strip(raw);
-	let writer = false;
-	let unreadable = false;
+	const sites: Site[] = [];
 	const re = /\.(update|insert)\(\s*roleSlots\s*\)\s*\.(set|values)\(/g;
 	let m: RegExpExecArray | null = re.exec(src);
 	while (m) {
@@ -82,17 +85,62 @@ function scanSlotSpeechWriter(raw: string): Finding {
 			// `.set(someVariable)`: the object is built elsewhere. Unreadable
 			// only if this file puts a non-null speech id into any object at all
 			// (a select map `speechId: roleSlots.speechId` is a read).
-			if (putsSpeechIdSomewhere(src)) unreadable = true;
+			if (putsSpeechIdSomewhere(src))
+				sites.push({ index: m.index, unreadable: true });
 		} else if (/\bspeechId\b/.test(arg)) {
 			const nonNull = [
 				...arg.matchAll(/\bspeechId\s*(?::\s*([^,}\n]+))?/g),
 			].some((x) => (x[1] ?? "").trim() !== "null");
-			if (nonNull) writer = true;
+			if (nonNull) sites.push({ index: m.index, unreadable: false });
 		}
 		m = re.exec(src);
 	}
-	if (/(?:update|insert\s+into)\s+role_slots/i.test(src)) unreadable = true;
-	return { writer, unreadable };
+	const raws = /(?:update|insert\s+into)\s+role_slots/gi;
+	for (let r = raws.exec(src); r; r = raws.exec(src)) {
+		sites.push({ index: r.index, unreadable: true });
+	}
+	return {
+		writer: sites.some((x) => !x.unreadable),
+		unreadable: sites.some((x) => x.unreadable),
+		sites,
+	};
+}
+
+/** Top-level declarations start at column 0 (Biome formats with tabs), so the
+ *  enclosing writer of a site is the last column-0 `function` / `const` before
+ *  it, and its body runs to the next one. A site before any declaration is
+ *  named "<module>". */
+const DECL =
+	/^(?:export\s+)?(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+)\s*=)/gm;
+function enclosing(src: string, index: number): { name: string; body: string } {
+	let name = "<module>";
+	let start = 0;
+	let end = src.length;
+	for (let d = DECL.exec(src); d; d = DECL.exec(src)) {
+		if (d.index <= index) {
+			name = d[1] ?? d[2] ?? "<module>";
+			start = d.index;
+		} else {
+			end = d.index;
+			break;
+		}
+	}
+	DECL.lastIndex = 0;
+	return { name, body: src.slice(start, end) };
+}
+
+/** Every write site in a file: its enclosing function and whether that
+ *  function's own body carries the refusal. */
+function writeSites(raw: string) {
+	const src = strip(raw);
+	return scanSlotSpeechWriter(raw).sites.map((site) => {
+		const { name, body } = enclosing(src, site.index);
+		return {
+			fn: name,
+			unreadable: site.unreadable,
+			refuses: REFUSAL.test(body),
+		};
+	});
 }
 
 /**
@@ -100,15 +148,19 @@ function scanSlotSpeechWriter(raw: string): Finding {
  * their own. Each reason is checked by reading the code, not by this test.
  */
 const REVIEWED_EXEMPT: Record<string, string> = {
-	"history-import-logic.ts":
+	"history-import-logic.ts#attachSpeech":
 		"the id is one the same import created for that source row (`io.refOf`), " +
 		"or an earlier import's ref; past speeches are only ever created by " +
 		"`addPastSpeech` and are never recorded in an import ref",
-	"slots-logic.ts":
+	"slots-logic.ts#attachSpeechToSlot":
 		"the only existing-looking id it writes is `speechId: row.id`, the id of " +
 		"a speech row the same function just inserted for that slot, which is " +
 		"never off-schedule",
-	"cover-logic.ts":
+	"slots-logic.ts#backfillMissingRoleSlots":
+		"flagged unreadable because `.values(missing.map(…))` is not an object " +
+		"literal; the rows are new standing-role slots built from role " +
+		"definitions and carry no speech id",
+	"cover-logic.ts#undoReleaseForCoverCore":
 		"restores the slot's own prior speech id from its cover request, which " +
 		"was on the slot, and the attach writer refuses a past speech",
 };
@@ -128,21 +180,20 @@ describe("a past speech is never schedulable (#1656)", () => {
 	// protects=a slot never holds a speech given outside a meeting
 	// fails_when=a writer that attaches an existing speech id lacks the refusal
 	// no_claim=the refusal runs first on every path; see the integration tests
-	it("every writer that attaches an existing speech id to a slot refuses it", () => {
+	it("every write site that attaches an existing speech id to a slot refuses it", () => {
 		const missing: string[] = [];
 		for (const f of files) {
-			const { writer, unreadable } = scanSlotSpeechWriter(f.raw);
-			if (!writer && !unreadable) continue;
-			if (f.rel in REVIEWED_EXEMPT) continue;
-			if (!REFUSAL.test(strip(f.raw))) {
+			for (const site of writeSites(f.raw)) {
+				const key = `${f.rel}#${site.fn}`;
+				if (key in REVIEWED_EXEMPT || site.refuses) continue;
 				missing.push(
-					`${f.rel}${unreadable ? " (unreadable write to role_slots)" : ""}`,
+					`${key}${site.unreadable ? " (unreadable write to role_slots)" : ""}`,
 				);
 			}
 		}
 		expect(
 			missing,
-			"these files attach a speech id to a slot without refusing a past speech: add the refusal, or list the file in REVIEWED_EXEMPT with a reason",
+			"these functions attach a speech id to a slot without refusing a past speech in their own body: add the refusal, or list `file#function` in REVIEWED_EXEMPT with a reason",
 		).toEqual([]);
 	});
 
@@ -154,14 +205,9 @@ describe("a past speech is never schedulable (#1656)", () => {
 		expect(derived).toContain("history-import-logic.ts");
 	});
 
-	it("REVIEWED_EXEMPT names only files that still write a speech id to a slot", () => {
+	it("REVIEWED_EXEMPT names only functions that still write a speech id to a slot", () => {
 		const derived = new Set(
-			files
-				.filter((f) => {
-					const r = scanSlotSpeechWriter(f.raw);
-					return r.writer || r.unreadable;
-				})
-				.map((f) => f.rel),
+			files.flatMap((f) => writeSites(f.raw).map((x) => `${f.rel}#${x.fn}`)),
 		);
 		for (const name of Object.keys(REVIEWED_EXEMPT)) {
 			expect(derived.has(name), `${name} is no longer a writer`).toBe(true);
@@ -192,6 +238,23 @@ describe("a past speech is never schedulable (#1656)", () => {
 					"const p = { speechId: id }; await tx.update(roleSlots).set(patch)",
 				).unreadable,
 			).toBe(true);
+		});
+		it("names the enclosing function and checks the refusal in ITS body only", () => {
+			const src = [
+				"async function a() {",
+				"\tif (s.deliveredOffSchedule) throw new Error(PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE);",
+				"}",
+				"async function b() {",
+				"\tawait tx.update(roleSlots).set({ speechId: id }).where(x);",
+				"}",
+			].join("\n");
+			expect(writeSites(src)).toEqual([
+				{ fn: "b", unreadable: false, refuses: false },
+			]);
+			const ok = src.replace("async function a() {", "async function b0() {");
+			expect(writeSites(ok)).toHaveLength(1);
+			const own = `${src.slice(0, src.indexOf("\tawait"))}\tif (r.deliveredOffSchedule) throw new Error(PAST_SPEECH_NOT_SCHEDULABLE_MESSAGE);\n${src.slice(src.indexOf("\tawait"))}`;
+			expect(writeSites(own)[0]?.refuses).toBe(true);
 		});
 		it("ignores an unlink, a write with no speech id, and a commented one", () => {
 			const none = (s: string) => {
