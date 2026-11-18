@@ -340,6 +340,7 @@ describe.skipIf(!hasTestDb)("my cross-club activity (#437)", () => {
 	it("speech log row carries every rendered field", async () => {
 		const log = (await loadMySpeechLog(userId, 6)).rows;
 		expect(log[0]).toEqual({
+			kind: "meeting",
 			slotId: inA.speechSlotId,
 			memberId: inA.memberId,
 			scheduledAt: inA.speechAt,

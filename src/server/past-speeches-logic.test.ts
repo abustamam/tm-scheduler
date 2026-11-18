@@ -400,6 +400,72 @@ describe.skipIf(!hasTestDb)("past speeches (#1656)", () => {
 		});
 	});
 
+	describe("speech-request reuse path", () => {
+		// protects=a request linked to an off-schedule (past) speech never reuses or
+		//   rewrites it: Schedule makes a new speech and leaves the past one intact
+		// fails_when=`deliveredOffSchedule = false` is dropped from the reuse select
+		//   in scheduleSpeechRequest (the past speech is picked, rewritten, and the
+		//   attach refuses, so Schedule throws instead of resolving)
+		// no_claim=reuse of an ordinary unattached speech (speech-requests.integration.test.ts)
+		it("schedules a NEW speech and leaves the past speech untouched", async () => {
+			const { scheduleSpeechRequest } = await import("./speech-requests-logic");
+			const { speechRequests } = await import("#/db/schema");
+			const { speechId: pastId } = await add(a.memberUserId, {
+				speakerDetails: { speechTitle: "Given at a conference" },
+			});
+			const [def] = await testDb
+				.insert(roleDefinitions)
+				.values({
+					clubId: a.clubId,
+					name: "Speaker",
+					category: "speaker",
+					isSpeakerRole: true,
+				})
+				.returning({ id: roleDefinitions.id });
+			const [m] = await testDb
+				.insert(meetings)
+				.values({
+					clubId: a.clubId,
+					scheduledAt: new Date(Date.now() + 14 * 86_400_000),
+					status: "scheduled",
+				})
+				.returning({ id: meetings.id });
+			const [slot] = await testDb
+				.insert(roleSlots)
+				.values({ meetingId: m!.id, roleDefinitionId: def!.id })
+				.returning({ id: roleSlots.id });
+			const [req] = await testDb
+				.insert(speechRequests)
+				.values({
+					clubId: a.clubId,
+					membershipId: a.memberId,
+					title: "Reworded",
+					speechId: pastId,
+				})
+				.returning({ id: speechRequests.id });
+
+			const result = await scheduleSpeechRequest({
+				requestId: req!.id,
+				slotId: slot!.id,
+				clubId: a.clubId,
+				actorMemberId: a.adminMemberId,
+			});
+
+			expect(result.speechId).not.toBe(pastId);
+			const past = await row(pastId);
+			expect(past).toMatchObject({
+				title: "Given at a conference",
+				deliveredOffSchedule: true,
+				deliveredYear: 2023,
+			});
+			const [held] = await testDb
+				.select({ speechId: roleSlots.speechId })
+				.from(roleSlots)
+				.where(eq(roleSlots.id, slot!.id));
+			expect(held?.speechId).toBe(result.speechId);
+		});
+	});
+
 	describe("database checks", () => {
 		const bad = (values: Record<string, unknown>) =>
 			testDb.execute(
