@@ -10,7 +10,7 @@ import {
 } from "#/components/speech-log-date";
 
 // protects=how a past speech (#1656) renders and how its sheet takes a loose date
-// no_claim=server writes (past-speeches-logic.test.ts)
+// no_claim=server writes (past-speeches-logic.integration.test.ts)
 const server = vi.hoisted(() => ({
 	addPastSpeechFn: vi.fn(async () => ({ ok: true as const })),
 	editPastSpeechFn: vi.fn(async () => ({ ok: true as const })),
