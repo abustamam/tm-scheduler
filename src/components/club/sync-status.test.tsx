@@ -78,6 +78,19 @@ describe("SyncStatus", () => {
 		expect(queryByText(/not yet synced/)).toBeNull();
 	});
 
+	it("never states a count of zero while draining (#1653)", () => {
+		const zero = render(
+			<SyncStatus {...idle} draining={true} queueCount={0} />,
+		);
+		const status = zero.getByRole("status");
+		expect(status.textContent).toBe("Syncing…");
+		expect(status.textContent).not.toMatch(/\d/);
+		expect(status.querySelector("svg.animate-spin")).not.toBeNull();
+		zero.unmount();
+		const one = render(<SyncStatus {...idle} draining={true} queueCount={1} />);
+		one.getByText("Syncing 1 change…");
+	});
+
 	it("prefers the error banner over the pending count, and Retry is wired", async () => {
 		// Same reason: a stopped drain leaves the ops queued, so both states hold at
 		// once and only one of them offers a way out.
