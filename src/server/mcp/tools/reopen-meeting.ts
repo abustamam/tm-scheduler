@@ -9,6 +9,7 @@
  * `complete_meeting` closed stay closed.
  */
 import { z } from "zod";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import { MEETING_REOPEN_NOT_COMPLETED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { applyReopenMeeting } from "#/server/meetings-logic";
 import { authorizeTokenForMeeting } from "../authz-logic";
@@ -29,7 +30,7 @@ export const reopenMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Reopen meeting",
 		description:
-			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
+			IMMEDIATE_APPLY_PREFIX +
 			"Put a completed meeting back to scheduled so it can be edited, then " +
 			"complete it again. Ballots that completing closed stay closed. " +
 			"Refused for a meeting that is not completed (a cancelled one is put " +

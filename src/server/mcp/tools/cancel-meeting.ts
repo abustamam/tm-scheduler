@@ -32,6 +32,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetings } from "#/db/schema";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import {
 	buildCancellationNotice,
 	holdersFromSlots,
@@ -74,7 +75,7 @@ export const cancelMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Cancel meeting",
 		description:
-			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
+			IMMEDIATE_APPLY_PREFIX +
 			"Cancel (skip) one upcoming meeting. Everyone keeps their role, so " +
 			"restore_meeting puts it back exactly as it was. Nothing is sent: the " +
 			"result includes a drafted notice naming the date and every role " +

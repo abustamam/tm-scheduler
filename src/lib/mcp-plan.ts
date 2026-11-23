@@ -9,8 +9,9 @@
  * order — makes every apply fail as `PLAN_STALE`, which reads from the outside
  * exactly like a database race and is close to undebuggable from a transcript.
  *
- * So there is one canonicalizer, here, in a module with no database import and
- * no tool knowledge. Tools sharing it is the only way a later one inherits a
+ * So there is one canonicalizer, here, in a module with no database import. It also
+ * holds the MCP server's per-tool contract lists and instructions text (#1657),
+ * which name tools but import none. Tools sharing it is the only way a later one inherits a
  * mechanism that is already proven rather than re-deriving a subtly different
  * one. No tool hashes for itself.
  *
@@ -92,8 +93,9 @@ export const CONFIRM_PAGE_TOOLS = [
 	"record_guest_book",
 ] as const;
 
-/** The wording every immediate-apply tool's description must carry. */
-export const IMMEDIATE_APPLY_WORDING = "APPLIES IMMEDIATELY";
+/** The sentence every immediate-apply tool's description must START with. */
+export const IMMEDIATE_APPLY_PREFIX =
+	"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. ";
 
 /** The text sent at MCP `initialize`; the tool lists are generated, not typed. */
 export function buildMcpInstructions(): string {

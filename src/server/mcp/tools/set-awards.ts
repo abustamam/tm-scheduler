@@ -95,6 +95,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { guests, members } from "#/db/schema";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import {
 	assertMeetingAccepts,
@@ -205,7 +206,7 @@ export const setAwardsTool: McpToolDefinition = {
 	config: {
 		title: "Set awards",
 		description:
-			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
+			IMMEDIATE_APPLY_PREFIX +
 			"Record or clear a meeting's award winners (Best Speaker, Best " +
 			"Evaluator, Best Table Topics). Each entry names a category and either " +
 			"a memberId, a guestId, or clear: true; ids come from get_agenda or " +

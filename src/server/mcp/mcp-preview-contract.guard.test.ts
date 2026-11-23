@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from "vitest";
  * protects=the claim the server instructions make about each write tool
  * (preview-first, confirm page, or applies on the first call), so a client that
  * follows them is never surprised by a write (#1657);
- * fails_when=a write tool has no `planHash` input and is in neither exported
- * list, a listed tool is missing from the instructions or is not registered, or
- * an immediate-apply tool's description lacks "APPLIES IMMEDIATELY" or the
- * ask-first line;
+ * fails_when=a write tool has no live `planHash` input (a retired one does not count)
+ * and is in neither exported list, an immediate-apply tool has a `planHash`, a listed tool is missing from the instructions or is not registered, or
+ * an immediate-apply tool's description does not start with
+ * IMMEDIATE_APPLY_PREFIX;
  * no_claim=that a tool in a list really behaves that way: the integration tests
  * own that.
  */
@@ -17,7 +17,7 @@ const { MCP_TOOLS } = await import("#/server/mcp/tools");
 const {
 	CONFIRM_PAGE_TOOLS,
 	IMMEDIATE_APPLY_TOOLS,
-	IMMEDIATE_APPLY_WORDING,
+	IMMEDIATE_APPLY_PREFIX,
 	buildMcpInstructions,
 } = await import("#/lib/mcp-plan");
 
@@ -25,17 +25,37 @@ const names = MCP_TOOLS.map((t) => t.name);
 const instructions = buildMcpInstructions();
 
 describe("MCP preview contract", () => {
-	it("every write tool takes planHash or is in exactly one list", () => {
+	it("every write tool has a live planHash or is in exactly one list", () => {
+		let checked = 0;
 		for (const t of MCP_TOOLS) {
 			if (t.annotations.readOnlyHint) continue;
-			const hasHash = Object.hasOwn(t.config.inputSchema ?? {}, "planHash");
+			checked++;
+			// A retired `planHash` key (record_guest_book's) throws if sent, so it
+			// is not a live input and must not satisfy the preview contract.
+			const hash = (t.config.inputSchema ?? {}).planHash as
+				| { description?: string }
+				| undefined;
+			const hasLiveHash =
+				hash !== undefined &&
+				!(hash.description ?? "").includes("No longer accepted");
 			const inLists =
 				(IMMEDIATE_APPLY_TOOLS as readonly string[]).filter((n) => n === t.name)
 					.length +
 				(CONFIRM_PAGE_TOOLS as readonly string[]).filter((n) => n === t.name)
 					.length;
-			expect(hasHash || inLists === 1, t.name).toBe(true);
+			expect(hasLiveHash || inLists === 1, t.name).toBe(true);
 			expect(inLists <= 1, t.name).toBe(true);
+		}
+		expect(checked).toBeGreaterThan(0);
+	});
+
+	it("no immediate-apply tool has a planHash input", () => {
+		for (const n of IMMEDIATE_APPLY_TOOLS) {
+			const t = MCP_TOOLS.find((x) => x.name === n);
+			expect(t, n).toBeDefined();
+			expect(Object.hasOwn(t?.config.inputSchema ?? {}, "planHash"), n).toBe(
+				false,
+			);
 		}
 	});
 
@@ -53,8 +73,7 @@ describe("MCP preview contract", () => {
 	it("every immediate-apply description says so and asks first", () => {
 		for (const n of IMMEDIATE_APPLY_TOOLS) {
 			const d = MCP_TOOLS.find((t) => t.name === n)?.config.description ?? "";
-			expect(d, n).toContain(IMMEDIATE_APPLY_WORDING);
-			expect(d, n).toContain("BEFORE calling");
+			expect(d.startsWith(IMMEDIATE_APPLY_PREFIX), n).toBe(true);
 		}
 	});
 });
