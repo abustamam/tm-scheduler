@@ -66,6 +66,8 @@ import {
 } from "#/server/guest-pipeline-logic";
 import { type McpBlockingItem, McpError } from "#/server/mcp/errors";
 import { maskEmail, maskPhone } from "#/server/mcp/serialize";
+import { loadClubMemberMatchRows } from "#/server/member-match-rows";
+import { nearName, sharesContact } from "#/server/near-name";
 
 export type Conn =
 	| typeof db
@@ -180,12 +182,42 @@ export interface GuestBookPlan {
 }
 
 /** One guest an ambiguous line might be, with contact UNMASKED. See the header. */
-export interface GuestBookCandidate {
-	guestId: string;
+export type GuestBookCandidate =
+	| {
+			kind: "guest";
+			guestId: string;
+			name: string;
+			email: string | null;
+			phone: string | null;
+	  }
+	/**
+	 * A club MEMBER the line is close to (#1658): a hint, never an answer. Its
+	 * id is `memberId`, deliberately not `guestId`, so nothing can submit it as
+	 * a guest to resolve to.
+	 */
+	| {
+			kind: "member";
+			memberId: string;
+			name: string;
+			email: string | null;
+			phone: string | null;
+	  };
+
+/** The most near-name candidates one line lists, as `record_attendance`'s MAX_MATCHES. */
+export const MAX_NEAR_NAME_CANDIDATES = 3;
+
+const guestCandidateOf = (c: {
+	id: string;
 	name: string;
-	email: string | null;
-	phone: string | null;
-}
+	email?: string | null;
+	phone?: string | null;
+}): GuestBookCandidate => ({
+	kind: "guest",
+	guestId: c.id,
+	name: c.name,
+	email: c.email ?? null,
+	phone: c.phone ?? null,
+});
 
 /** The `detail` an `AMBIGUOUS_GUEST` item carries. */
 export interface AmbiguousGuestDetail {
@@ -300,6 +332,9 @@ export async function plan(
 	// ONE query for the club's guests, not one per entry.
 	const candidates = await loadGuestMatchCandidates(conn, club.clubId);
 	const byId = new Map(candidates.map((c) => [c.id, c]));
+	// The club's members, for the near-name check (#1658): a visitor written
+	// down as someone close to a member is probably that member.
+	const memberRows = await loadClubMemberMatchRows(conn, club.clubId);
 
 	// Who already has attendance at this meeting — what turns `matched` into
 	// `already_present`, and what makes re-transcribing a page a no-op.
@@ -445,14 +480,7 @@ export async function plan(
 				// which is the question this item is asking.
 				detail: {
 					reason: m.reason,
-					candidates: m.candidates.map(
-						(c): GuestBookCandidate => ({
-							guestId: c.id,
-							name: c.name,
-							email: c.email ?? null,
-							phone: c.phone ?? null,
-						}),
-					),
+					candidates: m.candidates.map(guestCandidateOf),
 				} satisfies AmbiguousGuestDetail,
 			});
 			return {
@@ -464,7 +492,55 @@ export async function plan(
 			};
 		}
 
-		if (m.outcome === "new") return asNew();
+		if (m.outcome === "new") {
+			// A line that did not resolve by contact is still a possible duplicate
+			// when its name is close to a club guest or member: the SAME rule
+			// `record_attendance` applies to a `newGuest` (#1658). `matchGuest`
+			// stays as it is, because the public guest book calls it too and
+			// deliberately creates a new guest on a name-only match. Guests planned
+			// as new earlier on this page are not asked about: that is the
+			// duplicate-line case, handled above.
+			// Guests first: they are the only selectable answers. The FULL list
+			// decides ambiguity; only the display is capped.
+			const allClose: GuestBookCandidate[] = [
+				...candidates
+					.filter((c) => nearName(raw.name, c))
+					.map(guestCandidateOf),
+				...memberRows
+					.filter(
+						(p) =>
+							nearName(raw.name, p) ||
+							sharesContact(p, { email, phone }, countryCode),
+					)
+					.map(
+						(p): GuestBookCandidate => ({
+							kind: "member",
+							memberId: p.id,
+							name: p.name,
+							email: p.email ?? null,
+							phone: p.phone ?? null,
+						}),
+					),
+			];
+			const close = allClose.slice(0, MAX_NEAR_NAME_CANDIDATES);
+			if (allClose.length === 0) return asNew();
+			blocking.push({
+				code: "AMBIGUOUS_GUEST",
+				entryIndex: index,
+				message: `Entry ${index}: that name is close to someone already on file. Say who this is, or that it is someone new.`,
+				detail: {
+					reason: "near_name",
+					candidates: close,
+				} satisfies AmbiguousGuestDetail,
+			});
+			return {
+				...base,
+				outcome: "ambiguous",
+				guestId: null,
+				minutesRecipient: false,
+				write: null,
+			};
+		}
 
 		// Matched a guest this same page already plans to create: one guest, one
 		// attendance row, and the earlier line is the one that creates them.
