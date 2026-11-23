@@ -17,6 +17,7 @@ import { z } from "zod";
 import {
 	apiTokens,
 	clubs,
+	guests,
 	meetings,
 	meetingTemplates,
 	members,
@@ -27,6 +28,7 @@ import {
 	type SeededClub,
 	seedClub,
 	testDb,
+	withGuestPerson,
 } from "#/test/db";
 
 vi.mock("#/db", async () => ({ db: (await import("#/test/db")).testDb }));
@@ -81,7 +83,14 @@ async function outcome(p: Promise<unknown>) {
 }
 
 /** A valid-shaped input per officer tool for club `s` (previews, never applies). */
-function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
+function officerInputs(
+	s: SeededClub,
+	guestIds: { keep: string; absorb: string; convert: string } = {
+		keep: "",
+		absorb: "",
+		convert: "",
+	},
+): Record<string, Record<string, unknown>> {
 	return {
 		add_members: {
 			clubId: s.clubId,
@@ -150,10 +159,10 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 		},
 		merge_guests: {
 			clubId: s.clubId,
-			keepGuestId: randomUUID(),
-			absorbGuestId: randomUUID(),
+			keepGuestId: guestIds.keep,
+			absorbGuestId: guestIds.absorb,
 		},
-		convert_guest: { clubId: s.clubId, guestId: randomUUID() },
+		convert_guest: { clubId: s.clubId, guestId: guestIds.convert },
 		set_member_standing: {
 			clubId: s.clubId,
 			memberId: s.memberId,
@@ -187,7 +196,22 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		OFFICER_TOOLS,
 	)("%s: an officer is served, a member is refused with the exact message", async (name) => {
 		const s = await club();
-		let input = officerInputs(s)[name] ?? {};
+		// Real guests, so merge_guests and convert_guest previews succeed for the
+		// officer: a NOT_FOUND there would be "past authorization" and prove less.
+		const mk = async (n: string) => {
+			const [g] = await testDb
+				.insert(guests)
+				.values(await withGuestPerson({ clubId: s.clubId, name: n }, testDb))
+				.returning({ id: guests.id });
+			if (!g) throw new Error("seed guest failed");
+			return g.id;
+		};
+		const guestIds = {
+			keep: await mk("Audience Keep"),
+			absorb: await mk("Audience Absorb"),
+			convert: await mk("Audience Convert"),
+		};
+		let input = officerInputs(s, guestIds)[name] ?? {};
 		// The template tools need a template of this club for the control call.
 		if ("templateId" in input && input.templateId !== null) {
 			const [t] = await testDb
@@ -221,13 +245,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		// get_import_report on a club with no import answers NOT_FOUND from
 		// INSIDE the tool, which is as far as authorization goes; no fixture
 		// import is seeded here.
-		// merge_guests and convert_guest take guest ids this fixture does not
-		// seed; NOT_FOUND from inside the tool is likewise past authorization.
-		if (
-			name === "get_import_report" ||
-			name === "merge_guests" ||
-			name === "convert_guest"
-		) {
+		if (name === "get_import_report") {
 			expect(control).toMatchObject({ ok: false, code: "NOT_FOUND" });
 		} else {
 			expect(control, "control call as officer").toMatchObject({ ok: true });

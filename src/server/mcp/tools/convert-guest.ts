@@ -8,16 +8,19 @@
  * Input: a `guestId`, plus a `memberId` to LINK to that member; omit `memberId`
  * to create a NEW member from the guest. The plan says which one applies.
  *
- * The app has no preview for either write, so the plan is built from read-only
- * queries (the guest's stage, pointer, visit count and slots held, the member's
- * status) and a refusal the app would give that those queries can see is a
- * `blocking` item. A refusal only the write can see (a roster name clash, a
- * race) is raised at apply: a thrown KNOWN refusal sentence maps to `BLOCKED`
- * carrying that sentence, a changed record to `PLAN_STALE`, anything else
- * propagates as INTERNAL.
+ * Creating a member previews through the app's OWN convert, run with its
+ * `dryRun` option (a private sentinel thrown inside the writer's transaction, so
+ * every write rolls back): the plan says whether a new member is made or an
+ * existing membership reused, and for a reuse whether it is reactivated, its
+ * admin role demoted and which officer terms close. A refusal that run gives
+ * (a roster name clash) is a `blocking` item with the app's sentence. Linking
+ * has no dry run and stays read-only queries (stage, pointer, member status).
+ * A KNOWN refusal sentence thrown at apply maps to `BLOCKED`, a changed record
+ * to `PLAN_STALE`, anything else propagates as INTERNAL.
  *
  * Staleness: the plan hash covers the guest and member rows as the plan shows
- * them, so a stage change, a new visit or a slot assigned changes it. Apply
+ * them plus their RAW email and phone (the plan shows masked forms, and two
+ * different addresses can mask the same; see `guest-book-plan.ts`), so a stage change, a new visit or a slot assigned changes it. Apply
  * re-plans and compares hashes BEFORE calling the app. Neither writer takes a
  * freshness hook, so a change committed between that comparison and the
  * writer's own locks is not caught here; each writer re-reads under its locks
@@ -32,7 +35,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
-import { members } from "#/db/schema";
+import { members, people } from "#/db/schema";
 import {
 	CONVERT_NAME_CLASH_MESSAGE,
 	LINK_ALREADY_JOINED_MESSAGE,
@@ -42,6 +45,8 @@ import { planHash } from "#/lib/mcp-plan";
 import {
 	applyConvertGuestToMember,
 	applyLinkGuestToMember,
+	type ConvertGuestResult,
+	GUEST_ALREADY_CONVERTED_MESSAGE,
 	LINK_MEMBER_FORMER_MESSAGE,
 	loadGuestPipeline,
 	type PipelineGuestRow,
@@ -81,17 +86,28 @@ export const MEMBER_NOT_FOUND_MESSAGE =
 	"That member is not on this club's roster. find_people lists who is.";
 export const PLAN_STALE_MESSAGE =
 	"The guest or member changed since you previewed this. Review the fresh plan and ask the user again.";
-/** Thrown by `applyConvertGuestToMember` as a literal; not exported there. */
-const ALREADY_CONVERTED_MESSAGE =
-	"This guest has already been converted to a member.";
-
 const KNOWN_REFUSALS = new Set<string>([
 	LINK_ALREADY_JOINED_MESSAGE,
 	LINK_MEMBER_FORMER_MESSAGE,
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
 	CONVERT_NAME_CLASH_MESSAGE,
-	ALREADY_CONVERTED_MESSAGE,
+	GUEST_ALREADY_CONVERTED_MESSAGE,
 ]);
+
+type MembershipOutcome =
+	| { kind: "new_member" }
+	| {
+			kind: "reuse_existing_membership";
+			membershipId: string;
+			name: string;
+			/** Its status and role BEFORE the convert. */
+			priorStatus: string;
+			priorClubRole: string;
+			reactivatedFrom: "inactive" | "former" | null;
+			priorEndedAt: string | null;
+			demotedFrom: "admin" | null;
+			closedOfficerPositions: string[];
+	  };
 
 interface Plan {
 	/** `create_member`: a new member is made from the guest. `link_to_member`: the guest is pointed at an existing member. */
@@ -108,6 +124,13 @@ interface Plan {
 		heldSlotCount: number;
 	};
 	member: { id: string; name: string; status: string } | null;
+	/**
+	 * Create mode only (null when linking): what the app's own convert would do
+	 * to the roster, from a rolled-back run of that writer. A reused membership
+	 * is the case an officer most needs to see: a lapsed one is woken, an
+	 * admin's role is set back to member and open officer terms are closed.
+	 */
+	membership: MembershipOutcome | null;
 	carriesOver: string[];
 	doesNotCarryOver: string[];
 	blocking: { code: string; message: string }[];
@@ -117,6 +140,8 @@ function planOf(
 	g: PipelineGuestRow,
 	member: { id: string; name: string; status: string } | null,
 	linking: boolean,
+	membership: MembershipOutcome | null,
+	refusal: string | null,
 ): Plan {
 	const m = toMcpGuest(g);
 	const blocking: Plan["blocking"] = [];
@@ -137,9 +162,11 @@ function planOf(
 	} else if (g.stage === "joined") {
 		blocking.push({
 			code: "GUEST_ALREADY_CONVERTED",
-			message: ALREADY_CONVERTED_MESSAGE,
+			message: GUEST_ALREADY_CONVERTED_MESSAGE,
 		});
 	}
+	// The app's own refusal from the rolled-back convert (a name clash).
+	if (refusal) blocking.push({ code: "CONVERT_REFUSED", message: refusal });
 	const slots =
 		"Every role slot the guest holds (" +
 		g.heldSlotCount +
@@ -157,6 +184,7 @@ function planOf(
 			heldSlotCount: g.heldSlotCount,
 		},
 		member,
+		membership,
 		carriesOver: linking
 			? [
 					slots,
@@ -209,40 +237,152 @@ export const convertGuestTool: McpToolDefinition = {
 		const guestId = args.guestId.toLowerCase();
 		const memberId = args.memberId?.toLowerCase();
 
-		const hashOf = (p: Plan) =>
-			planHash({ tool: TOOL, clubId: club.clubId, userId: user.id, plan: p });
-		const view = (p: Plan) => ({ clubId: club.clubId, ...p });
+		interface Built {
+			plan: Plan;
+			/** Raw contact (never returned): the plan shows masked forms only. */
+			raw: unknown;
+		}
+		const hashOf = (b: Built) =>
+			planHash({
+				tool: TOOL,
+				clubId: club.clubId,
+				userId: user.id,
+				plan: { shown: b.plan, rawContact: b.raw },
+			});
+		const withClub = (p: Plan) => ({ clubId: club.clubId, ...p });
 
-		const buildPlan = async (): Promise<Plan> => {
+		const personContact = async (personId: string | null) => {
+			if (!personId) return null;
+			const [row] = await db
+				.select({ email: people.email, phone: people.phone })
+				.from(people)
+				.where(eq(people.id, personId))
+				.limit(1);
+			return row ?? null;
+		};
+
+		/** The app's own convert, run and rolled back; null when it refused. */
+		const dryRunConvert = async (): Promise<
+			{ result: ConvertGuestResult } | { refusal: string }
+		> => {
+			try {
+				return {
+					result: await applyConvertGuestToMember(
+						{ clubId: club.clubId, guestId, actorMemberId: club.membershipId },
+						{ dryRun: true },
+					),
+				};
+			} catch (e) {
+				if (e instanceof Error) {
+					if (KNOWN_REFUSALS.has(e.message)) return { refusal: e.message };
+					if (e.message === GUEST_NOT_IN_CLUB_MESSAGE) {
+						throw new McpError("NOT_FOUND", GUEST_NOT_FOUND_MESSAGE);
+					}
+					if (e.message === RECORD_CHANGED_MESSAGE) {
+						throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE);
+					}
+				}
+				throw e;
+			}
+		};
+
+		const buildPlan = async (): Promise<Built> => {
 			const guest = (await loadGuestPipeline(club.clubId)).find(
 				(g) => g.id === guestId,
 			);
 			if (!guest) throw new McpError("NOT_FOUND", GUEST_NOT_FOUND_MESSAGE);
 			let member: Plan["member"] = null;
+			let memberPersonId: string | null = null;
 			if (memberId) {
 				const [row] = await db
 					.select({
 						id: members.id,
 						name: members.name,
 						status: members.status,
+						personId: members.personId,
 					})
 					.from(members)
 					.where(and(eq(members.id, memberId), eq(members.clubId, club.clubId)))
 					.limit(1);
 				if (!row) throw new McpError("NOT_FOUND", MEMBER_NOT_FOUND_MESSAGE);
-				member = row;
+				member = { id: row.id, name: row.name, status: row.status };
+				memberPersonId = row.personId;
 			}
-			return planOf(guest, member, memberId !== undefined);
+			let membership: MembershipOutcome | null = null;
+			let refusal: string | null = null;
+			let reusedPersonId: string | null = null;
+			// A joined guest is refused by the stage check in `planOf`; the dry run
+			// would only repeat it.
+			if (!memberId && guest.stage !== "joined") {
+				const dry = await dryRunConvert();
+				if ("refusal" in dry) {
+					refusal = dry.refusal;
+				} else {
+					const r = dry.result;
+					// The run rolled back, so a membership that still exists under this
+					// id is one the convert REUSED, and this read is its state before.
+					const [prior] = await db
+						.select({
+							id: members.id,
+							name: members.name,
+							status: members.status,
+							clubRole: members.clubRole,
+						})
+						.from(members)
+						.where(
+							and(
+								eq(members.id, r.membershipId),
+								eq(members.clubId, club.clubId),
+							),
+						)
+						.limit(1);
+					if (prior) {
+						reusedPersonId = r.personId;
+						membership = {
+							kind: "reuse_existing_membership",
+							membershipId: prior.id,
+							name: prior.name,
+							priorStatus: prior.status,
+							priorClubRole: prior.clubRole,
+							reactivatedFrom: r.reactivatedFrom ?? null,
+							priorEndedAt: r.priorEndedAt ?? null,
+							demotedFrom: r.demotedFrom ?? null,
+							closedOfficerPositions: r.closedOfficerPositions,
+						};
+					} else {
+						membership = { kind: "new_member" };
+					}
+				}
+			}
+			return {
+				plan: planOf(
+					guest,
+					member,
+					memberId !== undefined,
+					membership,
+					refusal,
+				),
+				raw: {
+					guest: {
+						email: guest.email,
+						typedNote: guest.bookEmail ?? null,
+						phone: guest.phone,
+						phoneRaw: guest.phoneRaw,
+					},
+					member: await personContact(memberPersonId ?? reusedPersonId),
+				},
+			};
 		};
 
-		const p = await buildPlan();
+		const built = await buildPlan();
+		const p = built.plan;
 		if (!args.planHash) {
-			return { applied: false, plan: view(p), planHash: hashOf(p) };
+			return { applied: false, plan: withClub(p), planHash: hashOf(built) };
 		}
-		if (hashOf(p) !== args.planHash) {
+		if (hashOf(built) !== args.planHash) {
 			throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE, {
-				plan: view(p),
-				planHash: hashOf(p),
+				plan: withClub(p),
+				planHash: hashOf(built),
 			});
 		}
 		if (p.blocking.length > 0) {
@@ -266,7 +406,7 @@ export const convertGuestTool: McpToolDefinition = {
 					clubId: club.clubId,
 					mode: p.mode,
 					movedSlotCount: r.slotIds.length,
-					plan: view(p),
+					plan: withClub(p),
 				};
 			}
 			const r = await applyConvertGuestToMember({
@@ -282,7 +422,7 @@ export const convertGuestTool: McpToolDefinition = {
 				reactivated: r.reactivated,
 				demotedFrom: r.demotedFrom ?? null,
 				closedOfficerPositions: r.closedOfficerPositions,
-				plan: view(p),
+				plan: withClub(p),
 				note: "GavelUp tells no one. Let the new member know yourself.",
 			};
 		} catch (e) {

@@ -14,8 +14,11 @@
  * different people, a person-linked guest) is one `MERGE_REFUSED` item carrying
  * the app's own sentence; apply then returns `BLOCKED`.
  *
- * Staleness: the plan hash covers both records as the plan shows them and every
- * count the dry run returned. Apply re-plans and compares hashes BEFORE calling
+ * Staleness: the plan hash covers both records as the plan shows them, their RAW
+ * email and phone (the plan shows masked forms, and two different addresses can
+ * mask the same, so a hash over the masked form would let a changed address
+ * through; see `guest-book-plan.ts`'s header) and every count the dry run
+ * returned. Apply re-plans and compares hashes BEFORE calling
  * the app's merge. `applyMergeGuests` takes no freshness hook, so a change
  * committed between that comparison and the merge's own locks is not caught
  * here; the merge re-reads under its locks and refuses the cases that make it
@@ -26,7 +29,10 @@
  * the token's club, so another club's guest is NOT_FOUND.
  */
 import { z } from "zod";
+import { CLUB_ARCHIVED_MESSAGE } from "#/lib/club-archive";
 import { planHash } from "#/lib/mcp-plan";
+import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
+import { NOT_A_MEMBER_MESSAGE } from "#/server/guards";
 import {
 	applyMergeGuests,
 	GUEST_MERGE_CONVERTED_MESSAGE,
@@ -120,6 +126,29 @@ function viewOf(g: PipelineGuestRow): GuestView {
 	};
 }
 
+/** The merge writer asks for admin standing again under its lock; map its refusals to codes. */
+function throwActorRefusal(e: Error): void {
+	if (
+		e.message === NOT_A_MEMBER_MESSAGE ||
+		e.message === NO_PERMISSION_MESSAGE
+	) {
+		throw new McpError("FORBIDDEN", e.message);
+	}
+	if (e.message === CLUB_ARCHIVED_MESSAGE) {
+		throw new McpError("ARCHIVED", CLUB_ARCHIVED_MESSAGE);
+	}
+}
+
+/** The raw contact the plan only shows masked; hashed, never returned. */
+function rawContactOf(g: PipelineGuestRow) {
+	return {
+		email: g.email,
+		typedNote: g.bookEmail ?? null,
+		phone: g.phone,
+		phoneRaw: g.phoneRaw,
+	};
+}
+
 /** Counts with zeros left out, so the plan names only tables that change. */
 const nonZero = (c: Record<string, number>) =>
 	Object.fromEntries(Object.entries(c).filter(([, n]) => n > 0));
@@ -162,11 +191,20 @@ export const mergeGuestsTool: McpToolDefinition = {
 			actorUserId: user.id,
 		};
 
-		const hashOf = (p: Plan) =>
-			planHash({ tool: TOOL, clubId: club.clubId, userId: user.id, plan: p });
-		const view = (p: Plan) => ({ clubId: club.clubId, ...p });
+		interface Built {
+			plan: Plan;
+			raw: ReturnType<typeof rawContactOf>[];
+		}
+		const hashOf = (b: Built) =>
+			planHash({
+				tool: TOOL,
+				clubId: club.clubId,
+				userId: user.id,
+				plan: { shown: b.plan, rawContact: b.raw },
+			});
+		const withClub = (p: Plan) => ({ clubId: club.clubId, ...p });
 
-		const buildPlan = async (): Promise<Plan> => {
+		const buildPlan = async (): Promise<Built> => {
 			const guests = await loadGuestPipeline(club.clubId);
 			const keep = guests.find((g) => g.id === keepGuestId);
 			const absorb = guests.find((g) => g.id === absorbGuestId);
@@ -174,15 +212,18 @@ export const mergeGuestsTool: McpToolDefinition = {
 				const only = keep ?? absorb;
 				if (!only) throw new McpError("NOT_FOUND", GUEST_NOT_FOUND_MESSAGE);
 				return {
-					keep: viewOf(only),
-					absorb: viewOf(only),
-					moved: {},
-					droppedAsDuplicate: {},
-					absorbedPersonDeleted: false,
-					note: IRREVERSIBLE_NOTE,
-					blocking: [
-						{ code: "MERGE_REFUSED", message: GUEST_MERGE_SAME_MESSAGE },
-					],
+					plan: {
+						keep: viewOf(only),
+						absorb: viewOf(only),
+						moved: {},
+						droppedAsDuplicate: {},
+						absorbedPersonDeleted: false,
+						note: IRREVERSIBLE_NOTE,
+						blocking: [
+							{ code: "MERGE_REFUSED", message: GUEST_MERGE_SAME_MESSAGE },
+						],
+					},
+					raw: [rawContactOf(only)],
 				};
 			}
 			if (!keep || !absorb) {
@@ -192,32 +233,39 @@ export const mergeGuestsTool: McpToolDefinition = {
 			try {
 				dry = await previewMergeGuests(merge);
 			} catch (e) {
-				if (e instanceof Error && e.message === RECORD_CHANGED_MESSAGE) {
-					throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE);
+				if (e instanceof Error) {
+					if (e.message === RECORD_CHANGED_MESSAGE) {
+						throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE);
+					}
+					throwActorRefusal(e);
 				}
 				throw e;
 			}
 			return {
-				keep: viewOf(keep),
-				absorb: viewOf(absorb),
-				moved: nonZero(dry.moved),
-				droppedAsDuplicate: nonZero(dry.droppedAsDuplicate),
-				absorbedPersonDeleted: dry.absorbedPersonDeleted,
-				note: IRREVERSIBLE_NOTE,
-				blocking: dry.refusal
-					? [{ code: "MERGE_REFUSED", message: dry.refusal }]
-					: [],
+				plan: {
+					keep: viewOf(keep),
+					absorb: viewOf(absorb),
+					moved: nonZero(dry.moved),
+					droppedAsDuplicate: nonZero(dry.droppedAsDuplicate),
+					absorbedPersonDeleted: dry.absorbedPersonDeleted,
+					note: IRREVERSIBLE_NOTE,
+					blocking: dry.refusal
+						? [{ code: "MERGE_REFUSED", message: dry.refusal }]
+						: [],
+				},
+				raw: [rawContactOf(keep), rawContactOf(absorb)],
 			};
 		};
 
-		const p = await buildPlan();
+		const built = await buildPlan();
+		const p = built.plan;
 		if (!args.planHash) {
-			return { applied: false, plan: view(p), planHash: hashOf(p) };
+			return { applied: false, plan: withClub(p), planHash: hashOf(built) };
 		}
-		if (hashOf(p) !== args.planHash) {
+		if (hashOf(built) !== args.planHash) {
 			throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE, {
-				plan: view(p),
-				planHash: hashOf(p),
+				plan: withClub(p),
+				planHash: hashOf(built),
 			});
 		}
 		if (p.blocking.length > 0) {
@@ -243,6 +291,7 @@ export const mergeGuestsTool: McpToolDefinition = {
 				if (e.message === RECORD_CHANGED_MESSAGE) {
 					throw new McpError("PLAN_STALE", PLAN_STALE_MESSAGE);
 				}
+				throwActorRefusal(e);
 			}
 			throw e;
 		}
@@ -251,7 +300,7 @@ export const mergeGuestsTool: McpToolDefinition = {
 			clubId: club.clubId,
 			keptGuestId: keepGuestId,
 			absorbedGuestId: absorbGuestId,
-			plan: view(p),
+			plan: withClub(p),
 		};
 	},
 };

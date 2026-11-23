@@ -37,6 +37,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { maskEmail, maskPhone } from "#/server/mcp/serialize";
 import {
 	cleanup,
 	hasTestDb,
@@ -817,6 +818,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		];
 		const rawByTool = new Map<string, string>();
 		const bodyByTool = new Map<string, unknown>();
+		const isErrorByTool = new Map<string, boolean>();
 		for (const call of calls) {
 			if (call.params.name === "complete_meeting") {
 				await testDb
@@ -824,9 +826,10 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					.set({ scheduledAt: new Date(Date.now() - 2 * 86_400_000) })
 					.where(eq(meetings.id, seed.meetingId));
 			}
-			const { raw, body } = await readToolResult(
+			const { raw, body, isError } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);
+			isErrorByTool.set(call.params.name, isError);
 			// A later call to the same tool replaces the earlier one: the second
 			// `get_agenda` (after `set_awards`) is the one asserted on below.
 			rawByTool.set(call.params.name, raw);
@@ -844,6 +847,31 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				"5559876543",
 			);
 		}
+
+		// The positive half for #1664: the merge and convert previews SUCCEEDED and
+		// show both guests, so the no-raw-contact assertions above were made against
+		// a body that carried the masked forms, not against an error.
+		const maskedBoth = [
+			maskEmail(email),
+			maskPhone(phone),
+			maskEmail("dupe.address@example.com"),
+			maskPhone("+15559876543"),
+		];
+		for (const name of ["merge_guests", "convert_guest"]) {
+			expect(isErrorByTool.get(name), `${name} must not be an error`).toBe(
+				false,
+			);
+		}
+		for (const m of maskedBoth) {
+			expect(
+				rawByTool.get("merge_guests"),
+				"merge_guests names both guests masked",
+			).toContain(m);
+		}
+		expect(rawByTool.get("convert_guest")).toContain(
+			maskEmail("dupe.address@example.com"),
+		);
+		expect(rawByTool.get("convert_guest")).toContain(maskPhone("+15559876543"));
 
 		// The positive half for `cancel_meeting` (review of #1084, H): its notice
 		// is BUILT from the slot holders, and `assign_roles` above put this guest
