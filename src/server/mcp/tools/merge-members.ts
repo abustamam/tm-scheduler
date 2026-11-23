@@ -13,22 +13,22 @@
  * carrying the app's own sentence; apply then returns `BLOCKED`. A member outside
  * the token's club is `NOT_FOUND`.
  *
- * Authorization: admin only, as in the app. `audience: "officer"` admits an
- * officer with an open term, so the tool checks `club.via === "admin"` itself,
- * BEFORE reading anything. The writer takes no freshness hook, so a change
- * committed between the hash comparison and the merge is not caught here.
+ * Authorization: `audience: "officer"` through `authorizeToken` is exactly the
+ * set `requireClubRole(["admin"])` admits in the app, which `mergeMembers` uses:
+ * a club admin or an open-term officer (`isEffectiveAdmin`, #202). No further
+ * gate. The writer takes no freshness hook, so a change committed between the
+ * hash comparison and the merge is not caught here.
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { members, people } from "#/db/schema";
 import { planHash } from "#/lib/mcp-plan";
-import { NO_PERMISSION_MESSAGE } from "#/lib/permission-message";
 import {
 	applyMemberMerge,
 	MEMBER_MERGE_NOT_FOUND_MESSAGE,
-	MEMBER_MERGE_SAME_MESSAGE,
-	MEMBER_MERGE_SIGNED_IN_MESSAGE,
+	MEMBER_MERGE_REFUSALS,
+	type MemberKeepAfter,
 	previewMemberMerge,
 } from "#/server/members-logic";
 import { authorizeToken } from "../authz-logic";
@@ -78,9 +78,11 @@ interface MemberView {
 
 interface Plan {
 	keep: MemberView;
+	/** The kept member as the merge leaves it (status, role, end date, mentor listing). */
+	keepAfter: MemberKeepAfter | null;
 	absorb: MemberView;
 	moved: Record<string, number>;
-	droppedAsDuplicate: Record<string, number>;
+	notCarriedOver: Record<string, number>;
 	note: string;
 	blocking: { code: string; message: string }[];
 }
@@ -134,7 +136,12 @@ export const mergeMembersTool: McpToolDefinition = {
 			"and for an absorbed member who can sign in (keep that one instead). " +
 			"Call once WITHOUT planHash to preview: it writes nothing, shows both " +
 			"members (masked contact), the rows that move per table, and any " +
-			"refusal, and returns a planHash. Show the plan to the user in full; " +
+			"refusal, and returns a planHash. keepAfter is the kept member's " +
+			"status, role, end date and mentor listing once merged (a merge can " +
+			"end the kept member, close officer terms and release upcoming roles). " +
+			"notCarriedOver counts rows naming the absorbed member that the kept " +
+			"member does not get: duplicates, released upcoming roles, and rows " +
+			"removed with the absorbed record. Show the plan to the user in full; " +
 			"after they agree, call again with the same input plus the planHash. " +
 			"GavelUp messages no one.",
 		inputSchema,
@@ -142,11 +149,6 @@ export const mergeMembersTool: McpToolDefinition = {
 	handler: async (input, ctx) => {
 		const args = z.object(inputSchema).parse(input);
 		const { club, user } = await authorizeToken(ctx, args.clubId);
-		// Admin only, before anything is read. An open-term officer passes the
-		// audience gate but not this one.
-		if (club.via !== "admin") {
-			throw new McpError("FORBIDDEN", NO_PERMISSION_MESSAGE);
-		}
 		const keeperId = args.keepMemberId.toLowerCase();
 		const absorbedId = args.absorbMemberId.toLowerCase();
 		const merge = {
@@ -197,30 +199,20 @@ export const mergeMembersTool: McpToolDefinition = {
 			return {
 				plan: {
 					keep: viewOf(keep),
+					keepAfter: dry.keepAfter,
 					absorb: viewOf(absorb),
 					moved: nonZero(dry.moved),
-					droppedAsDuplicate: nonZero(dry.droppedAsDuplicate),
+					notCarriedOver: nonZero(dry.notCarriedOver),
 					note: IRREVERSIBLE_NOTE,
 					blocking: dry.refusal
 						? [{ code: "MERGE_REFUSED", message: dry.refusal }]
 						: [],
 				},
-				raw:
-					keeperId === absorbedId
-						? [rawContactOf(keep)]
-						: [rawContactOf(keep), rawContactOf(absorb)],
+				raw: [rawContactOf(keep), rawContactOf(absorb)],
 			};
 		};
 
-		let built: Built;
-		try {
-			built = await buildPlan();
-		} catch (e) {
-			if (e instanceof Error && e.message === MEMBER_MERGE_NOT_FOUND_MESSAGE) {
-				throw new McpError("NOT_FOUND", MEMBER_NOT_FOUND_MESSAGE);
-			}
-			throw e;
-		}
+		const built = await buildPlan();
 		const p = built.plan;
 		if (!args.planHash) {
 			return { applied: false, plan: withClub(p), planHash: hashOf(built) };
@@ -243,10 +235,7 @@ export const mergeMembersTool: McpToolDefinition = {
 			await applyMemberMerge(merge);
 		} catch (e) {
 			if (e instanceof Error) {
-				if (
-					e.message === MEMBER_MERGE_SAME_MESSAGE ||
-					e.message === MEMBER_MERGE_SIGNED_IN_MESSAGE
-				) {
+				if (MEMBER_MERGE_REFUSALS.has(e.message)) {
 					throw new McpError("BLOCKED", e.message, {
 						blocking: [{ code: "MERGE_REFUSED", message: e.message }],
 					});

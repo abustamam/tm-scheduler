@@ -5,8 +5,9 @@
  * `applyMemberMerge` only with the hash the preview returned, and only a club
  * admin may call it; fails_when=a preview writes, an apply without or with a
  * stale hash writes, a refusal the app gives is not blocked, a member of another
- * club is reachable, an officer who is not an admin can merge, or a raw email or
- * phone is returned; no_claim=the writer's own lock order and re-pointing, which
+ * club is reachable, a plain member can merge, the open-term officer the app
+ * admits is refused, the plan misstates what the kept member becomes or counts
+ * the merge's own log rows as moved, or a raw email or phone is returned; no_claim=the writer's own lock order and re-pointing, which
  * `member-merge*.integration.test.ts` and `membership-collapse*` own.
  */
 import { randomUUID } from "node:crypto";
@@ -16,6 +17,7 @@ import {
 	activityLog,
 	apiTokens,
 	clubs,
+	meetingAttendance,
 	members,
 	officerTerms,
 	roleSlots,
@@ -36,10 +38,11 @@ const { hashApiToken } = await import("#/server/api-tokens-logic");
 const { NOT_OFFICER_MESSAGE } = await import("#/server/mcp/authz-logic");
 const {
 	applyMemberMerge,
+	MEMBER_MERGE_NOT_FOUND_MESSAGE,
 	MEMBER_MERGE_SAME_MESSAGE,
 	MEMBER_MERGE_SIGNED_IN_MESSAGE,
 } = await import("#/server/members-logic");
-const { NO_PERMISSION_MESSAGE } = await import("#/lib/permission-message");
+const membersLogic = await import("#/server/members-logic");
 const { CLUB_ARCHIVED_MESSAGE } = await import("#/lib/club-archive");
 
 const seeded: SeededClub[] = [];
@@ -282,7 +285,7 @@ describe.skipIf(!hasTestDb)("merge_members (#1665)", () => {
 		expect(await memberExists(theirs)).toBe(true);
 	});
 
-	it("an officer who is not an admin is refused, in preview and apply", async () => {
+	it("an open-term officer whose stored role is member is admitted, as the app's admin gate admits them", async () => {
 		const { s } = await setup();
 		await testDb.insert(officerTerms).values({
 			membershipId: s.memberId,
@@ -298,17 +301,15 @@ describe.skipIf(!hasTestDb)("merge_members (#1665)", () => {
 			keepMemberId: keep,
 			absorbMemberId: absorb,
 		};
-		const o = await outcome(merge(officerToken, input));
-		expect(o).toMatchObject({
-			ok: false,
-			code: "FORBIDDEN",
-			message: NO_PERMISSION_MESSAGE,
-		});
-		const o2 = await outcome(
-			merge(officerToken, { ...input, planHash: "0".repeat(64) }),
-		);
-		expect(o2).toMatchObject({ ok: false, code: "FORBIDDEN" });
-		expect(await memberExists(absorb)).toBe(true);
+		const p = (await merge(officerToken, input)) as Preview;
+		expect(p.applied).toBe(false);
+		expect(p.plan.blocking).toEqual([]);
+		const r = (await merge(officerToken, {
+			...input,
+			planHash: p.planHash,
+		})) as { applied: boolean };
+		expect(r.applied).toBe(true);
+		expect(await memberExists(absorb)).toBe(false);
 	});
 
 	it("a plain member is refused as for any officer tool", async () => {
@@ -325,6 +326,168 @@ describe.skipIf(!hasTestDb)("merge_members (#1665)", () => {
 			code: "FORBIDDEN",
 			message: NOT_OFFICER_MESSAGE,
 		});
+	});
+
+	it("keepAfter shows what the merge makes of the kept member and matches the row after apply", async () => {
+		const { s, token } = await setup();
+		const keep = await mkMember(s.clubId, "Dormant Keeper");
+		const absorb = await mkMember(s.clubId, "Active Dupe");
+		await testDb
+			.update(members)
+			.set({ status: "inactive", willingToMentor: false })
+			.where(eq(members.id, keep));
+		await testDb
+			.update(members)
+			.set({
+				status: "active",
+				clubRole: "admin",
+				willingToMentor: true,
+				mentorListedAt: new Date(),
+				mentorBio: "Happy to help",
+			})
+			.where(eq(members.id, absorb));
+		const input = {
+			clubId: s.clubId,
+			keepMemberId: keep,
+			absorbMemberId: absorb,
+		};
+		const p = (await merge(token, input)) as Preview;
+		expect(p.plan.keep.status).toBe("inactive");
+		expect(p.plan.keep.clubRole).toBe("member");
+		expect(p.plan.keepAfter).toEqual({
+			status: "active",
+			clubRole: "admin",
+			endedAt: null,
+			willingToMentor: true,
+			mentorListed: true,
+			mentorBio: "Happy to help",
+		});
+		// Nothing written by the preview: the keeper is still inactive.
+		const [still] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, keep));
+		expect(still?.status).toBe("inactive");
+
+		await merge(token, { ...input, planHash: p.planHash });
+		const [after] = await testDb
+			.select()
+			.from(members)
+			.where(eq(members.id, keep));
+		expect({
+			status: after?.status,
+			clubRole: after?.clubRole,
+			endedAt: after?.endedAt,
+			willingToMentor: after?.willingToMentor,
+			mentorListed: after?.mentorListedAt !== null,
+			mentorBio: after?.mentorBio,
+		}).toEqual(p.plan.keepAfter);
+	});
+
+	it("a merge to former shows the keeper ending and counts the released role as not carried over", async () => {
+		const { s, token } = await setup();
+		const keep = await mkMember(s.clubId, "Left Keeper");
+		const absorb = await mkMember(s.clubId, "Left Dupe");
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, keep));
+		await testDb
+			.update(members)
+			.set({ status: "former", endedAt: "2026-01-02" })
+			.where(eq(members.id, absorb));
+		await holdSlot(s.slotId, absorb);
+		const p = (await merge(token, {
+			clubId: s.clubId,
+			keepMemberId: keep,
+			absorbMemberId: absorb,
+		})) as Preview;
+		expect(p.plan.keep.status).toBe("inactive");
+		expect(p.plan.keepAfter).toMatchObject({
+			status: "former",
+			endedAt: "2026-01-02",
+		});
+		// The slot re-pointed to the keeper, then the merge-to-former released it.
+		expect(p.plan.moved).not.toHaveProperty("role_slots.assigned_member_id");
+		expect(p.plan.notCarriedOver["role_slots.assigned_member_id"]).toBe(1);
+	});
+
+	it("moved and notCarriedOver are pinned; the merge's own log rows are not moved", async () => {
+		const { s, token } = await setup();
+		const keep = await mkMember(s.clubId, "Count Keeper");
+		const absorb = await mkMember(s.clubId, "Count Dupe");
+		await holdSlot(s.slotId, absorb);
+		// Both were recorded at the same meeting: the keeper's row wins, the
+		// absorbed one is a duplicate the keeper does not get.
+		await testDb.insert(meetingAttendance).values([
+			{ meetingId: s.meetingId, memberId: keep, status: "present" },
+			{ meetingId: s.meetingId, memberId: absorb, status: "present" },
+		]);
+		const p = (await merge(token, {
+			clubId: s.clubId,
+			keepMemberId: keep,
+			absorbMemberId: absorb,
+		})) as Preview;
+		expect(p.plan.moved).toEqual({ "role_slots.assigned_member_id": 1 });
+		expect(p.plan.notCarriedOver).toEqual({
+			"meeting_attendance.member_id": 1,
+		});
+		expect(p.plan).not.toHaveProperty("droppedAsDuplicate");
+	});
+
+	it("log rows the collapse writes naming the keeper are not counted as moved", async () => {
+		const { s } = await setup();
+		const keep = await mkMember(s.clubId, "Acting Keeper");
+		const absorb = await mkMember(s.clubId, "Ended Dupe");
+		await testDb
+			.update(members)
+			.set({ status: "inactive" })
+			.where(eq(members.id, keep));
+		await testDb
+			.update(members)
+			.set({ status: "former", endedAt: "2026-01-02" })
+			.where(eq(members.id, absorb));
+		await holdSlot(s.slotId, absorb);
+		// One older log row names the absorbed member; it is the only one that moves.
+		await testDb.insert(activityLog).values({
+			clubId: s.clubId,
+			actorMemberId: absorb,
+			action: "member_edit",
+			targetType: "club",
+		});
+		// The keeper is the actor, so the release and member_edit rows the merge
+		// to former logs name the keeper. The tool cannot reach this (a keeper who
+		// is the caller is active); the writer's preview can.
+		const dry = await membersLogic.previewMemberMerge({
+			clubId: s.clubId,
+			keeperId: keep,
+			absorbedId: absorb,
+			actorMemberId: keep,
+		});
+		expect(dry.moved["activity_log.actor_member_id"]).toBe(1);
+	});
+
+	it("an apply the writer refuses after the hash matched is BLOCKED; a vanished member is NOT_FOUND", async () => {
+		const { s, token } = await setup();
+		const keep = await mkMember(s.clubId, "K");
+		const absorb = await mkMember(s.clubId, "A");
+		const input = {
+			clubId: s.clubId,
+			keepMemberId: keep,
+			absorbMemberId: absorb,
+		};
+		const p = (await merge(token, input)) as Preview;
+		const spy = vi.spyOn(membersLogic, "applyMemberMerge");
+		spy.mockRejectedValueOnce(new Error(MEMBER_MERGE_SIGNED_IN_MESSAGE));
+		expect(
+			await outcome(merge(token, { ...input, planHash: p.planHash })),
+		).toMatchObject({ ok: false, code: "BLOCKED" });
+		spy.mockRejectedValueOnce(new Error(MEMBER_MERGE_NOT_FOUND_MESSAGE));
+		expect(
+			await outcome(merge(token, { ...input, planHash: p.planHash })),
+		).toMatchObject({ ok: false, code: "NOT_FOUND" });
+		spy.mockRestore();
+		expect(await memberExists(absorb)).toBe(true);
 	});
 
 	it("an archived club is refused", async () => {

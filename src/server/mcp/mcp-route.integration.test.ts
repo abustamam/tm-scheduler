@@ -879,6 +879,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			expect(raw, `${call.params.name} leaked a raw phone`).not.toContain(
 				"5559876543",
 			);
+			// #1665: the roster members merge_members previews.
+			for (const rawValue of [
+				"roster.keeper@example.com",
+				"roster.absorbed@example.com",
+				"5553334444",
+				"5555556666",
+			]) {
+				expect(raw, `${call.params.name} leaked ${rawValue}`).not.toContain(
+					rawValue,
+				);
+			}
 		}
 
 		// The positive half for #1664: the merge and convert previews SUCCEEDED and

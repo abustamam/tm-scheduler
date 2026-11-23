@@ -1454,12 +1454,37 @@ export const MEMBER_MERGE_NOT_FOUND_MESSAGE = "Member not found in this club.";
 export const MEMBER_MERGE_SIGNED_IN_MESSAGE =
 	"That member is a signed-in account — merge the other direction (keep it).";
 
+/** The sentences `applyMemberMerge` refuses with (a preview reports them as a
+ *  refusal, the connector tool as a blocking item). "Not found" is not one. */
+export const MEMBER_MERGE_REFUSALS: ReadonlySet<string> = new Set([
+	MEMBER_MERGE_SAME_MESSAGE,
+	MEMBER_MERGE_SIGNED_IN_MESSAGE,
+]);
+
+/** The kept member's row as the collapse leaves it: status, role and end date
+ *  are recomputed from both records, and a merge to `former` also closes officer
+ *  terms and releases upcoming slots. */
+export interface MemberKeepAfter {
+	status: string;
+	clubRole: string;
+	endedAt: string | null;
+	willingToMentor: boolean;
+	mentorListed: boolean;
+	mentorBio: string | null;
+}
+
 /** What a member merge would do, from a rolled-back run of the real writer. */
 export interface MemberMergePreview {
-	/** Rows that named the absorbed member and now name the keeper, per `table.column`. */
+	/** Rows that named the absorbed member and now name the keeper, per `table.column`.
+	 *  Rows the collapse itself writes (activity_log entries it logs) are not counted. */
 	moved: Record<string, number>;
-	/** Rows dropped because the keeper already has the same one, per `table.column`. */
-	droppedAsDuplicate: Record<string, number>;
+	/** Rows naming the absorbed member that the kept member does not get, per
+	 *  `table.column`: duplicates the keeper already has, upcoming roles released
+	 *  when the merge ends the keeper, and rows removed with the absorbed record
+	 *  (ON DELETE) on keys the collapse does not re-point. */
+	notCarriedOver: Record<string, number>;
+	/** The kept member's row after the collapse, read inside the rolled-back run. */
+	keepAfter: MemberKeepAfter | null;
 	/** The app's own sentence when the merge refuses; null when it would go ahead. */
 	refusal: string | null;
 }
@@ -1486,8 +1511,13 @@ async function memberReferenceCounts(
 		order by 2, 3`);
 	const counts = new Map<string, number>();
 	for (const fk of fks.rows as { schema: string; tbl: string; col: string }[]) {
+		// activity_log rows the collapse inserts carry this transaction's start as
+		// created_at (now() is fixed per transaction); history written earlier does
+		// not. Leaving them out keeps the merge's own log rows out of `moved`.
+		const own =
+			fk.tbl === "activity_log" ? sql` and created_at < now()` : sql``;
 		const r = await tx.execute(
-			sql`select count(*)::int as n from ${sql.identifier(fk.schema)}.${sql.identifier(fk.tbl)} where ${sql.identifier(fk.col)} = ${memberId}`,
+			sql`select count(*)::int as n from ${sql.identifier(fk.schema)}.${sql.identifier(fk.tbl)} where ${sql.identifier(fk.col)} = ${memberId}${own}`,
 		);
 		counts.set(`${fk.tbl}.${fk.col}`, Number((r.rows[0] as { n: number }).n));
 	}
@@ -1547,6 +1577,21 @@ export async function applyMemberMerge(
 		const keeperAfter = before
 			? await memberReferenceCounts(tx, keeperId)
 			: null;
+		const keptRow = before
+			? (
+					await tx
+						.select({
+							status: members.status,
+							clubRole: members.clubRole,
+							endedAt: members.endedAt,
+							willingToMentor: members.willingToMentor,
+							mentorListedAt: members.mentorListedAt,
+							mentorBio: members.mentorBio,
+						})
+						.from(members)
+						.where(eq(members.id, keeperId))
+				)[0]
+			: undefined;
 		await logActivity(tx, {
 			clubId,
 			actorMemberId: input.actorMemberId,
@@ -1559,7 +1604,7 @@ export async function applyMemberMerge(
 				keeperName: keeper.name,
 			},
 		});
-		return before && keeperAfter ? { ...before, keeperAfter } : null;
+		return before && keeperAfter ? { ...before, keeperAfter, keptRow } : null;
 	};
 	if (!opts.dryRun) {
 		await db.transaction(async (tx) => {
@@ -1574,6 +1619,7 @@ export async function applyMemberMerge(
 			const after = before.keeperAfter;
 			const moved: Record<string, number> = {};
 			const dropped: Record<string, number> = {};
+			const k = before.keptRow;
 			for (const [key, was] of before.absorbed) {
 				if (was === 0) continue;
 				const gained = Math.max(
@@ -1585,7 +1631,17 @@ export async function applyMemberMerge(
 			}
 			throw new MemberMergePreviewRollback({
 				moved,
-				droppedAsDuplicate: dropped,
+				notCarriedOver: dropped,
+				keepAfter: k
+					? {
+							status: k.status,
+							clubRole: k.clubRole,
+							endedAt: k.endedAt,
+							willingToMentor: k.willingToMentor,
+							mentorListed: k.mentorListedAt !== null,
+							mentorBio: k.mentorBio,
+						}
+					: null,
 				refusal: null,
 			});
 		});
@@ -1604,12 +1660,13 @@ export async function previewMemberMerge(
 	try {
 		return await applyMemberMerge(input, { dryRun: true });
 	} catch (e) {
-		if (
-			e instanceof Error &&
-			(e.message === MEMBER_MERGE_SAME_MESSAGE ||
-				e.message === MEMBER_MERGE_SIGNED_IN_MESSAGE)
-		) {
-			return { moved: {}, droppedAsDuplicate: {}, refusal: e.message };
+		if (e instanceof Error && MEMBER_MERGE_REFUSALS.has(e.message)) {
+			return {
+				moved: {},
+				notCarriedOver: {},
+				keepAfter: null,
+				refusal: e.message,
+			};
 		}
 		throw e;
 	}
