@@ -199,6 +199,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"complete_meeting",
+			"convert_guest",
 			"create_meetings",
 			"delete_agenda_template",
 			"duplicate_agenda_template",
@@ -216,6 +217,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_schedule",
 			"list_agenda_templates",
 			"list_meetings",
+			"merge_guests",
 			"record_attendance",
 			"record_guest_book",
 			"record_table_topics",
@@ -527,6 +529,24 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			)
 			.returning({ id: guests.id });
 
+		// #1664. A second guest with contact details on file, so the merge and
+		// convert previews read a raw email and phone they must not echo.
+		const [dupe] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Duplicate Guest",
+						email: "dupe.address@example.com",
+						phone: "+15559876543",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
+			.returning({ id: guests.id });
+
 		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or
 		// it returns `plan: null` and its masking code never runs — which is how
 		// an earlier version of this test passed vacuously on the one tool that
@@ -761,6 +781,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				memberId: seed.memberId,
 				status: "inactive",
 			}),
+			// #1664. Previews only (no planHash): both records are shown to the
+			// officer, and each has an email and phone on file.
+			toolsCall("merge_guests", {
+				clubId: seed.clubId,
+				keepGuestId: contactful!.id,
+				absorbGuestId: dupe!.id,
+			}),
+			toolsCall("convert_guest", {
+				clubId: seed.clubId,
+				guestId: dupe!.id,
+			}),
 			// #1563. Previews only: a new name, and a name-only edit (which shows
 			// only the changed field, never the contact detail).
 			// #1572. A preview only (no planHash): dates and a location, never a guest.
@@ -805,6 +836,12 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			);
 			expect(raw, `${call.params.name} leaked a raw phone`).not.toContain(
 				"5551234567",
+			);
+			expect(raw, `${call.params.name} leaked a raw email`).not.toContain(
+				"dupe.address@example.com",
+			);
+			expect(raw, `${call.params.name} leaked a raw phone`).not.toContain(
+				"5559876543",
 			);
 		}
 

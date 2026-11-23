@@ -163,8 +163,12 @@ export const PARITY_ROWS: ParityRow[] = [
 	}),
 	row("upload-members", "previewMemberUpload", "admin", { gap: true }),
 	row("upload-members", "commitMemberUpload", "admin", { gap: true }),
-	row("guest-merge", "previewMergeGuests", "admin", { gap: true }),
-	row("guest-merge", "mergeGuests", "admin", { gap: true }),
+	row("guest-merge", "previewMergeGuests", "admin", {
+		tool: "merge_guests",
+	}),
+	row("guest-merge", "mergeGuests", "admin", {
+		tool: "merge_guests",
+	}),
 	row("sync-tokens", "generateSyncToken", "admin", {
 		notOnConnector: {
 			category: "credential management",
@@ -336,8 +340,12 @@ export const PARITY_ROWS: ParityRow[] = [
 	row("guest-pipeline", "setGuestStage", "admin", { gap: true }),
 	row("guest-pipeline", "updateGuest", "admin", { gap: true }),
 	row("guest-pipeline", "deleteGuest", "admin", { gap: true }),
-	row("guest-pipeline", "convertGuestToMember", "admin", { gap: true }),
-	row("guest-pipeline", "linkGuestToMember", "admin", { gap: true }),
+	row("guest-pipeline", "convertGuestToMember", "admin", {
+		tool: "convert_guest",
+	}),
+	row("guest-pipeline", "linkGuestToMember", "admin", {
+		tool: "convert_guest",
+	}),
 	row("guest-pipeline", "unlinkGuestFromMember", "admin", { gap: true }),
 	row("guest-pipeline", "undoGuestConversion", "admin", { gap: true }),
 	row("guest-pipeline", "addGuestToClub", "admin", { gap: true }),

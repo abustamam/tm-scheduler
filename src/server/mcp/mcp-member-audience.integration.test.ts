@@ -148,6 +148,12 @@ function officerInputs(s: SeededClub): Record<string, Record<string, unknown>> {
 			memberIds: [s.memberId],
 			method: "none",
 		},
+		merge_guests: {
+			clubId: s.clubId,
+			keepGuestId: randomUUID(),
+			absorbGuestId: randomUUID(),
+		},
+		convert_guest: { clubId: s.clubId, guestId: randomUUID() },
 		set_member_standing: {
 			clubId: s.clubId,
 			memberId: s.memberId,
@@ -174,7 +180,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(31);
+		expect(OFFICER_TOOLS).toHaveLength(33);
 	});
 
 	it.each(
@@ -215,7 +221,13 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		// get_import_report on a club with no import answers NOT_FOUND from
 		// INSIDE the tool, which is as far as authorization goes; no fixture
 		// import is seeded here.
-		if (name === "get_import_report") {
+		// merge_guests and convert_guest take guest ids this fixture does not
+		// seed; NOT_FOUND from inside the tool is likewise past authorization.
+		if (
+			name === "get_import_report" ||
+			name === "merge_guests" ||
+			name === "convert_guest"
+		) {
 			expect(control).toMatchObject({ ok: false, code: "NOT_FOUND" });
 		} else {
 			expect(control, "control call as officer").toMatchObject({ ok: true });
