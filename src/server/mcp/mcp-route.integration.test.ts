@@ -32,6 +32,7 @@ import {
 	impersonationSessions,
 	meetings,
 	meetingTemplates,
+	members,
 	officerTerms,
 	people,
 	roleSlots,
@@ -43,6 +44,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 	withGuestPerson,
 } from "#/test/db";
@@ -219,6 +221,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"list_agenda_templates",
 			"list_meetings",
 			"merge_guests",
+			"merge_members",
 			"record_attendance",
 			"record_guest_book",
 			"record_table_topics",
@@ -548,6 +551,31 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			)
 			.returning({ id: guests.id });
 
+		// #1665. Two unsigned roster members with contact on file, so the
+		// merge_members preview reads a raw email and phone it must not echo.
+		const mkRosterMember = async (
+			name: string,
+			email: string,
+			phone: string,
+		) => {
+			const personId = await seedPerson({ name, email, phone });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: seed.clubId, personId, name })
+				.returning({ id: members.id });
+			return m;
+		};
+		const mergeKeep = await mkRosterMember(
+			"Roster Keeper",
+			"roster.keeper@example.com",
+			"+15553334444",
+		);
+		const mergeAbsorb = await mkRosterMember(
+			"Roster Absorbed",
+			"roster.absorbed@example.com",
+			"+15555556666",
+		);
+
 		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or
 		// it returns `plan: null` and its masking code never runs — which is how
 		// an earlier version of this test passed vacuously on the one tool that
@@ -789,6 +817,11 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				keepGuestId: contactful!.id,
 				absorbGuestId: dupe!.id,
 			}),
+			toolsCall("merge_members", {
+				clubId: seed.clubId,
+				keepMemberId: mergeKeep!.id,
+				absorbMemberId: mergeAbsorb!.id,
+			}),
 			toolsCall("convert_guest", {
 				clubId: seed.clubId,
 				guestId: dupe!.id,
@@ -861,6 +894,13 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			expect(isErrorByTool.get(name), `${name} must not be an error`).toBe(
 				false,
 			);
+		}
+		expect(isErrorByTool.get("merge_members")).toBe(false);
+		for (const m of [
+			maskEmail("roster.keeper@example.com"),
+			maskPhone("+15555556666"),
+		]) {
+			expect(rawByTool.get("merge_members")).toContain(m);
 		}
 		for (const m of maskedBoth) {
 			expect(

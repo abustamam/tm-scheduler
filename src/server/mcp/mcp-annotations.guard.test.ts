@@ -70,6 +70,7 @@ describe("MCP tool annotations", () => {
 			"edit_role_slots",
 			"edit_speaker_slots",
 			"merge_guests",
+			"merge_members",
 			"record_attendance",
 			"record_table_topics",
 			"release_my_role",

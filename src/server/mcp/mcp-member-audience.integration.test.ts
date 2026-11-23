@@ -27,6 +27,7 @@ import {
 	hasTestDb,
 	type SeededClub,
 	seedClub,
+	seedPerson,
 	testDb,
 	withGuestPerson,
 } from "#/test/db";
@@ -90,6 +91,7 @@ function officerInputs(
 		absorb: "",
 		convert: "",
 	},
+	memberIds: { keep: string; absorb: string } = { keep: "", absorb: "" },
 ): Record<string, Record<string, unknown>> {
 	return {
 		add_members: {
@@ -163,6 +165,11 @@ function officerInputs(
 			absorbGuestId: guestIds.absorb,
 		},
 		convert_guest: { clubId: s.clubId, guestId: guestIds.convert },
+		merge_members: {
+			clubId: s.clubId,
+			keepMemberId: memberIds.keep,
+			absorbMemberId: memberIds.absorb,
+		},
 		set_member_standing: {
 			clubId: s.clubId,
 			memberId: s.memberId,
@@ -189,7 +196,7 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 		expect(Object.keys(officerInputs({} as SeededClub)).sort()).toEqual(
 			[...OFFICER_TOOLS].sort(),
 		);
-		expect(OFFICER_TOOLS).toHaveLength(33);
+		expect(OFFICER_TOOLS).toHaveLength(34);
 	});
 
 	it.each(
@@ -211,7 +218,21 @@ describe.skipIf(!hasTestDb)("member connector audience (#1281)", () => {
 			absorb: await mk("Audience Absorb"),
 			convert: await mk("Audience Convert"),
 		};
-		let input = officerInputs(s, guestIds)[name] ?? {};
+		// Two unsigned roster members, so merge_members previews as the admin.
+		const mkMember = async (n: string) => {
+			const personId = await seedPerson({ name: n });
+			const [m] = await testDb
+				.insert(members)
+				.values({ clubId: s.clubId, personId, name: n })
+				.returning({ id: members.id });
+			if (!m) throw new Error("seed member failed");
+			return m.id;
+		};
+		const memberIds = {
+			keep: await mkMember("Audience Member Keep"),
+			absorb: await mkMember("Audience Member Absorb"),
+		};
+		let input = officerInputs(s, guestIds, memberIds)[name] ?? {};
 		// The template tools need a template of this club for the control call.
 		if ("templateId" in input && input.templateId !== null) {
 			const [t] = await testDb
