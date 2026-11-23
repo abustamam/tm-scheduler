@@ -94,6 +94,14 @@ interface Plan {
 		meetingDate: string;
 		status: string;
 	}[];
+	/** The member's linked guest record: former moves `joined` to `lost`, and
+	 *  leaving former moves `lost` back to `joined` (#1663). */
+	guestStageChanges: {
+		guestId: string;
+		name: string;
+		before: string;
+		after: string;
+	}[];
 	adminNote: string | null;
 	blocking: { code: string; message: string }[];
 }
@@ -122,6 +130,7 @@ function planOf(v: MemberStandingVerdict): Plan {
 			meetingDate: a.meetingDate.toISOString(),
 			status: a.status,
 		})),
+		guestStageChanges: v.guestStageChanges,
 		adminNote: becomesAdmin ? ADMIN_POWER_NOTE : null,
 		blocking: v.blocked,
 	};
@@ -146,7 +155,8 @@ export const setMemberStandingTool: McpToolDefinition = {
 			"former is for someone who has left. Neither deletes the person. Going " +
 			"inactive or former releases their upcoming roles; going former also " +
 			"deletes their planned-attendance answers on meetings not yet completed " +
-			"and closes their open officer terms. " +
+			"and closes their open officer terms, and moves their guest record from " +
+			"joined to lost (back to joined if they return). " +
 			"Making someone an admin lets them edit the roster, meetings and club " +
 			"settings. A club always keeps one active admin, and a former member " +
 			"holds no role. Call once WITHOUT planHash to preview: it writes " +

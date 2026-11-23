@@ -2046,6 +2046,12 @@ export interface ConvertGuestInput {
 export const GUEST_ALREADY_CONVERTED_MESSAGE =
 	"This guest has already been converted to a member.";
 
+/** The refusal for a convert of a guest whose membership still exists but was
+ *  ended (#1663): marking a member former moves their guest record to `lost`
+ *  and keeps the link, so the row is not a fresh guest. */
+export const GUEST_MEMBER_ENDED_MESSAGE =
+	"This guest is already a member whose membership was ended. Reactivate them on the roster instead of converting them again.";
+
 /**
  * Thrown inside `applyConvertGuestToMember`'s own transaction under `dryRun`,
  * carrying the result: the throw rolls every write back, the caller catches it.
@@ -2458,6 +2464,11 @@ export async function applyConvertGuestToMember(
 		}
 		if (guest.stage === "joined") {
 			throw new Error(GUEST_ALREADY_CONVERTED_MESSAGE);
+		}
+		// A former member's guest is `lost` with the link kept (#1663). A null link
+		// is the stranded row, which converts like any guest.
+		if (guest.convertedMembershipId) {
+			throw new Error(GUEST_MEMBER_ENDED_MESSAGE);
 		}
 
 		// A stranded guest that was once LINKED still has that link's recorded
