@@ -110,8 +110,12 @@ creates.
 
 ## Required per dispatched issue
 
-- **Worktree:** `git worktree add`, then `bun run worktree:setup "<what you are building>"`
-  **from inside it** — run from the main checkout it exits 0 without bootstrapping anything.
+- **Worktree:** `git worktree add .claude/worktrees/<slug>-<N> -b <slug>-<N>` from the main
+  checkout, then `cd <absolute worktree path> && bun run worktree:setup "<what you are building>"`
+  — run from the main checkout it exits 0 without bootstrapping anything. Every Read/Edit/Write
+  uses an **absolute path into the worktree**: `cd` does not move those tools, and
+  `EnterWorktree` has been refused in every background subagent tried (#857, #1057, #1080, and all
+  10 implementers of the 2026-10-27 stage).
 - **Branch: `<slug>-<issue>`, number LAST — with nothing after it.**
   `fix-dcp-training-531` claims #531. `issue-531-dcp` claims **nothing**, and so does
   `fix-dcp-531-wip` or `-531-v2` or `-531-retry`: reading stops at the first non-numeric
@@ -138,9 +142,11 @@ Files this issue cites:
    `git worktree add .claude/worktrees/<slug>-<N> -b <slug>-<N>`
    The issue number goes LAST in the branch name with nothing after it — CLAUDE.md's
    "Branch naming" has the rules and what a suffix costs.
-2. `cd` into that worktree, then `bun run worktree:setup "<what you are building>"`.
+2. `cd <absolute worktree path> && bun run worktree:setup "<what you are building>"`.
    Run it FROM THE WORKTREE: from the main checkout it exits 0 having done nothing, and
    the missing bootstrap does not surface until something silently returns empty.
+   `cd` does not move Edit/Write and `EnterWorktree` is refused in a background subagent, so
+   use the ABSOLUTE worktree path for every Read, Edit and Write.
 3. Find the root cause (superpowers `systematic-debugging`) before you write anything.
 4. Implement. Stay inside the cited files. A NEW file you create — a test beside the code
    you changed, most often — is yours and needs no citation. An EXISTING file that is not

@@ -9,27 +9,16 @@
 #   node_modules   deps are per-directory
 #   .env.local     gitignored; without it db:*, dev and the seed all fail
 #   ref/           gitignored reference CSVs/PDFs the import scripts read
-#   CodeLedger     session state is per-directory, and .codeledger/ runtime
-#                  files are gitignored, so a fresh worktree has the binary
-#                  but no index or ledger
-#
-# That last one is the quiet failure. CodeLedger does not error in an
-# uninitialised worktree — it just returns empty bundles and reports 0% recall,
-# so the tool looks worthless when it was simply never initialised. Four
-# releases shipped from worktrees on 2026-07-31 with it contributing nothing
-# for exactly this reason.
 #
 # Every step is a no-op when already done, so re-running is safe and cheap.
 #
 #   bun run worktree:setup
-#   bun run worktree:setup "what you are building"   # also activates a bundle
+#   bun run worktree:setup "what you are building"   # the description is informational
 #
-# It also gives the worktree its own test database (step 5); undo all of this
+# It also gives the worktree its own test database (step 4); undo all of this
 # with `bun run worktree:teardown` (scripts/teardown-worktree.sh).
 #
 set -euo pipefail
-
-TASK="${1:-}"
 
 GIT_DIR=$(cd "$(git rev-parse --git-dir)" && pwd -P)
 GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
@@ -89,47 +78,7 @@ else
 	echo "→ ref/ absent from the main checkout, skipping (only import scripts need it)"
 fi
 
-# 4. CodeLedger. Guarded end to end: this is an optional productivity tool and a
-#    broken or missing install must never block a worktree from being usable.
-#
-#    `init` is NOT tree-clean. It appends a fixed
-#    `<!-- CODELEDGER:AGENT-ONBOARDING:BEGIN -->` block to two TRACKED,
-#    hand-curated agent-rule files. That block used to be committed, which is why
-#    the comment here previously claimed init left the tree clean — 6197f4b
-#    removed it deliberately: it duplicates the guidance those files already
-#    carry, and contradicts it on which binary to invoke (the block says the
-#    self-upgrading wrapper, the curated rules say the pinned standalone, and
-#    only the standalone is reproducible). `init` has no --no-onboarding flag, so
-#    the block is discarded here instead.
-#
-#    Scoped to exactly those two paths so nothing else init writes is lost. If a
-#    future release makes init edit them for a real reason, this will silently
-#    drop it — acceptable while the only edit is that one fixed block.
-CL="$HERE/.codeledger/bin/codeledger"
-ONBOARDING_FILES=(.cursor/rules/codeledger.mdc .kiro/steering/codeledger.md)
-if [ ! -x "$CL" ]; then
-	echo "→ CodeLedger wrapper not found, skipping"
-elif ! "$CL" init >/dev/null 2>&1; then
-	echo "→ WARNING: 'codeledger init' failed. Continuing — the worktree is still usable."
-	echo "  Bundles from here will be empty until it is initialised."
-else
-	echo "→ codeledger init"
-	for f in "${ONBOARDING_FILES[@]}"; do
-		[ -e "$f" ] && git checkout -- "$f" 2>/dev/null || true
-	done
-	if [ -n "$TASK" ]; then
-		if "$CL" activate --task "$TASK" >/dev/null 2>&1; then
-			echo "→ codeledger activate --task \"$TASK\""
-		else
-			echo "→ WARNING: 'codeledger activate' failed; bundle not built."
-		fi
-	else
-		echo "  No task given. For a task-scoped bundle, re-run with one:"
-		echo "    bun run worktree:setup \"what you are building\""
-	fi
-fi
-
-# 5. Test database (#980). Every worktree used to run its database-backed
+# 4. Test database (#980). Every worktree used to run its database-backed
 #    suites against the one shared tm_test, so a wave of agents running full
 #    suites at once failed in each other's files. Give this worktree its own:
 #    created in the same server as DATABASE_URL, schema synced with

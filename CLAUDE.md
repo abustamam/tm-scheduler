@@ -71,7 +71,7 @@ or when the human explicitly says to edit in place. **Then bootstrap it, from in
 bun run worktree:setup "what you are building"
 ```
 
-A worktree starts with no `node_modules`, `.env.local`, `ref/` or CodeLedger index; setup also
+A worktree starts with no `node_modules`, `.env.local`, or `ref/`; setup also
 gives it **its own test database** (#980). **Do not export `TEST_DATABASE_URL` in a worktree** —
 an exported value wins and puts you back on the shared `tm_test`. Afterwards `git status` should
 be empty. Done: **`bun run worktree:teardown`** from inside the worktree.
@@ -206,27 +206,6 @@ the maintainer's). **Name the consumer before adding an eleventh** (`docs/agents
 
 One `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
-<!-- CODELEDGER:BEGIN -->
-## CodeLedger Integration
-
-[CodeLedger](https://github.com/codeledgerECF/codeledger) selects context deterministically and runs
-through the hooks in `.claude/hooks.json`; nothing here needs invoking by hand. Four things worth
-knowing, the rest is in `./.codeledger/bin/codeledger help` and the vendor docs:
-
-- **Use the repo-local wrapper**, `./.codeledger/bin/codeledger <command>`. Do NOT use
-  `npx codeledger`: that unscoped npm name is an unrelated package. `npx @codeledger/cli` if you
-  must use npx; `node .codeledger/bin/codeledger-standalone.cjs` in a container.
-- **Execute via shell, never simulate its output.** If a command fails, say so.
-- **`.codeledger/` is read-only.** Use the CLI (`activate`, `refine`, `session-summary`) rather
-  than editing files there.
-- **Only a worktree has an index.** `bun run worktree:setup` runs `codeledger init` + `activate`;
-  the main checkout has neither, so `doctor` there is misleading and bundles report 0% recall.
-  If `CODELEDGER_SESSION` is set, pass `--session $CODELEDGER_SESSION`.
-
-"Session summary" or "how did the bundle do" means run
-`./.codeledger/bin/codeledger session-summary`, not write one.
-
-<!-- CODELEDGER:END -->
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. MVP phase, live

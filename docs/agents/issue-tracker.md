@@ -98,6 +98,11 @@ plans by hand after "NEEDS A FILE PATH" or a dependency violation comes back.
   higher. With no such heading, the whole body is scanned instead, which can pick up a path the
   issue only *mentions* rather than one it edits — so add the heading once an issue names more
   than one file.
+- **Agent Brief vs `## Files`.** The vendored triage skill's Agent Brief
+  (`.agents/skills/triage/AGENT-BRIEF.md`) describes behaviour and stays path-free; that rule is
+  unchanged. The issue's `## Files` section is a separate thing: the change-set claim
+  `batch:issues` plans waves from, and it remains required. The two do not conflict; the brief says
+  what to build, `## Files` says where the change lands.
 - **Dependencies.** `blocked by #N`, `depends on #N`, `requires #N`, and `land #N first` all mean
   *this issue must land after #N*; `blocks #N` means the reverse. The phrase may be followed by
   any mix of `:`, `*`, `_` and spaces (at least one) before the first `#N`, so `**Depends on:** #N`,
