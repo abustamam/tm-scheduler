@@ -19,7 +19,7 @@ carrying >150k context.
   session's judgement: specs, review, the merge decision.
   A PreToolUse hook (`scripts/agent-model-guard.ts`) denies any Agent dispatch that names neither
   a `model` nor a pinned agent; it fails open on malformed input.
-- **One wave or one issue per session, then hand off.** Compact near 250k.
+- **One wave or one issue per session, then hand off.**
 - **Write or update the handoff before ANY wait for the maintainer's input**, including a
   question in chat, and when the session's work is done. The maintainer cannot predict when they
   step away, and a session idle for over an hour has lost its cache: resuming it rebuilds the
@@ -58,7 +58,6 @@ carrying >150k context.
   - **Next:** the one or two concrete steps after the decision
   - **Gotchas:** anything a fresh session would trip on
   ```
-- An agent's "it passed" is not evidence: read the number (the test count, the CI run) yourself.
 
 ## Git worktree isolation (required)
 
@@ -93,8 +92,7 @@ Full rules and the failures behind them: `docs/agents/worktrees-and-landing.md`.
 - **Better-Auth** (`src/lib/auth.ts`, mounted at `src/routes/api/auth/$.ts`). **Magic-link is the
   only sign-in method**; the same instance is an **OAuth 2.1 authorization server** for
   `/api/mcp` (#842 / ADR-0027), which accepts `tmk_…` personal tokens and OAuth access tokens
-  (#843). **`tanstackStartCookies()` must be LAST in the plugins array**; `BETTER_AUTH_URL` is
-  load-bearing at import; Dynamic Client Registration stays OFF. **Read `docs/agents/auth.md`
+  (#843). Dynamic Client Registration stays OFF. **Read `docs/agents/auth.md`
   before touching auth, OAuth, CIMD, `/api/mcp`, `/signin` or `/oauth/consent`** — it has the
   traps, the guard tests and which file may import what. Connector runbook:
   `docs/claude-connector.md`.
@@ -171,8 +169,7 @@ plan and the record (attendance) are two tables. The schema's invariants are in
 
 **Railway**, push to `main` auto-deploys; migrations apply at container start. Do NOT adopt
 edge/serverless adapters — the `pg` pool and the in-process poller (ADR-0023) need a persistent
-process. **Changing a `createServerFn`'s `method` breaks open tabs**: every caller needs a
-fallback in the same change. Full sections: `docs/agents/data-and-deploy.md`.
+process. Full sections: `docs/agents/data-and-deploy.md`.
 
 ## Agent skills
 
@@ -236,8 +233,6 @@ been shown to pay, release ceremony is zero, deferred debt is not logged. `/ship
   `hydration`), so watch **CI on `main`** after a wave lands — that is what catches a cross-PR
   clash.
 - **Do not pass `--delete-branch`.** Remove the worktree, then the branch.
-- **Verify a merge with `gh pr view N --json state,mergeCommit`**, never from `gh pr merge`'s
-  output (silent under a tool call; can print `fatal` after landing).
 
 Why each of these, and the auto-merge setting's history: `docs/agents/worktrees-and-landing.md`.
 
@@ -279,4 +274,3 @@ idea → [brainstorming | /grilling] → /spec → ready-for-agent issues → (a
 
 Find the root cause (`systematic-debugging`) before implementing: given "the banner says the
 wrong thing", an agent patches the banner; #448's cause was one line two functions away.
-`/browse` needs `GSTACK_CHROMIUM_NO_SANDBOX=1` here.
