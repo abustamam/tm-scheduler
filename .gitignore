@@ -46,9 +46,12 @@ ref
 # Keep them local; the non-secret request recipe lives in issue #107. The scrubbed
 # samples/_api_bcm_progress_* JSON fixtures ARE committed for reference.
 *.har
+# CodeLedger was removed (2026-11-23), but checkouts that ran it still hold its
+# runtime files (session logs, cache). Keep them ignored so `git add` never picks
+# them up; delete the directory by hand when convenient.
+.codeledger/
 .claude/*
 !.claude/
-!.claude/hooks.json
 # Project skills are shared agent procedure, like docs/agents/ — they belong in
 # the repo. Everything else under .claude/ is per-session local state (worktrees
 # above all, which would otherwise recurse into this ignore file).
