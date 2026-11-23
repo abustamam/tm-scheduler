@@ -17,13 +17,9 @@ bun run worktree:setup "what you are building"
 ```
 
 A worktree shares git history and nothing else. It starts with no
-`node_modules`, no `.env.local`, no `ref/`, and no CodeLedger index — so
-`db:*`, `dev` and the seed all fail, and CodeLedger silently returns empty
-bundles reporting 0% recall rather than erroring. Four releases shipped from
-worktrees on 2026-07-31 with CodeLedger contributing nothing for exactly that
-reason. The script is idempotent, so re-run it whenever you are unsure. Pass a
-task description to also get a task-scoped bundle; omit it for deps and env
-only. Afterwards `git status` should be empty — if it is not, something in the
+`node_modules`, no `.env.local` and no `ref/`, so `db:*`, `dev` and the seed all fail. The script
+is idempotent, so re-run it whenever you are unsure. Pass a task description or omit it; either
+way it gives deps and env. Afterwards `git status` should be empty — if it is not, something in the
 bootstrap wrote a tracked file and that is a bug worth chasing.
 
 Setup also gives the worktree **its own test database** (#980), `tm_test_wt_<branch>_<hash>` in
