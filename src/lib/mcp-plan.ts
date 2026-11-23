@@ -9,12 +9,13 @@
  * order — makes every apply fail as `PLAN_STALE`, which reads from the outside
  * exactly like a database race and is close to undebuggable from a transcript.
  *
- * So there is one canonicalizer, here, in a module with no database import and
- * no tool knowledge. Tools sharing it is the only way a later one inherits a
+ * So there is one canonicalizer, here, in a module with no database import. It also
+ * holds the MCP server's per-tool contract lists and instructions text (#1657),
+ * which name tools but import none. Tools sharing it is the only way a later one inherits a
  * mechanism that is already proven rather than re-deriving a subtly different
  * one. No tool hashes for itself.
  *
- * ## `assign_roles` and `set_awards` are the exemptions, and it is deliberate
+ * ## `assign_roles`, `set_awards` and the four meeting-status tools are the exemptions, and it is deliberate
  *
  * This header used to say EVERY write tool returns `{plan, planHash}`, which
  * was true when only `record_guest_book` existed and stopped being true at
@@ -27,6 +28,12 @@
  * `set_awards` (#1172) is the second exemption, for the same reasons: at most
  * three rows, every id from `get_agenda` or `find_people`, one transaction under
  * the meeting's row lock, and a wrong winner is one tap to fix in the minutes.
+ *
+ * `cancel_meeting`, `restore_meeting`, `complete_meeting` and `reopen_meeting`
+ * (#1657) apply on the first call too, by the maintainer's decision: one row,
+ * one tap to undo (completing's closed ballots excepted, and its description
+ * says so). The exemptions are the exported `IMMEDIATE_APPLY_TOOLS` below, and
+ * the server instructions are generated from it.
  *
  * The rule that decides which shape a tool gets is stated in
  * `src/server/mcp/tools/assign-roles.ts`: a confirm page — and therefore a
@@ -66,6 +73,49 @@
  * in the club does not make it stale.
  */
 import { createHash } from "node:crypto";
+
+/**
+ * Write tools that APPLY ON THE FIRST CALL: no preview, no `planHash`. The one
+ * source of truth for the server instructions and the guard test (#1657).
+ */
+export const IMMEDIATE_APPLY_TOOLS = [
+	"assign_roles",
+	"set_awards",
+	"cancel_meeting",
+	"restore_meeting",
+	"complete_meeting",
+	"reopen_meeting",
+] as const;
+
+/** Write tools that return a `confirmUrl`; the user confirms in the app. */
+export const CONFIRM_PAGE_TOOLS = [
+	"upsert_agendas",
+	"record_guest_book",
+] as const;
+
+/** The sentence every immediate-apply tool's description must START with. */
+export const IMMEDIATE_APPLY_PREFIX =
+	"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. ";
+
+/** The text sent at MCP `initialize`; the tool lists are generated, not typed. */
+export function buildMcpInstructions(): string {
+	return `This server edits a real Toastmasters club's records. Write tools follow one of three contracts.
+
+1. Preview, then apply (every write tool not named in 2 or 3):
+   a. Call it WITHOUT planHash. Nothing is written; you get back a plan, a planHash, and a list of blocking items.
+   b. Show the plan to the user in full and get an explicit yes. Do not summarise away what it will change.
+   c. Call the tool again with the SAME input plus that planHash.
+
+2. Confirm in the app: ${CONFIRM_PAGE_TOOLS.join(", ")}. These return a confirmUrl and write nothing. Give the user the link; they confirm on that page.
+
+3. APPLIES ON THE FIRST CALL: ${IMMEDIATE_APPLY_TOOLS.join(", ")}. There is NO preview and no planHash: the call itself is the write. State what you are about to do and get the user's explicit yes BEFORE calling.
+
+Never resolve an entry the plan marks 'ambiguous' on your own — ask the user which person it is, or whether it is someone new. Guessing merges two real people's records or splits one person's into two.
+
+If an apply returns PLAN_STALE, the club changed since the preview. Show the fresh plan it returns and ask again; do not retry automatically.
+
+Start with whoami to get a clubId.`;
+}
 
 /**
  * Deterministic JSON for a plain JSON-ish value: object keys sorted at every

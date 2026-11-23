@@ -59,6 +59,7 @@ import {
 	planLine,
 } from "#/lib/assign-roles-plan";
 import { MAX_ROLE_ASSIGNMENTS } from "#/lib/mcp-limits";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import {
 	isMeetingCancelled,
 	MEETING_CANCELLED_MESSAGE,
@@ -136,6 +137,7 @@ export const assignRolesTool: McpToolDefinition = {
 	config: {
 		title: "Assign roles",
 		description:
+			IMMEDIATE_APPLY_PREFIX +
 			"Fill and clear one meeting's role slots. Each assignment names a slot " +
 			"id from get_agenda and either a memberId, a guestId, or clear: true. " +
 			"Returns a plan saying what every change did, in `from → to` form, and " +

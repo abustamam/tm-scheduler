@@ -15,6 +15,7 @@
  * meeting's state (its date has passed, or it is not cancelled).
  */
 import { z } from "zod";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import {
 	MEETING_NOT_CANCELLED_MESSAGE,
 	MEETING_RESTORE_PAST_MESSAGE,
@@ -50,6 +51,7 @@ export const restoreMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Restore meeting",
 		description:
+			IMMEDIATE_APPLY_PREFIX +
 			"Put a cancelled meeting back on the calendar, with every role " +
 			"assignment exactly as it was. Refused for a meeting that is not " +
 			"cancelled or whose date has passed.",

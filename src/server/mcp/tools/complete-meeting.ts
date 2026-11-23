@@ -19,6 +19,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { clubs, meetings } from "#/db/schema";
+import { IMMEDIATE_APPLY_PREFIX } from "#/lib/mcp-plan";
 import { MEETING_CANCELLED_MESSAGE } from "#/lib/meeting-cancellation-notice";
 import { meetingDateReached } from "#/lib/meeting-lifecycle";
 import {
@@ -47,11 +48,14 @@ export const completeMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Complete meeting",
 		description:
+			IMMEDIATE_APPLY_PREFIX +
 			"Mark one meeting complete, once its date has arrived. Completing " +
 			"locks the meeting against further edits and CLOSES any ballots still " +
 			"open on it; the result says how many it closed. Nothing is sent. " +
-			"reopen_meeting puts it back to scheduled. Refused for a cancelled " +
-			"meeting, one already completed, or one whose date has not arrived.",
+			"reopen_meeting puts it back to scheduled, but the ballots it closed " +
+			"STAY CLOSED. " +
+			"Refused for a cancelled meeting, one already completed, or one " +
+			"whose date has not arrived.",
 		inputSchema,
 	},
 	handler: async (input, ctx) => {
