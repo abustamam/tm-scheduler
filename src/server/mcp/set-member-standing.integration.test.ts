@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	activityLog,
 	apiTokens,
+	guests,
 	meetingAttendancePlan,
 	meetings,
 	members,
@@ -77,6 +78,11 @@ interface Plan {
 			hasLinkedSpeech: boolean;
 		}[];
 		closedOfficerTerms: string[];
+		guestStageChanges: {
+			guestId: string;
+			before: string;
+			after: string;
+		}[];
 		deletedPlanAnswers: { meetingId: string; status: string }[];
 		adminNote: string | null;
 		blocking: { code: string; message: string }[];
@@ -616,6 +622,99 @@ describe.skipIf(!hasTestDb)("set_member_standing (#1577)", () => {
 			.from(officerTerms)
 			.where(eq(officerTerms.membershipId, s.memberId));
 		expect(open.every((t) => t.termEnd !== null)).toBe(true);
+	});
+
+	describe("the linked guest record (#1663)", () => {
+		async function guestRow(
+			clubId: string,
+			name: string,
+			over: Partial<typeof guests.$inferInsert> = {},
+		) {
+			const personId = await seedPerson({ name });
+			const [g] = await testDb
+				.insert(guests)
+				.values({ clubId, personId, name, stage: "joined", ...over })
+				.returning({ id: guests.id });
+			if (!g) throw new Error("no guest");
+			return g.id;
+		}
+		const stageOf = async (id: string) =>
+			(await testDb.select().from(guests).where(eq(guests.id, id)))[0]?.stage;
+
+		it("former moves the linked joined guest to lost, in the plan and the apply; unlinked and visiting guests are untouched", async () => {
+			const { s, adminToken } = await fixture();
+			const linked = await guestRow(s.clubId, "Linked", {
+				convertedMembershipId: s.memberId,
+			});
+			const unlinked = await guestRow(s.clubId, "Unlinked");
+			const visiting = await guestRow(s.clubId, "Visiting", {
+				convertedMembershipId: s.memberId,
+				kind: "visiting_toastmaster",
+			});
+			const input = {
+				clubId: s.clubId,
+				memberId: s.memberId,
+				status: "former",
+			};
+			const p = (await run(adminToken, input)) as Plan;
+			expect(p.plan.guestStageChanges).toEqual([
+				{ guestId: linked, name: "Linked", before: "joined", after: "lost" },
+			]);
+			expect(await stageOf(linked)).toBe("joined");
+			expect(
+				(await outcome(run(adminToken, { ...input, planHash: p.planHash }))).ok,
+			).toBe(true);
+			expect(await stageOf(linked)).toBe("lost");
+			expect(await stageOf(unlinked)).toBe("joined");
+			expect(await stageOf(visiting)).toBe("joined");
+		});
+
+		it("going inactive leaves the guest joined; back from former to active returns lost to joined", async () => {
+			const { s, adminToken } = await fixture();
+			const linked = await guestRow(s.clubId, "Linked", {
+				convertedMembershipId: s.memberId,
+			});
+			const inactive = (await run(adminToken, {
+				clubId: s.clubId,
+				memberId: s.memberId,
+				status: "inactive",
+			})) as Plan;
+			expect(inactive.plan.guestStageChanges).toEqual([]);
+
+			const toFormer = {
+				clubId: s.clubId,
+				memberId: s.memberId,
+				status: "former",
+			};
+			const pf = (await run(adminToken, toFormer)) as Plan;
+			await run(adminToken, { ...toFormer, planHash: pf.planHash });
+			expect(await stageOf(linked)).toBe("lost");
+
+			const back = { clubId: s.clubId, memberId: s.memberId, status: "active" };
+			const pb = (await run(adminToken, back)) as Plan;
+			expect(pb.plan.guestStageChanges).toEqual([
+				{ guestId: linked, name: "Linked", before: "lost", after: "joined" },
+			]);
+			await run(adminToken, { ...back, planHash: pb.planHash });
+			expect(await stageOf(linked)).toBe("joined");
+		});
+
+		it("a lost guest linked to a member who is only inactive is left alone on reactivation", async () => {
+			const { s, adminToken } = await fixture();
+			const g = await guestRow(s.clubId, "Manual", {
+				convertedMembershipId: s.memberId,
+				stage: "lost",
+			});
+			await testDb
+				.update(members)
+				.set({ status: "inactive" })
+				.where(eq(members.id, s.memberId));
+			const back = { clubId: s.clubId, memberId: s.memberId, status: "active" };
+			const pb = (await run(adminToken, back)) as Plan;
+			expect(pb.plan.guestStageChanges).toEqual([]);
+			await run(adminToken, { ...back, planHash: pb.planHash });
+			expect(await stageOf(g)).toBe("lost");
+		});
 	});
 
 	it("promoting a member logs member_edit crediting the calling officer", async () => {

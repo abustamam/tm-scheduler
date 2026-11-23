@@ -24,6 +24,7 @@ import { db } from "#/db";
 import {
 	clubActionItems,
 	clubs,
+	guests,
 	meetingAttendance,
 	meetingAwards,
 	meetings,
@@ -920,6 +921,22 @@ export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
 		// left here would keep naming them on the meeting's public "not coming"
 		// list. A completed meeting's answers stay, like its slots and roll.
 		if (ending) await deletePlanRowsOfEndedMember(tx, input.memberId);
+		// The linked guest record follows the membership (#1663), so it never
+		// keeps saying `joined` for someone who left.
+		const guestMove = guestStageMoveFor(current.status, input.status);
+		if (guestMove) {
+			for (const g of await linkedGuestsAt(
+				tx,
+				input.clubId,
+				input.memberId,
+				guestMove.before,
+			)) {
+				await tx
+					.update(guests)
+					.set({ stage: guestMove.after, updatedAt: now })
+					.where(eq(guests.id, g.id));
+			}
+		}
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,
@@ -953,6 +970,43 @@ export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
 		});
 	});
 	return { ok: true as const, status: input.status };
+}
+
+/** The guest record(s) a status change moves (#1663): ending a membership
+ *  (→ former) puts a `joined` guest linked to it (`converted_membership_id`)
+ *  to `lost`; leaving former puts a linked `lost` one back to `joined`. The
+ *  link that survives the status change is all the reverse needs. An unlinked
+ *  guest and a Visiting Toastmaster are never touched. Shared by the write and
+ *  the preview, so the plan names exactly the rows the apply moves. */
+function guestStageMoveFor(
+	from: "active" | "inactive" | "former",
+	to: "active" | "inactive" | "former",
+): { before: "joined" | "lost"; after: "joined" | "lost" } | null {
+	if (from === to) return null;
+	if (isOnRoster(from) && to === "former")
+		return { before: "joined", after: "lost" };
+	if (from === "former") return { before: "lost", after: "joined" };
+	return null;
+}
+
+function linkedGuestsAt(
+	conn: Tx | typeof db,
+	clubId: string,
+	memberId: string,
+	stage: "joined" | "lost",
+) {
+	return conn
+		.select({ id: guests.id, name: guests.name })
+		.from(guests)
+		.where(
+			and(
+				eq(guests.clubId, clubId),
+				eq(guests.convertedMembershipId, memberId),
+				eq(guests.stage, stage),
+				ne(guests.kind, "visiting_toastmaster"),
+			),
+		)
+		.orderBy(asc(guests.name), asc(guests.id));
 }
 
 /** Runs `fn` on the caller's transaction, or in a fresh one. */
@@ -1244,6 +1298,25 @@ export async function memberStandingVerdict(
 		);
 	}
 
+	const guestMove = statusChanges
+		? guestStageMoveFor(current.status, statusAfter)
+		: null;
+	const guestStageChanges = guestMove
+		? (
+				await linkedGuestsAt(
+					conn,
+					input.clubId,
+					input.memberId,
+					guestMove.before,
+				)
+			).map((g) => ({
+				guestId: g.id,
+				name: g.name,
+				before: guestMove.before,
+				after: guestMove.after,
+			}))
+		: [];
+
 	return {
 		member: { id: current.id, name: current.name },
 		status: { before: current.status, after: statusAfter },
@@ -1253,6 +1326,7 @@ export async function memberStandingVerdict(
 		releasedRoles,
 		closedOfficerTerms,
 		deletedPlanAnswers,
+		guestStageChanges,
 		blocked,
 	};
 }
