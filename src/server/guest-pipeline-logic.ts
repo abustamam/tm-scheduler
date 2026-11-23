@@ -2042,6 +2042,20 @@ export interface ConvertGuestInput {
 	confirmedEmail?: string | null;
 }
 
+/** The refusal for a convert of a guest that already joined. */
+export const GUEST_ALREADY_CONVERTED_MESSAGE =
+	"This guest has already been converted to a member.";
+
+/**
+ * Thrown inside `applyConvertGuestToMember`'s own transaction under `dryRun`,
+ * carrying the result: the throw rolls every write back, the caller catches it.
+ */
+class ConvertDryRunRollback extends Error {
+	constructor(readonly result: ConvertGuestResult) {
+		super("convert dry run rollback");
+	}
+}
+
 export interface ConvertGuestResult {
 	ok: true;
 	membershipId: string;
@@ -2356,13 +2370,14 @@ async function matchClubMemberPerson(
  */
 export async function applyConvertGuestToMember(
 	input: ConvertGuestInput,
+	opts: { dryRun?: boolean } = {},
 ): Promise<ConvertGuestResult> {
 	const cc = await loadClubDefaultCountryCode(input.clubId);
 	// The Person this convert FILLED an address on, for the shared-address check
 	// after commit (see the end).
 	let written: { personId: string; email: string } | null = null;
 
-	const result = await db.transaction(async (tx) => {
+	const run = db.transaction(async (tx) => {
 		// Serialize every convert in this CLUB, not just this guest (#759 review).
 		// The dedup below matches only a Person whose roster row here is
 		// COMMITTED, so two different guest cards for one visitor converted at
@@ -2399,7 +2414,7 @@ export async function applyConvertGuestToMember(
 			.from(guests)
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1);
-		if (!peek) throw new Error("Guest not found in this club.");
+		if (!peek) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 		const peekOwn = await guestOwnContact(tx, peek.personId);
 		const peekMatch = await matchClubMemberPerson(
 			tx,
@@ -2437,12 +2452,12 @@ export async function applyConvertGuestToMember(
 			.where(and(eq(guests.id, input.guestId), eq(guests.clubId, input.clubId)))
 			.limit(1)
 			.for("update");
-		if (!guest) throw new Error("Guest not found in this club.");
+		if (!guest) throw new Error(GUEST_NOT_IN_CLUB_MESSAGE);
 		if (guest.personId !== peek.personId) {
 			throw new Error(RECORD_CHANGED_MESSAGE);
 		}
 		if (guest.stage === "joined") {
-			throw new Error("This guest has already been converted to a member.");
+			throw new Error(GUEST_ALREADY_CONVERTED_MESSAGE);
 		}
 
 		// A stranded guest that was once LINKED still has that link's recorded
@@ -2920,7 +2935,7 @@ export async function applyConvertGuestToMember(
 			},
 		});
 
-		return {
+		const outcome = {
 			ok: true as const,
 			membershipId,
 			personId,
@@ -2933,7 +2948,18 @@ export async function applyConvertGuestToMember(
 			// the field together in the next release that touches this file.
 			retainedOfficerPositions: [],
 		};
+		// Under `dryRun` the throw rolls back everything above, the activity log
+		// row included; every statement in this body goes through `tx`.
+		if (opts.dryRun) throw new ConvertDryRunRollback(outcome);
+		return outcome;
 	});
+	let result: ConvertGuestResult;
+	try {
+		result = await run;
+	} catch (err) {
+		if (err instanceof ConvertDryRunRollback) return err.result;
+		throw err;
+	}
 
 	// Did the address this convert wrote leave someone unable to sign in (#759)?
 	// Reported, never refused — the member edit form's policy, and the CSV

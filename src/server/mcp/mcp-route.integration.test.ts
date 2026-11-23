@@ -37,6 +37,7 @@ import {
 	roleSlots,
 } from "#/db/schema";
 import { utcToZonedWallTime } from "#/lib/datetime";
+import { maskEmail, maskPhone } from "#/server/mcp/serialize";
 import {
 	cleanup,
 	hasTestDb,
@@ -199,6 +200,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"cancel_meeting",
 			"claim_open_role",
 			"complete_meeting",
+			"convert_guest",
 			"create_meetings",
 			"delete_agenda_template",
 			"duplicate_agenda_template",
@@ -216,6 +218,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			"get_my_schedule",
 			"list_agenda_templates",
 			"list_meetings",
+			"merge_guests",
 			"record_attendance",
 			"record_guest_book",
 			"record_table_topics",
@@ -527,6 +530,24 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			)
 			.returning({ id: guests.id });
 
+		// #1664. A second guest with contact details on file, so the merge and
+		// convert previews read a raw email and phone they must not echo.
+		const [dupe] = await testDb
+			.insert(guests)
+			.values(
+				await withGuestPerson(
+					{
+						clubId: seed.clubId,
+						name: "Duplicate Guest",
+						email: "dupe.address@example.com",
+						phone: "+15559876543",
+						stage: "prospect",
+					},
+					testDb,
+				),
+			)
+			.returning({ id: guests.id });
+
 		// `record_guest_book` needs a meeting whose club-local day has ARRIVED, or
 		// it returns `plan: null` and its masking code never runs — which is how
 		// an earlier version of this test passed vacuously on the one tool that
@@ -761,6 +782,17 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 				memberId: seed.memberId,
 				status: "inactive",
 			}),
+			// #1664. Previews only (no planHash): both records are shown to the
+			// officer, and each has an email and phone on file.
+			toolsCall("merge_guests", {
+				clubId: seed.clubId,
+				keepGuestId: contactful!.id,
+				absorbGuestId: dupe!.id,
+			}),
+			toolsCall("convert_guest", {
+				clubId: seed.clubId,
+				guestId: dupe!.id,
+			}),
 			// #1563. Previews only: a new name, and a name-only edit (which shows
 			// only the changed field, never the contact detail).
 			// #1572. A preview only (no planHash): dates and a location, never a guest.
@@ -786,6 +818,7 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 		];
 		const rawByTool = new Map<string, string>();
 		const bodyByTool = new Map<string, unknown>();
+		const isErrorByTool = new Map<string, boolean>();
 		for (const call of calls) {
 			if (call.params.name === "complete_meeting") {
 				await testDb
@@ -793,9 +826,10 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 					.set({ scheduledAt: new Date(Date.now() - 2 * 86_400_000) })
 					.where(eq(meetings.id, seed.meetingId));
 			}
-			const { raw, body } = await readToolResult(
+			const { raw, body, isError } = await readToolResult(
 				await handleMcpRequest(mcpRequest(call, { token: adminToken })),
 			);
+			isErrorByTool.set(call.params.name, isError);
 			// A later call to the same tool replaces the earlier one: the second
 			// `get_agenda` (after `set_awards`) is the one asserted on below.
 			rawByTool.set(call.params.name, raw);
@@ -806,7 +840,38 @@ describe.skipIf(!hasTestDb)("/api/mcp (#773)", () => {
 			expect(raw, `${call.params.name} leaked a raw phone`).not.toContain(
 				"5551234567",
 			);
+			expect(raw, `${call.params.name} leaked a raw email`).not.toContain(
+				"dupe.address@example.com",
+			);
+			expect(raw, `${call.params.name} leaked a raw phone`).not.toContain(
+				"5559876543",
+			);
 		}
+
+		// The positive half for #1664: the merge and convert previews SUCCEEDED and
+		// show both guests, so the no-raw-contact assertions above were made against
+		// a body that carried the masked forms, not against an error.
+		const maskedBoth = [
+			maskEmail(email),
+			maskPhone(phone),
+			maskEmail("dupe.address@example.com"),
+			maskPhone("+15559876543"),
+		];
+		for (const name of ["merge_guests", "convert_guest"]) {
+			expect(isErrorByTool.get(name), `${name} must not be an error`).toBe(
+				false,
+			);
+		}
+		for (const m of maskedBoth) {
+			expect(
+				rawByTool.get("merge_guests"),
+				"merge_guests names both guests masked",
+			).toContain(m);
+		}
+		expect(rawByTool.get("convert_guest")).toContain(
+			maskEmail("dupe.address@example.com"),
+		);
+		expect(rawByTool.get("convert_guest")).toContain(maskPhone("+15559876543"));
 
 		// The positive half for `cancel_meeting` (review of #1084, H): its notice
 		// is BUILT from the slot holders, and `assign_roles` above put this guest

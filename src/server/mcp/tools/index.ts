@@ -21,6 +21,7 @@ import { assignRolesTool } from "./assign-roles";
 import { cancelMeetingTool } from "./cancel-meeting";
 import { claimOpenRoleTool } from "./claim-open-role";
 import { completeMeetingTool } from "./complete-meeting";
+import { convertGuestTool } from "./convert-guest";
 import { createMeetingsTool } from "./create-meetings";
 import { deleteAgendaTemplateTool } from "./delete-agenda-template";
 import { duplicateAgendaTemplateTool } from "./duplicate-agenda-template";
@@ -38,6 +39,7 @@ import { getMyFeedbackTool } from "./get-my-feedback";
 import { getMyScheduleTool } from "./get-my-schedule";
 import { listAgendaTemplatesTool } from "./list-agenda-templates";
 import { listMeetingsTool } from "./list-meetings";
+import { mergeGuestsTool } from "./merge-guests";
 import { recordAttendanceTool } from "./record-attendance";
 import { recordGuestBookTool } from "./record-guest-book";
 import { recordTableTopicsTool } from "./record-table-topics";
@@ -103,5 +105,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	addMembersTool,
 	editMemberTool,
 	setMemberStandingTool,
+	mergeGuestsTool,
+	convertGuestTool,
 	setMySpeechDetailsTool,
 ];
