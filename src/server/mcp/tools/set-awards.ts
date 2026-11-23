@@ -205,10 +205,11 @@ export const setAwardsTool: McpToolDefinition = {
 	config: {
 		title: "Set awards",
 		description:
+			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
 			"Record or clear a meeting's award winners (Best Speaker, Best " +
 			"Evaluator, Best Table Topics). Each entry names a category and either " +
 			"a memberId, a guestId, or clear: true; ids come from get_agenda or " +
-			"find_people. It APPLIES IMMEDIATELY, in the same call, and returns a " +
+			"find_people. It returns a " +
 			"plan saying what each category was and is. The whole call applies or " +
 			"none of it does. It refuses a cancelled meeting, a category whose " +
 			"digital vote is still open, a candidate ruled out of the award, and a " +

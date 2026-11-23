@@ -29,6 +29,7 @@ export const reopenMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Reopen meeting",
 		description:
+			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
 			"Put a completed meeting back to scheduled so it can be edited, then " +
 			"complete it again. Ballots that completing closed stay closed. " +
 			"Refused for a meeting that is not completed (a cancelled one is put " +

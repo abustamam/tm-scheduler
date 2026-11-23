@@ -50,6 +50,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { MAX_MCP_BODY_BYTES } from "#/lib/mcp-limits";
+import { buildMcpInstructions } from "#/lib/mcp-plan";
 import {
 	parseDeclaredContentLength,
 	readBodyWithinCap,
@@ -66,23 +67,8 @@ import { serveWithOAuthCredential } from "./oauth-credential";
 import type { McpToolContext } from "./tool";
 import { MCP_TOOLS } from "./tools";
 
-/**
- * Sent at MCP `initialize`. This is the protocol the write tools depend on, and
- * it has to be stated to the model rather than only to the human reading the
- * docs: a client that applies without previewing defeats the entire mechanism.
- */
-const INSTRUCTIONS = `This server edits a real Toastmasters club's records. Writes are previewed before they happen.
-
-For any write tool:
-1. Call it WITHOUT planHash. Nothing is written; you get back a plan, a planHash, and a list of blocking items.
-2. Show the plan to the user in full and get an explicit yes. Do not summarise away what it will change.
-3. Call the tool again with the SAME input plus that planHash.
-
-Never resolve an entry the plan marks 'ambiguous' on your own — ask the user which person it is, or whether it is someone new. Guessing merges two real people's records or splits one person's into two.
-
-If an apply returns PLAN_STALE, the club changed since the preview. Show the fresh plan it returns and ask again; do not retry automatically.
-
-Start with whoami to get a clubId.`;
+/** Sent at MCP `initialize`; generated in `mcp-plan.ts` from the tool lists (#1657). */
+const INSTRUCTIONS = buildMcpInstructions();
 
 function json(data: unknown, status: number): Response {
 	return Response.json(data, { status });

@@ -136,6 +136,7 @@ export const assignRolesTool: McpToolDefinition = {
 	config: {
 		title: "Assign roles",
 		description:
+			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
 			"Fill and clear one meeting's role slots. Each assignment names a slot " +
 			"id from get_agenda and either a memberId, a guestId, or clear: true. " +
 			"Returns a plan saying what every change did, in `from → to` form, and " +

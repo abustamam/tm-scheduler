@@ -47,10 +47,12 @@ export const completeMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Complete meeting",
 		description:
+			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
 			"Mark one meeting complete, once its date has arrived. Completing " +
 			"locks the meeting against further edits and CLOSES any ballots still " +
 			"open on it; the result says how many it closed. Nothing is sent. " +
-			"reopen_meeting puts it back to scheduled. Refused for a cancelled " +
+			"reopen_meeting puts it back to scheduled, but the ballots it closed " +
+			"STAY CLOSED. Refused for a cancelled " +
 			"meeting, one already completed, or one whose date has not arrived.",
 		inputSchema,
 	},

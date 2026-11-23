@@ -50,6 +50,7 @@ export const restoreMeetingTool: McpToolDefinition = {
 	config: {
 		title: "Restore meeting",
 		description:
+			"APPLIES IMMEDIATELY, in the same call, with no preview and no planHash: the call IS the write. State what you are about to do and get the user's yes BEFORE calling. " +
 			"Put a cancelled meeting back on the calendar, with every role " +
 			"assignment exactly as it was. Refused for a meeting that is not " +
 			"cancelled or whose date has passed.",
