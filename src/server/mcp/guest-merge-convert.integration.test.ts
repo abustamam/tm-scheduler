@@ -43,9 +43,9 @@ const {
 	GUEST_MERGE_DIFFERENT_PEOPLE_MESSAGE,
 	GUEST_MERGE_PERSON_LINKED_MESSAGE,
 } = await import("#/server/guest-merge-logic");
-const { GUEST_ALREADY_CONVERTED_MESSAGE } = await import(
-	"#/server/guest-pipeline-logic"
-);
+const { GUEST_ALREADY_CONVERTED_MESSAGE, GUEST_MEMBER_ENDED_MESSAGE } =
+	await import("#/server/guest-pipeline-logic");
+const { applySetMemberStatus } = await import("#/server/members-logic");
 const { LINK_ALREADY_JOINED_MESSAGE, CONVERT_NAME_CLASH_MESSAGE } =
 	await import("#/lib/guest-convert");
 
@@ -723,6 +723,29 @@ describe.skipIf(!hasTestDb)("convert_guest, review round (#1664)", () => {
 				message: GUEST_ALREADY_CONVERTED_MESSAGE,
 			},
 		]);
+	});
+
+	it("a former member's guest (stage lost) previews as a blocking refusal, and apply is BLOCKED", async () => {
+		const { s, token } = await setup();
+		const g = await mkGuest(s.clubId, "Priya Raman", {
+			stage: "joined",
+			convertedMembershipId: s.memberId,
+		});
+		await applySetMemberStatus({
+			clubId: s.clubId,
+			actorMemberId: s.adminMemberId,
+			memberId: s.memberId,
+			status: "former",
+		});
+		expect((await guestRow(g))?.stage).toBe("lost");
+		const input = { clubId: s.clubId, guestId: g };
+		const p = (await convert(token, input)) as Preview;
+		expect(p.plan.blocking).toEqual([
+			{ code: "CONVERT_REFUSED", message: GUEST_MEMBER_ENDED_MESSAGE },
+		]);
+		const o = await outcome(convert(token, { ...input, planHash: p.planHash }));
+		expect(o.ok).toBe(false);
+		if (!o.ok) expect(o.code).toBe("BLOCKED");
 	});
 
 	it("a change to the guest's RAW email that keeps the masked form is PLAN_STALE", async () => {

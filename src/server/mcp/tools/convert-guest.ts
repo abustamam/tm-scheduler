@@ -47,6 +47,7 @@ import {
 	applyLinkGuestToMember,
 	type ConvertGuestResult,
 	GUEST_ALREADY_CONVERTED_MESSAGE,
+	GUEST_MEMBER_ENDED_MESSAGE,
 	LINK_MEMBER_FORMER_MESSAGE,
 	loadGuestPipeline,
 	type PipelineGuestRow,
@@ -92,6 +93,7 @@ const KNOWN_REFUSALS = new Set<string>([
 	LINK_MEMBER_NOT_IN_CLUB_MESSAGE,
 	CONVERT_NAME_CLASH_MESSAGE,
 	GUEST_ALREADY_CONVERTED_MESSAGE,
+	GUEST_MEMBER_ENDED_MESSAGE,
 ]);
 
 type MembershipOutcome =
