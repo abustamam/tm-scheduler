@@ -924,19 +924,17 @@ export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
 		// The linked guest record follows the membership (#1663), so it never
 		// keeps saying `joined` for someone who left.
 		const guestMove = guestStageMoveFor(current.status, input.status);
-		if (guestMove) {
-			for (const g of await linkedGuestsAt(
-				tx,
-				input.clubId,
-				input.memberId,
-				guestMove.before,
-			)) {
-				await tx
+		// One UPDATE that carries the whole predicate, so the rows moved are exactly
+		// the rows it still matches at write time (the plan's read is a snapshot).
+		const movedGuests = guestMove
+			? await tx
 					.update(guests)
 					.set({ stage: guestMove.after, updatedAt: now })
-					.where(eq(guests.id, g.id));
-			}
-		}
+					.where(
+						linkedGuestWhere(input.clubId, input.memberId, guestMove.before),
+					)
+					.returning({ guestId: guests.id })
+			: [];
 		await logActivity(tx, {
 			clubId: input.clubId,
 			actorMemberId: input.actorMemberId,
@@ -949,6 +947,15 @@ export async function applySetMemberStatus(input: SetStatusInput, conn?: Tx) {
 					status: input.status,
 					clubRole: demotes ? "member" : current.clubRole,
 				},
+				...(movedGuests.length > 0
+					? {
+							movedGuests: movedGuests.map((g) => ({
+								guestId: g.guestId,
+								before: guestMove?.before,
+								after: guestMove?.after,
+							})),
+						}
+					: {}),
 				...(ending || current.status === "former"
 					? { endedAt: { before: current.endedAt, after: endedAt } }
 					: {}),
@@ -989,6 +996,21 @@ function guestStageMoveFor(
 	return null;
 }
 
+/** The predicate for the guests a status change moves, shared by the preview's
+ *  read and the apply's UPDATE so they cannot drift apart. */
+function linkedGuestWhere(
+	clubId: string,
+	memberId: string,
+	stage: "joined" | "lost",
+) {
+	return and(
+		eq(guests.clubId, clubId),
+		eq(guests.convertedMembershipId, memberId),
+		eq(guests.stage, stage),
+		ne(guests.kind, "visiting_toastmaster"),
+	);
+}
+
 function linkedGuestsAt(
 	conn: Tx | typeof db,
 	clubId: string,
@@ -998,14 +1020,7 @@ function linkedGuestsAt(
 	return conn
 		.select({ id: guests.id, name: guests.name })
 		.from(guests)
-		.where(
-			and(
-				eq(guests.clubId, clubId),
-				eq(guests.convertedMembershipId, memberId),
-				eq(guests.stage, stage),
-				ne(guests.kind, "visiting_toastmaster"),
-			),
-		)
+		.where(linkedGuestWhere(clubId, memberId, stage))
 		.orderBy(asc(guests.name), asc(guests.id));
 }
 

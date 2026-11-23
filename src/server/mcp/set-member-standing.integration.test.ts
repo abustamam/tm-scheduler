@@ -80,6 +80,7 @@ interface Plan {
 		closedOfficerTerms: string[];
 		guestStageChanges: {
 			guestId: string;
+			name: string;
 			before: string;
 			after: string;
 		}[];
@@ -697,6 +698,39 @@ describe.skipIf(!hasTestDb)("set_member_standing (#1577)", () => {
 			]);
 			await run(adminToken, { ...back, planHash: pb.planHash });
 			expect(await stageOf(linked)).toBe("joined");
+		});
+
+		it("the roster's own writer (applySetMemberStatus) moves the guest: inactive to former, then former to inactive, and logs it", async () => {
+			const { s } = await fixture();
+			const linked = await guestRow(s.clubId, "Linked", {
+				convertedMembershipId: s.memberId,
+			});
+			const actor = { clubId: s.clubId, actorMemberId: s.adminMemberId };
+			await membersLogic.applySetMemberStatus({
+				...actor,
+				memberId: s.memberId,
+				status: "inactive",
+			});
+			expect(await stageOf(linked)).toBe("joined");
+			await membersLogic.applySetMemberStatus({
+				...actor,
+				memberId: s.memberId,
+				status: "former",
+			});
+			expect(await stageOf(linked)).toBe("lost");
+			await membersLogic.applySetMemberStatus({
+				...actor,
+				memberId: s.memberId,
+				status: "inactive",
+			});
+			expect(await stageOf(linked)).toBe("joined");
+			const moved = (await logs(s.clubId, s.memberId))
+				.map((r) => (r.detail as { movedGuests?: unknown }).movedGuests)
+				.filter(Boolean);
+			expect(moved).toEqual([
+				[{ guestId: linked, before: "joined", after: "lost" }],
+				[{ guestId: linked, before: "lost", after: "joined" }],
+			]);
 		});
 
 		it("a lost guest linked to a member who is only inactive is left alone on reactivation", async () => {
