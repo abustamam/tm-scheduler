@@ -64,12 +64,14 @@ const BLOCKING: ConfirmBlockingItem[] = [
 		entryId: "e2",
 		candidates: [
 			{
+				kind: "guest",
 				guestId: "g-1",
 				name: "Samir Patel",
 				email: "samir@example.com",
 				phone: "+15551234567",
 			},
 			{
+				kind: "guest",
 				guestId: "g-2",
 				name: "Samir Patel",
 				email: "s.patel@example.com",

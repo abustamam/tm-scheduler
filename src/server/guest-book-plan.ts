@@ -45,10 +45,10 @@
  * `julia@x.com` both mask to `j•••@x.com`, so a hash over the masked form would
  * let a preview of one be applied as the other.
  */
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, eq, gte, lt } from "drizzle-orm";
 import { z } from "zod";
 import type { db } from "#/db";
-import { meetingAttendance, meetings, members, people } from "#/db/schema";
+import { meetingAttendance, meetings } from "#/db/schema";
 import { nextLocalDate } from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import { planHash as computePlanHash } from "#/lib/mcp-plan";
@@ -66,7 +66,8 @@ import {
 } from "#/server/guest-pipeline-logic";
 import { type McpBlockingItem, McpError } from "#/server/mcp/errors";
 import { maskEmail, maskPhone } from "#/server/mcp/serialize";
-import { closeTo, sharesContact } from "#/server/near-name";
+import { loadClubMemberMatchRows } from "#/server/member-match-rows";
+import { nearName, sharesContact } from "#/server/near-name";
 
 export type Conn =
 	| typeof db
@@ -181,12 +182,42 @@ export interface GuestBookPlan {
 }
 
 /** One guest an ambiguous line might be, with contact UNMASKED. See the header. */
-export interface GuestBookCandidate {
-	guestId: string;
+export type GuestBookCandidate =
+	| {
+			kind: "guest";
+			guestId: string;
+			name: string;
+			email: string | null;
+			phone: string | null;
+	  }
+	/**
+	 * A club MEMBER the line is close to (#1658): a hint, never an answer. Its
+	 * id is `memberId`, deliberately not `guestId`, so nothing can submit it as
+	 * a guest to resolve to.
+	 */
+	| {
+			kind: "member";
+			memberId: string;
+			name: string;
+			email: string | null;
+			phone: string | null;
+	  };
+
+/** The most near-name candidates one line lists, as `record_attendance`'s MAX_MATCHES. */
+export const MAX_NEAR_NAME_CANDIDATES = 3;
+
+const guestCandidateOf = (c: {
+	id: string;
 	name: string;
-	email: string | null;
-	phone: string | null;
-}
+	email?: string | null;
+	phone?: string | null;
+}): GuestBookCandidate => ({
+	kind: "guest",
+	guestId: c.id,
+	name: c.name,
+	email: c.email ?? null,
+	phone: c.phone ?? null,
+});
 
 /** The `detail` an `AMBIGUOUS_GUEST` item carries. */
 export interface AmbiguousGuestDetail {
@@ -303,18 +334,7 @@ export async function plan(
 	const byId = new Map(candidates.map((c) => [c.id, c]));
 	// The club's members, for the near-name check (#1658): a visitor written
 	// down as someone close to a member is probably that member.
-	const memberRows = await conn
-		.select({
-			id: members.id,
-			name: members.name,
-			preferredName: members.preferredName,
-			email: people.email,
-			phone: people.phone,
-		})
-		.from(members)
-		.innerJoin(people, eq(people.id, members.personId))
-		.where(eq(members.clubId, club.clubId))
-		.orderBy(asc(members.name), asc(members.id));
+	const memberRows = await loadClubMemberMatchRows(conn, club.clubId);
 
 	// Who already has attendance at this meeting — what turns `matched` into
 	// `already_present`, and what makes re-transcribing a page a no-op.
@@ -460,14 +480,7 @@ export async function plan(
 				// which is the question this item is asking.
 				detail: {
 					reason: m.reason,
-					candidates: m.candidates.map(
-						(c): GuestBookCandidate => ({
-							guestId: c.id,
-							name: c.name,
-							email: c.email ?? null,
-							phone: c.phone ?? null,
-						}),
-					),
+					candidates: m.candidates.map(guestCandidateOf),
 				} satisfies AmbiguousGuestDetail,
 			});
 			return {
@@ -487,39 +500,30 @@ export async function plan(
 			// deliberately creates a new guest on a name-only match. Guests planned
 			// as new earlier on this page are not asked about: that is the
 			// duplicate-line case, handled above.
-			const close: GuestBookCandidate[] = [
+			// Guests first: they are the only selectable answers. The FULL list
+			// decides ambiguity; only the display is capped.
+			const allClose: GuestBookCandidate[] = [
 				...candidates
-					.filter((c) => closeTo(raw.name, c))
-					.map(
-						(c): GuestBookCandidate => ({
-							guestId: c.id,
-							name: c.name,
-							email: c.email ?? null,
-							phone: c.phone ?? null,
-						}),
-					),
-				// A member's id travels in `guestId` so the candidate list keeps one
-				// shape; resolving to it is refused as "not a guest of this club".
+					.filter((c) => nearName(raw.name, c))
+					.map(guestCandidateOf),
 				...memberRows
 					.filter(
 						(p) =>
-							closeTo(raw.name, p) ||
-							sharesContact(
-								p,
-								{ email, phone },
-								p.phone === null ? null : toStoredPhone(p.phone, countryCode),
-							),
+							nearName(raw.name, p) ||
+							sharesContact(p, { email, phone }, countryCode),
 					)
 					.map(
 						(p): GuestBookCandidate => ({
-							guestId: p.id,
+							kind: "member",
+							memberId: p.id,
 							name: p.name,
 							email: p.email ?? null,
 							phone: p.phone ?? null,
 						}),
 					),
 			];
-			if (close.length === 0) return asNew();
+			const close = allClose.slice(0, MAX_NEAR_NAME_CANDIDATES);
+			if (allClose.length === 0) return asNew();
 			blocking.push({
 				code: "AMBIGUOUS_GUEST",
 				entryIndex: index,

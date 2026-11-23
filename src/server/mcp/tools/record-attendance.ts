@@ -46,7 +46,7 @@
  * Blocking codes here are local to this tool (strings, as the member attendance
  * tools' are) rather than members of the officer tools' `McpBlockingCode` union.
  */
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "#/db";
 import { meetingAttendance, members, officerTerms, people } from "#/db/schema";
@@ -66,6 +66,7 @@ import {
 	loadGuestMatchCandidates,
 } from "#/server/guest-pipeline-logic";
 import { lockMeetingForSlotEdit } from "#/server/meeting-slot-lock";
+import { loadClubMemberMatchRows } from "#/server/member-match-rows";
 import { lockMembershipsAgainstMerge } from "#/server/membership-merge-lock";
 import {
 	addGuestPresent,
@@ -332,19 +333,8 @@ async function compute(
 
 	// The meeting's club only, any membership status: the writer's own rule
 	// (`requireMemberInMeetingClub`).
-	const memberRows = await conn
-		.select({
-			id: members.id,
-			name: members.name,
-			preferredName: members.preferredName,
-			email: people.email,
-			phone: people.phone,
-		})
-		.from(members)
-		.innerJoin(people, eq(people.id, members.personId))
-		.where(eq(members.clubId, facts.clubId))
-		// A stable order: the candidate list feeds the hashed plan.
-		.orderBy(asc(members.name), asc(members.id));
+	// A stable order: the candidate list feeds the hashed plan.
+	const memberRows = await loadClubMemberMatchRows(conn, facts.clubId);
 	const memberById = new Map(memberRows.map((m) => [m.id.toLowerCase(), m]));
 	const guestCandidates = await loadGuestMatchCandidates(conn, facts.clubId);
 	const guestById = new Map(
@@ -475,12 +465,6 @@ async function compute(
 		}
 		// A member who already holds this email or phone is the existing person,
 		// whatever the name says; `findGuestForContact` searches guests only.
-		const sharesContactWith = (m: (typeof memberRows)[number]) =>
-			sharesContact(
-				m,
-				{ email, phone },
-				m.phone === null ? null : toStoredPhone(m.phone, defaultCountryCode),
-			);
 		// The FULL match list decides ambiguity and is what the hash tracks (by
 		// count); only the display is truncated, so a guest created by a confirmed
 		// apply changes the hash even when three older matches already exist.
@@ -489,7 +473,11 @@ async function compute(
 				.filter((c) => closeTo(name, c))
 				.map((c) => ({ kind: "guest" as const, id: c.id, name: c.name })),
 			...memberRows
-				.filter((m) => closeTo(name, m) || sharesContactWith(m))
+				.filter(
+					(m) =>
+						closeTo(name, m) ||
+						sharesContact(m, { email, phone }, defaultCountryCode),
+				)
 				.map((m) => ({ kind: "member" as const, id: m.id, name: m.name })),
 		];
 		const close = allClose.slice(0, MAX_MATCHES);

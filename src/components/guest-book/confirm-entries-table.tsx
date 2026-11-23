@@ -38,6 +38,7 @@ import type {
 	ConfirmBlockingItem,
 	ConfirmLine,
 } from "#/server/guest-book-pending-logic";
+import type { GuestBookCandidate } from "#/server/guest-book-plan";
 
 /** What each outcome means, in the words a transcriber is thinking in. */
 const OUTCOME_LABEL: Record<string, string> = {
@@ -46,6 +47,36 @@ const OUTCOME_LABEL: Record<string, string> = {
 	ambiguous: "Needs an answer",
 	already_present: "Already recorded",
 };
+
+type GuestCandidate = Extract<GuestBookCandidate, { kind: "guest" }>;
+type MemberCandidate = Extract<GuestBookCandidate, { kind: "member" }>;
+
+/** The candidates the officer may SELECT: guests only (#1658). */
+export const guestOptionsOf = (candidates: GuestBookCandidate[]) =>
+	candidates.filter((c): c is GuestCandidate => c.kind === "guest");
+
+/** The candidates shown as a non-selectable hint: members. */
+export const memberHintsOf = (candidates: GuestBookCandidate[]) =>
+	candidates.filter((c): c is MemberCandidate => c.kind === "member");
+
+/**
+ * The select's value, or "" when the stored answer matches no option — a
+ * controlled select holding a value with no option renders blank while the
+ * model still carries the stale answer.
+ */
+export function selectValue(
+	resolve: PendingEntry["resolve"],
+	options: GuestCandidate[],
+): string {
+	if (resolve?.kind === "new") return "new";
+	if (
+		resolve?.kind === "existing" &&
+		options.some((c) => c.guestId === resolve.guestId)
+	) {
+		return resolve.guestId;
+	}
+	return "";
+}
 
 const CELL = "px-3 py-2 align-top";
 const HEAD =
@@ -145,6 +176,8 @@ export function ConfirmEntriesTable({
 						const ambiguity = problems.find(
 							(p) => p.code === "AMBIGUOUS_GUEST",
 						);
+						const guestOptions = guestOptionsOf(ambiguity?.candidates ?? []);
+						const memberHints = memberHintsOf(ambiguity?.candidates ?? []);
 						return (
 							<tr
 								key={entry.id}
@@ -185,13 +218,7 @@ export function ConfirmEntriesTable({
 													aria-label={`Resolve ${entry.name}`}
 													className="mt-1.5 h-9 w-full rounded-lg border border-border bg-surface-raised px-2 text-xs"
 													disabled={busy}
-													value={
-														entry.resolve?.kind === "existing"
-															? entry.resolve.guestId
-															: entry.resolve?.kind === "new"
-																? "new"
-																: ""
-													}
+													value={selectValue(entry.resolve, guestOptions)}
 													onChange={(e) => {
 														const v = e.target.value;
 														onEdit({
@@ -208,7 +235,7 @@ export function ConfirmEntriesTable({
 												>
 													<option value="">Who is this?</option>
 													{/* UNMASKED — see the module header. */}
-													{ambiguity.candidates.map((c) => (
+													{guestOptions.map((c) => (
 														<option key={c.guestId} value={c.guestId}>
 															{[c.name, c.email, c.phone]
 																.filter(Boolean)
@@ -218,6 +245,19 @@ export function ConfirmEntriesTable({
 													<option value="new">Someone new</option>
 												</select>
 											) : null}
+											{/* A member is a hint, never an answer: picking one would
+											    resolve the line to someone who is not a guest. */}
+											{memberHints.map((c) => (
+												<span
+													key={c.memberId}
+													className="mt-1 block text-xs text-muted-foreground"
+												>
+													Possibly member{" "}
+													{[c.name, c.email, c.phone]
+														.filter(Boolean)
+														.join(" · ")}
+												</span>
+											))}
 										</>
 									)}
 								</td>
