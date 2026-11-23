@@ -45,10 +45,10 @@
  * `julia@x.com` both mask to `j•••@x.com`, so a hash over the masked form would
  * let a preview of one be applied as the other.
  */
-import { and, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt } from "drizzle-orm";
 import { z } from "zod";
 import type { db } from "#/db";
-import { meetingAttendance, meetings } from "#/db/schema";
+import { meetingAttendance, meetings, members, people } from "#/db/schema";
 import { nextLocalDate } from "#/lib/club-local-date";
 import { utcToZonedWallTime, zonedWallTimeToUtc } from "#/lib/datetime";
 import { planHash as computePlanHash } from "#/lib/mcp-plan";
@@ -66,6 +66,7 @@ import {
 } from "#/server/guest-pipeline-logic";
 import { type McpBlockingItem, McpError } from "#/server/mcp/errors";
 import { maskEmail, maskPhone } from "#/server/mcp/serialize";
+import { closeTo, sharesContact } from "#/server/near-name";
 
 export type Conn =
 	| typeof db
@@ -300,6 +301,20 @@ export async function plan(
 	// ONE query for the club's guests, not one per entry.
 	const candidates = await loadGuestMatchCandidates(conn, club.clubId);
 	const byId = new Map(candidates.map((c) => [c.id, c]));
+	// The club's members, for the near-name check (#1658): a visitor written
+	// down as someone close to a member is probably that member.
+	const memberRows = await conn
+		.select({
+			id: members.id,
+			name: members.name,
+			preferredName: members.preferredName,
+			email: people.email,
+			phone: people.phone,
+		})
+		.from(members)
+		.innerJoin(people, eq(people.id, members.personId))
+		.where(eq(members.clubId, club.clubId))
+		.orderBy(asc(members.name), asc(members.id));
 
 	// Who already has attendance at this meeting — what turns `matched` into
 	// `already_present`, and what makes re-transcribing a page a no-op.
@@ -464,7 +479,64 @@ export async function plan(
 			};
 		}
 
-		if (m.outcome === "new") return asNew();
+		if (m.outcome === "new") {
+			// A line that did not resolve by contact is still a possible duplicate
+			// when its name is close to a club guest or member: the SAME rule
+			// `record_attendance` applies to a `newGuest` (#1658). `matchGuest`
+			// stays as it is, because the public guest book calls it too and
+			// deliberately creates a new guest on a name-only match. Guests planned
+			// as new earlier on this page are not asked about: that is the
+			// duplicate-line case, handled above.
+			const close: GuestBookCandidate[] = [
+				...candidates
+					.filter((c) => closeTo(raw.name, c))
+					.map(
+						(c): GuestBookCandidate => ({
+							guestId: c.id,
+							name: c.name,
+							email: c.email ?? null,
+							phone: c.phone ?? null,
+						}),
+					),
+				// A member's id travels in `guestId` so the candidate list keeps one
+				// shape; resolving to it is refused as "not a guest of this club".
+				...memberRows
+					.filter(
+						(p) =>
+							closeTo(raw.name, p) ||
+							sharesContact(
+								p,
+								{ email, phone },
+								p.phone === null ? null : toStoredPhone(p.phone, countryCode),
+							),
+					)
+					.map(
+						(p): GuestBookCandidate => ({
+							guestId: p.id,
+							name: p.name,
+							email: p.email ?? null,
+							phone: p.phone ?? null,
+						}),
+					),
+			];
+			if (close.length === 0) return asNew();
+			blocking.push({
+				code: "AMBIGUOUS_GUEST",
+				entryIndex: index,
+				message: `Entry ${index}: that name is close to someone already on file. Say who this is, or that it is someone new.`,
+				detail: {
+					reason: "near_name",
+					candidates: close,
+				} satisfies AmbiguousGuestDetail,
+			});
+			return {
+				...base,
+				outcome: "ambiguous",
+				guestId: null,
+				minutesRecipient: false,
+				write: null,
+			};
+		}
 
 		// Matched a guest this same page already plans to create: one guest, one
 		// attendance row, and the earlier line is the one that creates them.
