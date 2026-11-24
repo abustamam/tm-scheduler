@@ -1449,13 +1449,100 @@ export const mergeSchema = z.object({
 });
 type MergeInput = z.infer<typeof mergeSchema> & RosterActor;
 
+export const MEMBER_MERGE_SAME_MESSAGE = "Pick two different members to merge.";
+export const MEMBER_MERGE_NOT_FOUND_MESSAGE = "Member not found in this club.";
+export const MEMBER_MERGE_SIGNED_IN_MESSAGE =
+	"That member is a signed-in account — merge the other direction (keep it).";
+
+/** The sentences `applyMemberMerge` refuses with (a preview reports them as a
+ *  refusal, the connector tool as a blocking item). "Not found" is not one. */
+export const MEMBER_MERGE_REFUSALS: ReadonlySet<string> = new Set([
+	MEMBER_MERGE_SAME_MESSAGE,
+	MEMBER_MERGE_SIGNED_IN_MESSAGE,
+]);
+
+/** The kept member's row as the collapse leaves it: status, role and end date
+ *  are recomputed from both records, and a merge to `former` also closes officer
+ *  terms and releases upcoming slots. */
+export interface MemberKeepAfter {
+	status: string;
+	clubRole: string;
+	endedAt: string | null;
+	willingToMentor: boolean;
+	mentorListed: boolean;
+	mentorBio: string | null;
+}
+
+/** What a member merge would do, from a rolled-back run of the real writer. */
+export interface MemberMergePreview {
+	/** Rows that named the absorbed member and now name the keeper, per `table.column`.
+	 *  Rows the collapse itself writes (activity_log entries it logs) are not counted. */
+	moved: Record<string, number>;
+	/** Rows naming the absorbed member that the kept member does not get, per
+	 *  `table.column`: duplicates the keeper already has, upcoming roles released
+	 *  when the merge ends the keeper, and rows removed with the absorbed record
+	 *  (ON DELETE) on keys the collapse does not re-point. */
+	notCarriedOver: Record<string, number>;
+	/** The kept member's row after the collapse, read inside the rolled-back run. */
+	keepAfter: MemberKeepAfter | null;
+	/** The app's own sentence when the merge refuses; null when it would go ahead. */
+	refusal: string | null;
+}
+
+class MemberMergePreviewRollback extends Error {
+	constructor(readonly preview: MemberMergePreview) {
+		super("preview rollback");
+	}
+}
+
+/** Rows per foreign key to `members.id` naming `memberId`, read from the catalog
+ *  so a new referencing table is counted without anyone listing it here. */
+async function memberReferenceCounts(
+	tx: Pick<typeof db, "execute">,
+	memberId: string,
+): Promise<Map<string, number>> {
+	const fks = await tx.execute(sql`
+		select n.nspname as schema, cl.relname as tbl, a.attname as col
+		from pg_constraint c
+		join pg_class cl on cl.oid = c.conrelid
+		join pg_namespace n on n.oid = cl.relnamespace
+		join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey)
+		where c.contype = 'f' and c.confrelid = 'members'::regclass
+		order by 2, 3`);
+	const counts = new Map<string, number>();
+	for (const fk of fks.rows as { schema: string; tbl: string; col: string }[]) {
+		// activity_log rows the collapse inserts carry this transaction's start as
+		// created_at (now() is fixed per transaction); history written earlier does
+		// not. Leaving them out keeps the merge's own log rows out of `moved`.
+		const own =
+			fk.tbl === "activity_log" ? sql` and created_at < now()` : sql``;
+		const r = await tx.execute(
+			sql`select count(*)::int as n from ${sql.identifier(fk.schema)}.${sql.identifier(fk.tbl)} where ${sql.identifier(fk.col)} = ${memberId}${own}`,
+		);
+		counts.set(`${fk.tbl}.${fk.col}`, Number((r.rows[0] as { n: number }).n));
+	}
+	return counts;
+}
+
 /** Merge an absorbed member into a keeper: re-point assignments, availability
  *  (dedupe meeting conflicts), and activity history; delete the absorbed; log
- *  member_merge. A user-linked member may not be absorbed. */
-export async function applyMemberMerge(input: MergeInput) {
+ *  member_merge. A user-linked member may not be absorbed. With `dryRun` it runs
+ *  the same body in a transaction that always rolls back and returns what it
+ *  would have moved (`previewMemberMerge`, #1665). */
+export async function applyMemberMerge(
+	input: MergeInput,
+	opts: { dryRun: true },
+): Promise<MemberMergePreview>;
+export async function applyMemberMerge(
+	input: MergeInput,
+): Promise<{ ok: true }>;
+export async function applyMemberMerge(
+	input: MergeInput,
+	opts: { dryRun?: boolean } = {},
+): Promise<{ ok: true } | MemberMergePreview> {
 	const { clubId, keeperId, absorbedId } = input;
 	if (keeperId === absorbedId) {
-		throw new Error("Pick two different members to merge.");
+		throw new Error(MEMBER_MERGE_SAME_MESSAGE);
 	}
 	const rows = await db
 		.select()
@@ -1468,19 +1555,43 @@ export async function applyMemberMerge(input: MergeInput) {
 		);
 	const keeper = rows.find((m) => m.id === keeperId);
 	const absorbed = rows.find((m) => m.id === absorbedId);
-	if (!keeper || !absorbed) throw new Error("Member not found in this club.");
+	if (!keeper || !absorbed) throw new Error(MEMBER_MERGE_NOT_FOUND_MESSAGE);
 	// "Signed-in account?" is a Person-level fact now (ADR-0008 Phase B): the auth
 	// link lives on people.user_id. Don't absorb a member whose person can sign in.
 	if (await personHasAccount(absorbed.personId)) {
-		throw new Error(
-			"That member is a signed-in account — merge the other direction (keep it).",
-		);
+		throw new Error(MEMBER_MERGE_SIGNED_IN_MESSAGE);
 	}
 
-	await db.transaction(async (tx) => {
+	const body = async (tx: Tx) => {
+		const before = opts.dryRun
+			? {
+					absorbed: await memberReferenceCounts(tx, absorbedId),
+					keeper: await memberReferenceCounts(tx, keeperId),
+				}
+			: null;
 		await collapseMemberships(tx, clubId, keeperId, absorbedId, {
 			actorMemberId: input.actorMemberId,
 		});
+		// Counted before the merge's own activity row, which is its record and not
+		// a row that moved.
+		const keeperAfter = before
+			? await memberReferenceCounts(tx, keeperId)
+			: null;
+		const keptRow = before
+			? (
+					await tx
+						.select({
+							status: members.status,
+							clubRole: members.clubRole,
+							endedAt: members.endedAt,
+							willingToMentor: members.willingToMentor,
+							mentorListedAt: members.mentorListedAt,
+							mentorBio: members.mentorBio,
+						})
+						.from(members)
+						.where(eq(members.id, keeperId))
+				)[0]
+			: undefined;
 		await logActivity(tx, {
 			clubId,
 			actorMemberId: input.actorMemberId,
@@ -1493,8 +1604,72 @@ export async function applyMemberMerge(input: MergeInput) {
 				keeperName: keeper.name,
 			},
 		});
-	});
-	return { ok: true as const };
+		return before && keeperAfter ? { ...before, keeperAfter, keptRow } : null;
+	};
+	if (!opts.dryRun) {
+		await db.transaction(async (tx) => {
+			await body(tx);
+		});
+		return { ok: true as const };
+	}
+	try {
+		await db.transaction(async (tx) => {
+			const before = await body(tx);
+			if (!before) throw new Error("unreachable");
+			const after = before.keeperAfter;
+			const moved: Record<string, number> = {};
+			const dropped: Record<string, number> = {};
+			const k = before.keptRow;
+			for (const [key, was] of before.absorbed) {
+				if (was === 0) continue;
+				const gained = Math.max(
+					0,
+					(after.get(key) ?? 0) - (before.keeper.get(key) ?? 0),
+				);
+				if (gained > 0) moved[key] = gained;
+				if (was - gained > 0) dropped[key] = was - gained;
+			}
+			throw new MemberMergePreviewRollback({
+				moved,
+				notCarriedOver: dropped,
+				keepAfter: k
+					? {
+							status: k.status,
+							clubRole: k.clubRole,
+							endedAt: k.endedAt,
+							willingToMentor: k.willingToMentor,
+							mentorListed: k.mentorListedAt !== null,
+							mentorBio: k.mentorBio,
+						}
+					: null,
+				refusal: null,
+			});
+		});
+	} catch (err) {
+		if (err instanceof MemberMergePreviewRollback) return err.preview;
+		throw err;
+	}
+	throw new Error("unreachable");
+}
+
+/** What the merge would move and drop; writes nothing. A refusal the app gives
+ *  comes back as `refusal` (its own sentence); "not found" still throws. */
+export async function previewMemberMerge(
+	input: MergeInput,
+): Promise<MemberMergePreview> {
+	try {
+		return await applyMemberMerge(input, { dryRun: true });
+	} catch (e) {
+		if (e instanceof Error && MEMBER_MERGE_REFUSALS.has(e.message)) {
+			return {
+				moved: {},
+				notCarriedOver: {},
+				keepAfter: null,
+				refusal: e.message,
+			};
+		}
+		throw e;
+	}
 }
 
 export const removeSchema = z.object({

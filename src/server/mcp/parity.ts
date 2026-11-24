@@ -508,7 +508,7 @@ export const PARITY_ROWS: ParityRow[] = [
 		},
 	}),
 	row("members", "editMember", "admin", { tool: "edit_member" }),
-	row("members", "mergeMembers", "admin", { gap: true }),
+	row("members", "mergeMembers", "admin", { tool: "merge_members" }),
 	row("members", "removeMember", "admin", { gap: true }),
 	row("members", "setMemberStatus", "admin", { tool: "set_member_standing" }),
 	row("members", "setMemberRole", "admin", { tool: "set_member_standing" }),

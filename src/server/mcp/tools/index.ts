@@ -40,6 +40,7 @@ import { getMyScheduleTool } from "./get-my-schedule";
 import { listAgendaTemplatesTool } from "./list-agenda-templates";
 import { listMeetingsTool } from "./list-meetings";
 import { mergeGuestsTool } from "./merge-guests";
+import { mergeMembersTool } from "./merge-members";
 import { recordAttendanceTool } from "./record-attendance";
 import { recordGuestBookTool } from "./record-guest-book";
 import { recordTableTopicsTool } from "./record-table-topics";
@@ -106,6 +107,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
 	editMemberTool,
 	setMemberStandingTool,
 	mergeGuestsTool,
+	mergeMembersTool,
 	convertGuestTool,
 	setMySpeechDetailsTool,
 ];
